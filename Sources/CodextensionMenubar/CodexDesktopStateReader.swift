@@ -3,49 +3,35 @@ import Foundation
 struct CodexDesktopRuntimeSnapshot {
     let activeTurnCount: Int
     let runningThreadIDs: Set<String>
-    let hasInProgressActivity: Bool
-    let lastAppServerEvent: String?
 }
 
 struct CodexDesktopStateReader {
     private let fileManager: FileManager
     private let now: () -> Date
     private let recentThreadUpdateInterval: TimeInterval
+    private let recentLogInterval: TimeInterval
 
     init(
         fileManager: FileManager = .default,
         now: @escaping () -> Date = Date.init,
-        recentThreadUpdateInterval: TimeInterval = 8
+        recentThreadUpdateInterval: TimeInterval = 3,
+        recentLogInterval: TimeInterval = 6
     ) {
         self.fileManager = fileManager
         self.now = now
         self.recentThreadUpdateInterval = recentThreadUpdateInterval
+        self.recentLogInterval = recentLogInterval
     }
 
     func snapshot(candidates: Set<String>) throws -> CodexDesktopRuntimeSnapshot {
         let databaseURL = try locateStateDatabase()
         let nowTimestamp = Int(now().timeIntervalSince1970)
         let threadUpdateCutoff = nowTimestamp - Int(recentThreadUpdateInterval)
+        let logCutoff = nowTimestamp - Int(recentLogInterval)
         let activeTurnCount = try queryActiveTurnCount(databaseURL: databaseURL)
-        let lastAppServerEvent = try queryLatestAppServerEvent(databaseURL: databaseURL)
-        let hasInProgressActivity = activeTurnCount > 0 || isInProgressAppServerEvent(lastAppServerEvent)
 
         guard !candidates.isEmpty else {
-            return CodexDesktopRuntimeSnapshot(
-                activeTurnCount: activeTurnCount,
-                runningThreadIDs: [],
-                hasInProgressActivity: hasInProgressActivity,
-                lastAppServerEvent: lastAppServerEvent
-            )
-        }
-
-        guard hasInProgressActivity else {
-            return CodexDesktopRuntimeSnapshot(
-                activeTurnCount: activeTurnCount,
-                runningThreadIDs: [],
-                hasInProgressActivity: false,
-                lastAppServerEvent: lastAppServerEvent
-            )
+            return CodexDesktopRuntimeSnapshot(activeTurnCount: activeTurnCount, runningThreadIDs: [])
         }
 
         let recentUpdates = try queryThreadIDs(
@@ -60,11 +46,20 @@ struct CodexDesktopStateReader {
             databaseURL: databaseURL
         )
 
+        let recentLogs = try queryThreadIDs(
+            sql: """
+            SELECT thread_id
+            FROM logs
+            WHERE thread_id IS NOT NULL
+              AND ts >= \(logCutoff)
+            GROUP BY thread_id;
+            """,
+            databaseURL: databaseURL
+        )
+
         return CodexDesktopRuntimeSnapshot(
             activeTurnCount: activeTurnCount,
-            runningThreadIDs: Set(recentUpdates).intersection(candidates),
-            hasInProgressActivity: hasInProgressActivity,
-            lastAppServerEvent: lastAppServerEvent
+            runningThreadIDs: Set(recentUpdates + recentLogs).intersection(candidates)
         )
     }
 
@@ -122,51 +117,6 @@ struct CodexDesktopStateReader {
         )
 
         return Int(output.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
-    }
-
-    private func queryLatestAppServerEvent(databaseURL: URL) throws -> String? {
-        let output = try runSQLite(
-            sql: """
-            WITH current_process AS (
-                SELECT process_uuid
-                FROM logs
-                WHERE process_uuid IS NOT NULL
-                  AND target = 'codex_app_server::outgoing_message'
-                ORDER BY ts DESC, ts_nanos DESC, id DESC
-                LIMIT 1
-            )
-            SELECT message
-            FROM logs
-            WHERE process_uuid = (SELECT process_uuid FROM current_process)
-              AND target = 'codex_app_server::outgoing_message'
-              AND (
-                message LIKE 'app-server event: item/%'
-                OR message LIKE 'app-server event: turn/%'
-                OR message = 'app-server event: thread/tokenUsage/updated'
-                OR message = 'app-server event: account/rateLimits/updated'
-              )
-            ORDER BY ts DESC, ts_nanos DESC, id DESC
-            LIMIT 1;
-            """,
-            databaseURL: databaseURL
-        )
-
-        let trimmed = output.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
-    }
-
-    private func isInProgressAppServerEvent(_ message: String?) -> Bool {
-        guard let message else { return false }
-
-        if message == "app-server event: item/started" || message == "app-server event: turn/started" {
-            return true
-        }
-
-        if message.hasSuffix("/delta") || message.hasSuffix("/outputDelta") || message.hasSuffix("/terminalInteraction") {
-            return true
-        }
-
-        return false
     }
 
     private func runSQLite(sql: String, databaseURL: URL) throws -> String {
