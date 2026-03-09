@@ -176,8 +176,13 @@ extension CodexThread {
     }
 
     var previewLine: String {
-        preview
+        let flattened = preview
             .replacingOccurrences(of: "\n", with: " ")
+            .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        return flattened
+            .replacingOccurrences(of: #"^[#>*`_\-\[\]\(\)\s]+"#, with: "", options: .regularExpression)
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
