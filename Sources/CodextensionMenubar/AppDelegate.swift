@@ -181,28 +181,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func handleServerRequest(method: String, payload: Data) {
         switch method {
-        case "item/tool/requestUserInput":
+        case "item/tool/requestUserInput", "tool/requestUserInput":
             decodeAndApply(payload, as: ToolRequestUserInputRequest.self) { [weak self] request in
                 guard let self else { return }
                 state.apply(serverRequest: .toolUserInput(request))
+                state.recordDiagnostic("user-input request method=\(method) thread=\(request.threadId.prefix(8)) turn=\(request.turnId.prefix(8))")
                 sendNotification(
                     title: "Codex needs input",
                     body: state.notificationBody(forThreadID: request.threadId, fallback: "A watched thread is waiting for user input.")
                 )
             }
-        case "item/commandExecution/requestApproval":
+        case "item/commandExecution/requestApproval", "commandExecution/requestApproval":
             decodeAndApply(payload, as: ApprovalRequestPayload.self) { [weak self] request in
                 guard let self else { return }
                 state.apply(serverRequest: .approval(request))
+                state.recordDiagnostic("approval request method=\(method) thread=\(request.threadId.prefix(8)) turn=\(request.turnId.prefix(8))")
                 sendNotification(
                     title: "Codex approval required",
                     body: state.notificationBody(forThreadID: request.threadId, fallback: "A watched thread is waiting for approval.")
                 )
             }
-        case "item/fileChange/requestApproval":
+        case "item/fileChange/requestApproval", "fileChange/requestApproval":
             decodeAndApply(payload, as: ApprovalRequestPayload.self) { [weak self] request in
                 guard let self else { return }
                 state.apply(serverRequest: .approval(request))
+                state.recordDiagnostic("approval request method=\(method) thread=\(request.threadId.prefix(8)) turn=\(request.turnId.prefix(8))")
                 sendNotification(
                     title: "Codex approval required",
                     body: state.notificationBody(forThreadID: request.threadId, fallback: "A watched thread is waiting for approval.")
@@ -329,6 +332,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let diagnostic = state.lastDiagnostic {
             menu.addItem(.separator())
             menu.addItem(makeStaticItem(title: "Last diagnostic: \(diagnostic)"))
+        }
+
+        menu.addItem(makeStaticItem(title: "State snapshot: \(state.debugStatusSnapshot)"))
+        if let desktopDebugSummary = state.desktopDebugSummary {
+            menu.addItem(makeStaticItem(title: "Desktop debug: \(desktopDebugSummary)"))
         }
 
         menu.addItem(.separator())

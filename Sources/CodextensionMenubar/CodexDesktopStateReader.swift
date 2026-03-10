@@ -3,6 +3,23 @@ import Foundation
 struct CodexDesktopRuntimeSnapshot {
     let activeTurnCount: Int
     let runningThreadIDs: Set<String>
+    let waitingForInputThreadIDs: Set<String>
+    let approvalThreadIDs: Set<String>
+    let debugSummary: String
+
+    init(
+        activeTurnCount: Int,
+        runningThreadIDs: Set<String>,
+        waitingForInputThreadIDs: Set<String> = [],
+        approvalThreadIDs: Set<String> = [],
+        debugSummary: String = ""
+    ) {
+        self.activeTurnCount = activeTurnCount
+        self.runningThreadIDs = runningThreadIDs
+        self.waitingForInputThreadIDs = waitingForInputThreadIDs
+        self.approvalThreadIDs = approvalThreadIDs
+        self.debugSummary = debugSummary
+    }
 }
 
 struct CodexDesktopStateReader {
@@ -57,9 +74,21 @@ struct CodexDesktopStateReader {
             databaseURL: databaseURL
         )
 
+        let pendingStates = try queryPendingThreadStates(candidates: candidates, databaseURL: databaseURL)
+        let debugSummary = [
+            "candidates=\(candidates.count)",
+            "waiting=\(pendingStates.waitingForInputThreadIDs.count)",
+            "approval=\(pendingStates.approvalThreadIDs.count)",
+            "rows=\(pendingStates.debugRows.count)",
+            "sample=\(pendingStates.debugRows.isEmpty ? "[]" : "[" + pendingStates.debugRows.prefix(3).joined(separator: ", ") + (pendingStates.debugRows.count > 3 ? ", +\(pendingStates.debugRows.count - 3)" : "") + "]")"
+        ].joined(separator: " ")
+
         return CodexDesktopRuntimeSnapshot(
             activeTurnCount: activeTurnCount,
-            runningThreadIDs: Set(recentUpdates + recentLogs).intersection(candidates)
+            runningThreadIDs: Set(recentUpdates + recentLogs).intersection(candidates),
+            waitingForInputThreadIDs: pendingStates.waitingForInputThreadIDs,
+            approvalThreadIDs: pendingStates.approvalThreadIDs,
+            debugSummary: debugSummary
         )
     }
 
@@ -117,6 +146,73 @@ struct CodexDesktopStateReader {
         )
 
         return Int(output.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
+    }
+
+    private func queryPendingThreadStates(candidates: Set<String>, databaseURL: URL) throws -> (waitingForInputThreadIDs: Set<String>, approvalThreadIDs: Set<String>, debugRows: [String]) {
+        let candidateList = candidates
+            .map(sqlQuoted)
+            .sorted()
+            .joined(separator: ", ")
+
+        let output = try runSQLite(
+            sql: """
+            WITH ranked AS (
+                SELECT
+                    thread_id,
+                    REPLACE(REPLACE(message, char(10), ' '), char(13), ' ') AS message,
+                    ROW_NUMBER() OVER (PARTITION BY thread_id ORDER BY ts DESC, ts_nanos DESC, id DESC) AS row_number
+                FROM logs
+                WHERE thread_id IN (\(candidateList))
+                  AND target = 'codex_core::stream_events_utils'
+                  AND (
+                    message = 'Output item'
+                    OR message LIKE 'ToolCall:%'
+                  )
+            )
+            SELECT json_object('thread_id', thread_id, 'message', message)
+            FROM ranked
+            WHERE row_number = 1;
+            """,
+            databaseURL: databaseURL
+        )
+
+        var waitingThreadIDs: Set<String> = []
+        var approvalThreadIDs: Set<String> = []
+        var debugRows: [String] = []
+
+        for line in output.split(separator: "\n") {
+            guard let data = line.data(using: .utf8),
+                  let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let threadID = object["thread_id"] as? String,
+                  let message = object["message"] as? String
+            else {
+                continue
+            }
+
+            let shortID = String(threadID.prefix(8))
+
+            if message.hasPrefix("ToolCall: request_user_input ") {
+                waitingThreadIDs.insert(threadID)
+                debugRows.append("\(shortID):wait:\(message.prefix(36))")
+                continue
+            }
+
+            let lowercasedMessage = message.lowercased()
+            if message.hasPrefix("ToolCall:"),
+               lowercasedMessage.contains("requestapproval") || lowercasedMessage.contains("request_approval") || lowercasedMessage.contains("request approval") {
+                approvalThreadIDs.insert(threadID)
+                debugRows.append("\(shortID):approval:\(message.prefix(36))")
+                continue
+            }
+
+            debugRows.append("\(shortID):other:\(message.prefix(24))")
+        }
+
+        return (waitingThreadIDs, approvalThreadIDs, debugRows)
+    }
+
+    private func sqlQuoted(_ value: String) -> String {
+        "'" + value.replacingOccurrences(of: "'", with: "''") + "'"
     }
 
     private func runSQLite(sql: String, databaseURL: URL) throws -> String {
