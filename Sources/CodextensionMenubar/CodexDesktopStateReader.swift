@@ -39,8 +39,8 @@ struct CodexDesktopStateReader {
     init(
         fileManager: FileManager = .default,
         now: @escaping () -> Date = Date.init,
-        recentThreadUpdateInterval: TimeInterval = 3,
-        recentLogInterval: TimeInterval = 6
+        recentThreadUpdateInterval: TimeInterval = 10,
+        recentLogInterval: TimeInterval = 15
     ) {
         self.fileManager = fileManager
         self.now = now
@@ -93,9 +93,16 @@ struct CodexDesktopStateReader {
             "sample=\(pendingStates.debugRows.isEmpty ? "[]" : "[" + pendingStates.debugRows.prefix(3).joined(separator: ", ") + (pendingStates.debugRows.count > 3 ? ", +\(pendingStates.debugRows.count - 3)" : "") + "]")"
         ].joined(separator: " ")
 
+        let runningThreadIDs: Set<String>
+        if activeTurnCount > 0 {
+            runningThreadIDs = Set(recentUpdates + recentLogs).intersection(candidates)
+        } else {
+            runningThreadIDs = []
+        }
+
         return CodexDesktopRuntimeSnapshot(
             activeTurnCount: activeTurnCount,
-            runningThreadIDs: Set(recentUpdates + recentLogs).intersection(candidates),
+            runningThreadIDs: runningThreadIDs,
             waitingForInputThreadIDs: pendingStates.waitingForInputThreadIDs,
             approvalThreadIDs: pendingStates.approvalThreadIDs,
             failedThreads: failedThreads,

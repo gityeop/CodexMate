@@ -31,6 +31,32 @@ final class CodexAppServerClientTests: XCTestCase {
             "missing value at <root>"
         )
     }
+
+    func testThreadListResponseFallsBackCreatedAtToUpdatedAtWhenMissing() throws {
+        let data = Data(
+            """
+            {
+              "data": [
+                {
+                  "id": "thread-1",
+                  "preview": "Example",
+                  "updatedAt": 123,
+                  "status": { "type": "notLoaded" },
+                  "cwd": "/tmp/example",
+                  "name": "Test thread"
+                }
+              ],
+              "nextCursor": null
+            }
+            """.utf8
+        )
+
+        let response = try JSONDecoder().decode(ThreadListResponse.self, from: data)
+
+        XCTAssertEqual(response.data.count, 1)
+        XCTAssertEqual(response.data[0].createdAt, 123)
+        XCTAssertEqual(response.data[0].updatedAt, 123)
+    }
 }
 
 private struct DynamicCodingKey: CodingKey {

@@ -1,6 +1,8 @@
 import Foundation
 
 struct AppStateStore {
+    private static let inferredActiveTurnID = "__inferred_active_turn__"
+
     enum ConnectionState: Equatable {
         case disconnected
         case connecting
@@ -113,6 +115,15 @@ struct AppStateStore {
         var updatedAt: Date
         var isWatched: Bool
         var activeTurnID: String?
+        var lastTerminalActivityAt: Date?
+
+        var hasActiveTurn: Bool {
+            activeTurnID != nil
+        }
+
+        var displayStatus: ThreadStatus {
+            hasActiveTurn ? .running : status
+        }
     }
 
     struct ProjectSection: Equatable, Identifiable {
@@ -176,22 +187,26 @@ struct AppStateStore {
 
         let threads = recentThreads
 
+        if threads.contains(where: \.hasActiveTurn) {
+            return .running
+        }
+
         if threads.contains(where: {
-            if case .waitingForInput = $0.status { return true }
+            if case .waitingForInput = $0.displayStatus { return true }
             return false
         }) {
             return .waitingForInput
         }
 
         if threads.contains(where: {
-            if case .needsApproval = $0.status { return true }
+            if case .needsApproval = $0.displayStatus { return true }
             return false
         }) {
             return .needsApproval
         }
 
         if threads.contains(where: {
-            if case .running = $0.status { return true }
+            if case .running = $0.displayStatus { return true }
             return false
         }) {
             return .running
@@ -227,16 +242,16 @@ struct AppStateStore {
     var summaryText: String {
         let watchedCount = recentThreads.filter(\.isWatched).count
         let runningThreadCount = recentThreads.filter {
-            if case .running = $0.status { return true }
+            if case .running = $0.displayStatus { return true }
             return false
         }.count
         let runningCount = max(runningThreadCount, desktopActiveTurnCount)
         let waitingCount = recentThreads.filter {
-            if case .waitingForInput = $0.status { return true }
+            if case .waitingForInput = $0.displayStatus { return true }
             return false
         }.count
         let approvalCount = recentThreads.filter {
-            if case .needsApproval = $0.status { return true }
+            if case .needsApproval = $0.displayStatus { return true }
             return false
         }.count
 
@@ -245,22 +260,22 @@ struct AppStateStore {
 
     var failedThreads: [ThreadRow] {
         recentThreads.filter {
-            if case .failed = $0.status { return true }
+            if case .failed = $0.displayStatus { return true }
             return false
         }
     }
 
     var debugStatusSnapshot: String {
         let waitingThreadIDs = recentThreads.compactMap { thread in
-            if case .waitingForInput = thread.status { return shortThreadID(thread.id) }
+            if case .waitingForInput = thread.displayStatus { return shortThreadID(thread.id) }
             return nil
         }
         let approvalThreadIDs = recentThreads.compactMap { thread in
-            if case .needsApproval = thread.status { return shortThreadID(thread.id) }
+            if case .needsApproval = thread.displayStatus { return shortThreadID(thread.id) }
             return nil
         }
         let runningThreadIDs = recentThreads.compactMap { thread in
-            if case .running = thread.status { return shortThreadID(thread.id) }
+            if case .running = thread.displayStatus { return shortThreadID(thread.id) }
             return nil
         }
 
@@ -285,20 +300,46 @@ struct AppStateStore {
 
         for thread in threads {
             var row = threadsByID[thread.id] ?? ThreadRow(thread: thread, isWatched: false)
+            let previousStatus = row.status
+            let currentUpdatedAt = row.updatedAt
+            let incomingUpdatedAt = thread.updatedDate
             row.displayTitle = thread.displayTitle
             row.preview = thread.previewLine
             row.cwd = thread.cwd
-            row.updatedAt = thread.updatedDate
 
             let newStatus = ThreadStatus(threadStatus: thread.status)
             row.listedStatus = newStatus
-            if let preservedStatus = preservedStatus(current: row.status, incoming: newStatus, isWatched: row.isWatched) {
+            let preservedStatus = preservedStatus(
+                current: row.status,
+                incoming: newStatus,
+                isWatched: row.isWatched,
+                activeTurnID: row.activeTurnID,
+                currentUpdatedAt: currentUpdatedAt,
+                incomingUpdatedAt: incomingUpdatedAt
+            )
+            if let preservedStatus {
                 if row.status.isPending && (newStatus == .idle || newStatus == .notLoaded) {
                     recordDiagnostic("preserved pending thread=\(shortThreadID(thread.id)) kept=\(row.status.displayName) incoming=\(newStatus.displayName)")
                 }
                 row.status = preservedStatus
             } else {
                 row.status = newStatus
+            }
+            row.updatedAt = preservedStatus == nil ? incomingUpdatedAt : max(currentUpdatedAt, incomingUpdatedAt)
+
+            if row.isWatched {
+                row.activeTurnID = updatedActiveTurnID(
+                    existing: row.activeTurnID,
+                    status: row.status,
+                    allowClearing: false
+                )
+            }
+
+            if row.lastTerminalActivityAt == nil,
+               row.isWatched,
+               row.activeTurnID == nil,
+               shouldInferTerminalActivity(previous: previousStatus, current: row.status) {
+                row.lastTerminalActivityAt = row.updatedAt
             }
 
             updatedThreads[thread.id] = row
@@ -313,13 +354,30 @@ struct AppStateStore {
 
     mutating func markWatched(thread: CodexThread) {
         var row = threadsByID[thread.id] ?? ThreadRow(thread: thread, isWatched: true)
+        let currentUpdatedAt = row.updatedAt
+        let incomingUpdatedAt = thread.updatedDate
         row.displayTitle = thread.displayTitle
         row.preview = thread.previewLine
         row.cwd = thread.cwd
-        row.updatedAt = thread.updatedDate
-        row.status = ThreadStatus(threadStatus: thread.status)
-        row.listedStatus = row.status
+        let newStatus = ThreadStatus(threadStatus: thread.status)
+        let preservedStatus = preservedStatus(
+            current: row.status,
+            incoming: newStatus,
+            isWatched: true,
+            activeTurnID: row.activeTurnID,
+            currentUpdatedAt: currentUpdatedAt,
+            incomingUpdatedAt: incomingUpdatedAt
+        )
+        row.updatedAt = preservedStatus == nil ? incomingUpdatedAt : max(currentUpdatedAt, incomingUpdatedAt)
+        row.status = preservedStatus ?? newStatus
+        row.listedStatus = newStatus
         row.isWatched = true
+        row.activeTurnID = updatedActiveTurnID(existing: row.activeTurnID, status: row.status, allowClearing: true)
+        if row.lastTerminalActivityAt == nil,
+           row.activeTurnID == nil,
+           isUnreadEligibleTerminalStatus(row.status) {
+            row.lastTerminalActivityAt = row.updatedAt
+        }
         threadsByID[thread.id] = row
     }
 
@@ -347,6 +405,10 @@ struct AppStateStore {
                 continue
             }
 
+            guard !(row.isWatched && row.hasActiveTurn) else {
+                continue
+            }
+
             let previousStatus = row.status
             if runningThreadIDs.contains(threadID) {
                 row.status = .running
@@ -368,6 +430,10 @@ struct AppStateStore {
 
         for threadID in threadIDs {
             updateThread(threadID: threadID) { row in
+                guard !(row.isWatched && row.hasActiveTurn) else {
+                    return
+                }
+
                 row.status = status
 
                 if row.updatedAt < observedAt {
@@ -382,6 +448,10 @@ struct AppStateStore {
 
         for (threadID, failure) in failures {
             updateThread(threadID: threadID) { row in
+                guard !(row.isWatched && row.hasActiveTurn) else {
+                    return
+                }
+
                 guard row.updatedAt <= failure.loggedAt else {
                     return
                 }
@@ -405,6 +475,10 @@ struct AppStateStore {
 
         for threadID in threadIDs {
             updateThread(threadID: threadID) { row in
+                guard !(row.isWatched && row.hasActiveTurn) else {
+                    return
+                }
+
                 if !row.status.isPending {
                     row.status = .running
                 }
@@ -428,6 +502,7 @@ struct AppStateStore {
             row.status = ThreadStatus(threadStatus: notification.thread.status)
             row.listedStatus = row.status
             row.isWatched = true
+            row.activeTurnID = updatedActiveTurnID(existing: row.activeTurnID, status: row.status, allowClearing: false)
             threadsByID[notification.thread.id] = row
             recordPendingResolution(threadID: notification.thread.id, previous: previousStatus, current: row.status, source: "thread/started")
         case let .threadStatusChanged(notification):
@@ -437,6 +512,7 @@ struct AppStateStore {
             row.status = ThreadStatus(threadStatus: notification.status)
             row.listedStatus = row.status
             row.updatedAt = Date()
+            row.activeTurnID = updatedActiveTurnID(existing: row.activeTurnID, status: row.status, allowClearing: false)
             threadsByID[notification.threadId] = row
             recordPendingResolution(threadID: notification.threadId, previous: previousStatus, current: row.status, source: "thread/status/changed")
         case let .turnStarted(notification):
@@ -455,6 +531,7 @@ struct AppStateStore {
             row.isWatched = true
             row.activeTurnID = nil
             row.updatedAt = Date()
+            row.lastTerminalActivityAt = row.updatedAt
 
             switch notification.turn.status {
             case .completed, .interrupted:
@@ -474,10 +551,11 @@ struct AppStateStore {
             var row = threadsByID[notification.threadId] ?? defaultThreadRow(threadID: notification.threadId)
             let previousStatus = row.status
             row.isWatched = true
-            row.activeTurnID = notification.turnId
+            row.activeTurnID = nil
             row.status = .failed(message: notification.error.message)
             row.listedStatus = row.status
             row.updatedAt = Date()
+            row.lastTerminalActivityAt = row.updatedAt
             threadsByID[notification.threadId] = row
             recordPendingResolution(threadID: notification.threadId, previous: previousStatus, current: row.status, source: "error")
         }
@@ -507,7 +585,27 @@ struct AppStateStore {
         return "\(thread.displayTitle): \(fallback)"
     }
 
-    private func preservedStatus(current: ThreadStatus, incoming: ThreadStatus, isWatched: Bool) -> ThreadStatus? {
+    private func preservedStatus(
+        current: ThreadStatus,
+        incoming: ThreadStatus,
+        isWatched: Bool,
+        activeTurnID: String?,
+        currentUpdatedAt: Date,
+        incomingUpdatedAt: Date
+    ) -> ThreadStatus? {
+        if activeTurnID != nil {
+            return current
+        }
+
+        if shouldPreserveNewerRuntimeStatus(
+            current: current,
+            incoming: incoming,
+            currentUpdatedAt: currentUpdatedAt,
+            incomingUpdatedAt: incomingUpdatedAt
+        ) {
+            return current
+        }
+
         guard isWatched else { return nil }
 
         if incoming == .notLoaded && current != .notLoaded {
@@ -550,7 +648,8 @@ struct AppStateStore {
             listedStatus: .notLoaded,
             updatedAt: Date(),
             isWatched: true,
-            activeTurnID: nil
+            activeTurnID: nil,
+            lastTerminalActivityAt: nil
         )
     }
 
@@ -703,7 +802,7 @@ struct AppStateStore {
     }
 
     private static func isFailedThread(_ thread: ThreadRow) -> Bool {
-        if case .failed = thread.status { return true }
+        if case .failed = thread.displayStatus { return true }
         return false
     }
 
@@ -711,6 +810,59 @@ struct AppStateStore {
         guard maxProjects != .max else { return .max }
         return max(0, maxProjects - failedProjectIDs.count)
     }
+
+    private func shouldPreserveNewerRuntimeStatus(
+        current: ThreadStatus,
+        incoming: ThreadStatus,
+        currentUpdatedAt: Date,
+        incomingUpdatedAt: Date
+    ) -> Bool {
+        guard currentUpdatedAt > incomingUpdatedAt else {
+            return false
+        }
+
+        guard incoming == .idle || incoming == .notLoaded else {
+            return false
+        }
+
+        switch current {
+        case .running, .waitingForInput, .needsApproval, .failed:
+            return true
+        case .idle, .notLoaded:
+            return false
+        }
+    }
+
+    private func shouldInferTerminalActivity(previous: ThreadStatus, current: ThreadStatus) -> Bool {
+        if previous == current {
+            return isUnreadEligibleTerminalStatus(current)
+        }
+
+        if previous == .running || previous.isPending {
+            return isUnreadEligibleTerminalStatus(current)
+        }
+
+        return false
+    }
+
+    private func isUnreadEligibleTerminalStatus(_ status: ThreadStatus) -> Bool {
+        switch status {
+        case .idle, .failed:
+            return true
+        case .notLoaded, .waitingForInput, .running, .needsApproval:
+            return false
+        }
+    }
+
+    private func updatedActiveTurnID(existing: String?, status: ThreadStatus, allowClearing: Bool) -> String? {
+        switch status {
+        case .running, .waitingForInput, .needsApproval:
+            return existing ?? Self.inferredActiveTurnID
+        case .notLoaded, .idle, .failed:
+            return allowClearing ? nil : existing
+        }
+    }
+
 }
 
 private extension AppStateStore.ThreadRow {
@@ -724,6 +876,7 @@ private extension AppStateStore.ThreadRow {
         self.updatedAt = thread.updatedDate
         self.isWatched = isWatched
         self.activeTurnID = nil
+        self.lastTerminalActivityAt = nil
     }
 }
 

@@ -5,7 +5,7 @@ import UserNotifications
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private enum RefreshInterval {
         static let desktopActivitySeconds: TimeInterval = 1
-        static let threadListSeconds: TimeInterval = 5
+        static let threadListSeconds: TimeInterval = 2
     }
 
     private enum ThreadListDisplay {
@@ -14,15 +14,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         static let visibleThreadLimit = 8
     }
 
+    private enum DefaultsKey {
+        static let threadReadMarkers = "threadLastReadTerminalMarkers"
+    }
+
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private let menu = NSMenu()
     private let relativeDateFormatter = RelativeDateTimeFormatter()
     private let client = CodexAppServerClient()
     private let desktopStateReader = CodexDesktopStateReader()
     private let projectCatalogReader = CodexDesktopProjectCatalogReader()
+    private let unreadIndicatorImage = AppDelegate.makeUnreadIndicatorImage()
+    private let runningIndicatorImage = AppDelegate.makeTextIndicatorImage("⏳")
+    private let waitingForInputIndicatorImage = AppDelegate.makeTextIndicatorImage("💬")
+    private let approvalIndicatorImage = AppDelegate.makeTextIndicatorImage("🟡")
+    private let failedIndicatorImage = AppDelegate.makeTextIndicatorImage("⚠️")
 
     private var state = AppStateStore()
     private var projectCatalog = CodexDesktopProjectCatalog.empty
+    private var threadReadMarkers = ThreadReadMarkerStore(lastReadTerminalAtByThreadID: AppDelegate.loadThreadReadMarkers())
+    private var resumedVisibleThreadIDs: Set<String> = []
     private var connectedBinaryPath: String?
     private var desktopActivityTimer: Timer?
     private var threadListTimer: Timer?
@@ -106,6 +117,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         projectCatalog = (try? projectCatalogReader.load()) ?? .empty
         state.replaceRecentThreads(with: response.data)
         applyDesktopRuntimeOverlay()
+        await resumeVisibleThreadsIfNeeded()
         renderMenu()
     }
 
@@ -120,6 +132,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
             markConnectionHealthy()
             state.markWatched(thread: response.thread)
+            resumedVisibleThreadIDs.insert(response.thread.id)
             renderMenu()
         } catch {
             state.setConnection(.failed(message: error.localizedDescription))
@@ -319,10 +332,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func renderMenu() {
-        statusItem.button?.title = state.overallStatus.icon
+        synchronizeThreadReadMarkers()
+        let hasUnreadThreads = state.recentThreads.contains(where: hasUnreadContent)
+        statusItem.button?.title = MenubarStatusPresentation.statusItemIcon(
+            overallStatus: state.overallStatus,
+            hasUnreadThreads: hasUnreadThreads
+        )
         menu.removeAllItems()
 
-        menu.addItem(makeStaticItem(title: "Status: \(state.overallStatus.displayName)"))
+        menu.addItem(makeStaticItem(title: "Status: \(MenubarStatusPresentation.statusDisplayName(overallStatus: state.overallStatus, hasUnreadThreads: hasUnreadThreads))"))
         menu.addItem(makeStaticItem(title: state.connectionDescription))
         menu.addItem(makeStaticItem(title: state.summaryText))
         menu.addItem(makeStaticItem(title: "Click a thread to open it in Codex. Hold Option to copy its id."))
@@ -339,11 +357,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if state.recentThreads.isEmpty {
             menu.addItem(makeStaticItem(title: "No recent threads"))
         } else {
-            let sections = state.projectSections(
-                using: projectCatalog,
-                maxProjects: ThreadListDisplay.projectLimit,
-                maxThreads: ThreadListDisplay.visibleThreadLimit
-            )
+            let sections = visibleProjectSections()
 
             for (index, section) in sections.enumerated() {
                 if index > 0 {
@@ -355,6 +369,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 for thread in section.threads {
                     let item = makeActionItem(title: menuTitle(for: thread), action: #selector(openThread(_:)))
                     item.representedObject = thread.id
+                    item.image = indicatorImage(for: thread)
                     item.toolTip = tooltip(for: thread)
                     menu.addItem(item)
                 }
@@ -388,9 +403,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func menuTitle(for thread: AppStateStore.ThreadRow) -> String {
-        let watchMarker = thread.isWatched ? "• " : ""
         let relativeDate = relativeDateFormatter.localizedString(for: thread.updatedAt, relativeTo: Date())
-        return "\(thread.status.icon) \(watchMarker)\(thread.displayTitle) | \(relativeDate)"
+        return MenubarStatusPresentation.threadTitle(for: thread, relativeDate: relativeDate)
+    }
+
+    private func hasUnreadContent(for thread: AppStateStore.ThreadRow) -> Bool {
+        threadReadMarkers.hasUnreadContent(threadID: thread.id, lastTerminalActivityAt: thread.lastTerminalActivityAt)
+    }
+
+    private func indicatorImage(for thread: AppStateStore.ThreadRow) -> NSImage? {
+        let hasUnread = hasUnreadContent(for: thread)
+
+        switch MenubarStatusPresentation.threadIndicator(for: thread, hasUnreadContent: hasUnread) {
+        case .unread:
+            return unreadIndicatorImage
+        case .running:
+            return runningIndicatorImage
+        case .waitingForInput:
+            return waitingForInputIndicatorImage
+        case .needsApproval:
+            return approvalIndicatorImage
+        case .failed:
+            return failedIndicatorImage
+        case nil:
+            return nil
+        }
     }
 
     private func projectSectionTitle(for section: AppStateStore.ProjectSection) -> String {
@@ -402,7 +439,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func tooltip(for thread: AppStateStore.ThreadRow) -> String {
         var lines: [String] = []
 
-        if case let .failed(message?) = thread.status {
+        if case let .failed(message?) = thread.displayStatus {
             let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
             if !trimmed.isEmpty {
                 lines.append("Error: \(trimmed)")
@@ -412,6 +449,117 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         lines.append(thread.preview)
         lines.append(thread.cwd)
         return lines.joined(separator: "\n")
+    }
+
+    private func synchronizeThreadReadMarkers() {
+        var didChange = false
+
+        for thread in state.recentThreads {
+            if threadReadMarkers.seedIfNeeded(threadID: thread.id) {
+                didChange = true
+            }
+        }
+
+        if didChange {
+            persistThreadReadMarkers()
+        }
+    }
+
+    private func markThreadRead(_ threadID: String) {
+        guard let thread = state.recentThreads.first(where: { $0.id == threadID }) else {
+            return
+        }
+
+        if threadReadMarkers.markRead(threadID: threadID, lastTerminalActivityAt: thread.lastTerminalActivityAt) {
+            persistThreadReadMarkers()
+        }
+    }
+
+    private func persistThreadReadMarkers() {
+        UserDefaults.standard.set(threadReadMarkers.lastReadTerminalAtByThreadID, forKey: DefaultsKey.threadReadMarkers)
+    }
+
+    private static func loadThreadReadMarkers() -> [String: TimeInterval] {
+        let rawDictionary = UserDefaults.standard.dictionary(forKey: DefaultsKey.threadReadMarkers) ?? [:]
+        return rawDictionary.reduce(into: [:]) { result, element in
+            guard let timestamp = element.value as? NSNumber else {
+                return
+            }
+
+            result[element.key] = timestamp.doubleValue
+        }
+    }
+
+    private static func makeUnreadIndicatorImage() -> NSImage {
+        let size = NSSize(width: 8, height: 8)
+        let image = NSImage(size: size)
+
+        image.lockFocus()
+        NSColor.systemBlue.setFill()
+        NSBezierPath(ovalIn: NSRect(origin: .zero, size: size)).fill()
+        image.unlockFocus()
+        image.isTemplate = false
+
+        return image
+    }
+
+    private static func makeTextIndicatorImage(_ text: String) -> NSImage {
+        let size = NSSize(width: 16, height: 16)
+        let image = NSImage(size: size)
+        let paragraphStyle = NSMutableParagraphStyle()
+        paragraphStyle.alignment = .center
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 13),
+            .paragraphStyle: paragraphStyle
+        ]
+        let textSize = text.size(withAttributes: attributes)
+        let textRect = NSRect(
+            x: (size.width - textSize.width) / 2,
+            y: (size.height - textSize.height) / 2,
+            width: textSize.width,
+            height: textSize.height
+        )
+
+        image.lockFocus()
+        text.draw(in: textRect, withAttributes: attributes)
+        image.unlockFocus()
+        image.isTemplate = false
+
+        return image
+    }
+
+    private func visibleProjectSections() -> [AppStateStore.ProjectSection] {
+        state.projectSections(
+            using: projectCatalog,
+            maxProjects: ThreadListDisplay.projectLimit,
+            maxThreads: ThreadListDisplay.visibleThreadLimit
+        )
+    }
+
+    private func resumeVisibleThreadsIfNeeded() async {
+        let threadIDsToResume = VisibleThreadResumePlanner.threadIDsToResume(
+            from: visibleProjectSections(),
+            excluding: resumedVisibleThreadIDs
+        )
+
+        guard !threadIDsToResume.isEmpty else {
+            return
+        }
+
+        for threadID in threadIDsToResume {
+            do {
+                let response: ThreadResumeResponse = try await client.call(
+                    method: "thread/resume",
+                    params: ThreadResumeParams(threadId: threadID, persistExtendedHistory: false)
+                )
+
+                markConnectionHealthy()
+                resumedVisibleThreadIDs.insert(response.thread.id)
+                state.markWatched(thread: response.thread)
+            } catch {
+                state.recordDiagnostic("Failed to resume visible thread \(threadID.prefix(8)): \(error.localizedDescription)")
+            }
+        }
     }
 
     @objc
@@ -449,6 +597,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         if NSWorkspace.shared.open(deepLinkURL) {
+            markThreadRead(threadID)
+            renderMenu()
             return
         }
 
@@ -465,6 +615,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         do {
             try task.run()
+            markThreadRead(threadID)
+            renderMenu()
         } catch {
             copyThreadID(threadID)
             state.recordDiagnostic("Failed to open Codex thread. Copied thread id instead: \(error.localizedDescription)")

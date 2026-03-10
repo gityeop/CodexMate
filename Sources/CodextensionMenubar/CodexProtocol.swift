@@ -51,6 +51,46 @@ struct CodexThread: Decodable, Equatable {
     let status: CodexThreadStatus
     let cwd: String
     let name: String?
+
+    init(
+        id: String,
+        preview: String,
+        createdAt: Int,
+        updatedAt: Int,
+        status: CodexThreadStatus,
+        cwd: String,
+        name: String?
+    ) {
+        self.id = id
+        self.preview = preview
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+        self.status = status
+        self.cwd = cwd
+        self.name = name
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case preview
+        case createdAt
+        case updatedAt
+        case status
+        case cwd
+        case name
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+
+        id = try container.decode(String.self, forKey: .id)
+        preview = try container.decode(String.self, forKey: .preview)
+        updatedAt = try container.decode(Int.self, forKey: .updatedAt)
+        createdAt = try container.decodeIfPresent(Int.self, forKey: .createdAt) ?? updatedAt
+        status = try container.decode(CodexThreadStatus.self, forKey: .status)
+        cwd = try container.decode(String.self, forKey: .cwd)
+        name = try container.decodeIfPresent(String.self, forKey: .name)
+    }
 }
 
 enum CodexThreadStatus: Decodable, Equatable {
