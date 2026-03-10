@@ -11,6 +11,7 @@ enum CodexAppServerClientError: LocalizedError {
     case invalidResponse
     case invalidResult
     case rpc(code: Int, message: String)
+    case decodingFailure(method: String, details: String)
     case processExited(status: Int32)
 
     var errorDescription: String? {
@@ -23,6 +24,8 @@ enum CodexAppServerClientError: LocalizedError {
             return "Missing result in JSON-RPC response."
         case let .rpc(code, message):
             return "Codex RPC error \(code): \(message)"
+        case let .decodingFailure(method, details):
+            return "Failed to decode \(method) response: \(details)"
         case let .processExited(status):
             return "Codex app-server exited with status \(status)."
         }
@@ -142,7 +145,14 @@ actor CodexAppServerClient {
             }
         }
 
-        return try decodeResult(from: responseData)
+        do {
+            return try decodeResult(from: responseData)
+        } catch let error as DecodingError {
+            throw CodexAppServerClientError.decodingFailure(
+                method: method,
+                details: describeDecodingError(error)
+            )
+        }
     }
 
     private func sendNotification(method: String) throws {
@@ -274,6 +284,35 @@ actor CodexAppServerClient {
 private enum StreamSource {
     case stdout
     case stderr
+}
+
+func describeDecodingError(_ error: DecodingError) -> String {
+    switch error {
+    case let .keyNotFound(key, context):
+        return "missing key '\(key.stringValue)' at \(decodingPath(context.codingPath))"
+    case let .valueNotFound(_, context):
+        return "missing value at \(decodingPath(context.codingPath))"
+    case let .typeMismatch(_, context):
+        return "type mismatch at \(decodingPath(context.codingPath))"
+    case let .dataCorrupted(context):
+        return "invalid data at \(decodingPath(context.codingPath)): \(context.debugDescription)"
+    @unknown default:
+        return error.localizedDescription
+    }
+}
+
+private func decodingPath(_ codingPath: [CodingKey]) -> String {
+    guard !codingPath.isEmpty else { return "<root>" }
+
+    return codingPath
+        .map { key in
+            if let index = key.intValue {
+                return "[\(index)]"
+            }
+
+            return key.stringValue
+        }
+        .joined(separator: ".")
 }
 
 private struct JSONRPCRequest<Params: Encodable>: Encodable {

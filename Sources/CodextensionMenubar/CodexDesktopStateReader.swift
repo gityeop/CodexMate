@@ -1,10 +1,16 @@
 import Foundation
 
 struct CodexDesktopRuntimeSnapshot {
+    struct FailedThreadState {
+        let message: String
+        let loggedAt: Date
+    }
+
     let activeTurnCount: Int
     let runningThreadIDs: Set<String>
     let waitingForInputThreadIDs: Set<String>
     let approvalThreadIDs: Set<String>
+    let failedThreads: [String: FailedThreadState]
     let debugSummary: String
 
     init(
@@ -12,12 +18,14 @@ struct CodexDesktopRuntimeSnapshot {
         runningThreadIDs: Set<String>,
         waitingForInputThreadIDs: Set<String> = [],
         approvalThreadIDs: Set<String> = [],
+        failedThreads: [String: FailedThreadState] = [:],
         debugSummary: String = ""
     ) {
         self.activeTurnCount = activeTurnCount
         self.runningThreadIDs = runningThreadIDs
         self.waitingForInputThreadIDs = waitingForInputThreadIDs
         self.approvalThreadIDs = approvalThreadIDs
+        self.failedThreads = failedThreads
         self.debugSummary = debugSummary
     }
 }
@@ -75,10 +83,12 @@ struct CodexDesktopStateReader {
         )
 
         let pendingStates = try queryPendingThreadStates(candidates: candidates, databaseURL: databaseURL)
+        let failedThreads = try queryFailedThreads(candidates: candidates, databaseURL: databaseURL)
         let debugSummary = [
             "candidates=\(candidates.count)",
             "waiting=\(pendingStates.waitingForInputThreadIDs.count)",
             "approval=\(pendingStates.approvalThreadIDs.count)",
+            "failed=\(failedThreads.count)",
             "rows=\(pendingStates.debugRows.count)",
             "sample=\(pendingStates.debugRows.isEmpty ? "[]" : "[" + pendingStates.debugRows.prefix(3).joined(separator: ", ") + (pendingStates.debugRows.count > 3 ? ", +\(pendingStates.debugRows.count - 3)" : "") + "]")"
         ].joined(separator: " ")
@@ -88,6 +98,7 @@ struct CodexDesktopStateReader {
             runningThreadIDs: Set(recentUpdates + recentLogs).intersection(candidates),
             waitingForInputThreadIDs: pendingStates.waitingForInputThreadIDs,
             approvalThreadIDs: pendingStates.approvalThreadIDs,
+            failedThreads: failedThreads,
             debugSummary: debugSummary
         )
     }
@@ -209,6 +220,53 @@ struct CodexDesktopStateReader {
         }
 
         return (waitingThreadIDs, approvalThreadIDs, debugRows)
+    }
+
+    private func queryFailedThreads(candidates: Set<String>, databaseURL: URL) throws -> [String: CodexDesktopRuntimeSnapshot.FailedThreadState] {
+        let candidateList = candidates
+            .map(sqlQuoted)
+            .sorted()
+            .joined(separator: ", ")
+
+        let output = try runSQLite(
+            sql: """
+            WITH ranked AS (
+                SELECT
+                    thread_id,
+                    message,
+                    ts,
+                    ROW_NUMBER() OVER (PARTITION BY thread_id ORDER BY ts DESC, ts_nanos DESC, id DESC) AS row_number
+                FROM logs
+                WHERE thread_id IN (\(candidateList))
+                  AND target = 'codex_core::codex'
+                  AND message LIKE 'Turn error:%'
+            )
+            SELECT json_object('thread_id', thread_id, 'message', message, 'ts', ts)
+            FROM ranked
+            WHERE row_number = 1;
+            """,
+            databaseURL: databaseURL
+        )
+
+        var failedThreads: [String: CodexDesktopRuntimeSnapshot.FailedThreadState] = [:]
+
+        for line in output.split(separator: "\n") {
+            guard let data = line.data(using: .utf8),
+                  let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let threadID = object["thread_id"] as? String,
+                  let message = object["message"] as? String,
+                  let timestamp = object["ts"] as? Double ?? (object["ts"] as? NSNumber)?.doubleValue
+            else {
+                continue
+            }
+
+            failedThreads[threadID] = CodexDesktopRuntimeSnapshot.FailedThreadState(
+                message: message,
+                loggedAt: Date(timeIntervalSince1970: timestamp)
+            )
+        }
+
+        return failedThreads
     }
 
     private func sqlQuoted(_ value: String) -> String {

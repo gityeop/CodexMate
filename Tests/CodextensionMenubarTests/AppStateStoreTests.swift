@@ -19,6 +19,121 @@ final class AppStateStoreTests: XCTestCase {
         XCTAssertEqual(store.recentThreads.map(\.id), ["newer", "older"])
     }
 
+    func testProjectSectionsGroupThreadsBySavedWorkspaceRoot() {
+        var store = AppStateStore()
+        store.replaceRecentThreads(with: [
+            thread(id: "thread-1", updatedAt: 100, status: .idle, cwd: "/Users/tester/notion-blog/posts"),
+            thread(id: "thread-2", updatedAt: 200, status: .active(flags: []), cwd: "/Users/tester/Maccy/Sources"),
+            thread(id: "thread-3", updatedAt: 150, status: .idle, cwd: "/Users/tester/notion-blog/scripts")
+        ])
+
+        let catalog = CodexDesktopProjectCatalog(workspaceRoots: [
+            .init(path: "/Users/tester/notion-blog", displayName: "notion-blog"),
+            .init(path: "/Users/tester/Maccy", displayName: "Maccy")
+        ])
+
+        let sections = store.projectSections(using: catalog)
+
+        XCTAssertEqual(sections.map(\.displayName), ["Maccy", "notion-blog"])
+        XCTAssertEqual(sections[0].threads.map(\.id), ["thread-2"])
+        XCTAssertEqual(sections[1].threads.map(\.id), ["thread-3", "thread-1"])
+    }
+
+    func testProjectSectionsFallBackToFolderNameForUnmatchedCWD() {
+        var store = AppStateStore()
+        store.replaceRecentThreads(with: [
+            thread(id: "thread-1", updatedAt: 100, status: .idle, cwd: "/tmp/scratch-area")
+        ])
+
+        let sections = store.projectSections(using: .empty)
+
+        XCTAssertEqual(sections.map(\.id), ["/tmp/scratch-area"])
+        XCTAssertEqual(sections.map(\.displayName), ["scratch-area"])
+    }
+
+    func testProjectSectionsLimitToFiveProjectsAndEightThreads() {
+        var store = AppStateStore()
+        store.replaceRecentThreads(with: [
+            thread(id: "a-1", updatedAt: 120, status: .idle, cwd: "/tmp/A/one"),
+            thread(id: "a-2", updatedAt: 119, status: .idle, cwd: "/tmp/A/two"),
+            thread(id: "b-1", updatedAt: 118, status: .idle, cwd: "/tmp/B/one"),
+            thread(id: "c-1", updatedAt: 117, status: .idle, cwd: "/tmp/C/one"),
+            thread(id: "d-1", updatedAt: 116, status: .idle, cwd: "/tmp/D/one"),
+            thread(id: "e-1", updatedAt: 115, status: .idle, cwd: "/tmp/E/one"),
+            thread(id: "f-1", updatedAt: 114, status: .idle, cwd: "/tmp/F/one"),
+            thread(id: "a-3", updatedAt: 113, status: .idle, cwd: "/tmp/A/three"),
+            thread(id: "b-2", updatedAt: 112, status: .idle, cwd: "/tmp/B/two"),
+            thread(id: "c-2", updatedAt: 111, status: .idle, cwd: "/tmp/C/two"),
+            thread(id: "a-4", updatedAt: 110, status: .idle, cwd: "/tmp/A/four")
+        ])
+
+        let catalog = CodexDesktopProjectCatalog(workspaceRoots: [
+            .init(path: "/tmp/A", displayName: "A"),
+            .init(path: "/tmp/B", displayName: "B"),
+            .init(path: "/tmp/C", displayName: "C"),
+            .init(path: "/tmp/D", displayName: "D"),
+            .init(path: "/tmp/E", displayName: "E"),
+            .init(path: "/tmp/F", displayName: "F")
+        ])
+
+        let sections = store.projectSections(using: catalog, maxProjects: 5, maxThreads: 8)
+
+        XCTAssertEqual(sections.map(\.displayName), ["A", "B", "C", "D", "E"])
+        XCTAssertEqual(sections.reduce(0) { $0 + $1.threads.count }, 8)
+        XCTAssertEqual(sections[0].threads.map(\.id), ["a-1", "a-2", "a-3"])
+        XCTAssertEqual(sections[1].threads.map(\.id), ["b-1", "b-2"])
+        XCTAssertEqual(sections[2].threads.map(\.id), ["c-1"])
+        XCTAssertEqual(sections[3].threads.map(\.id), ["d-1"])
+        XCTAssertEqual(sections[4].threads.map(\.id), ["e-1"])
+    }
+
+    func testProjectSectionsPrioritizeFailedProjectWithinVisibleLimits() {
+        var store = AppStateStore()
+        store.replaceRecentThreads(with: [
+            thread(id: "a-1", updatedAt: 120, status: .idle, cwd: "/tmp/A/one"),
+            thread(id: "b-1", updatedAt: 119, status: .idle, cwd: "/tmp/B/one"),
+            thread(id: "c-1", updatedAt: 118, status: .idle, cwd: "/tmp/C/one"),
+            thread(id: "d-1", updatedAt: 117, status: .idle, cwd: "/tmp/D/one"),
+            thread(id: "e-1", updatedAt: 116, status: .idle, cwd: "/tmp/E/one"),
+            thread(id: "f-failed", updatedAt: 115, status: .systemError, cwd: "/tmp/F/one")
+        ])
+
+        let catalog = CodexDesktopProjectCatalog(workspaceRoots: [
+            .init(path: "/tmp/A", displayName: "A"),
+            .init(path: "/tmp/B", displayName: "B"),
+            .init(path: "/tmp/C", displayName: "C"),
+            .init(path: "/tmp/D", displayName: "D"),
+            .init(path: "/tmp/E", displayName: "E"),
+            .init(path: "/tmp/F", displayName: "F")
+        ])
+
+        let sections = store.projectSections(using: catalog, maxProjects: 5, maxThreads: 8)
+
+        XCTAssertEqual(sections.map(\.displayName), ["A", "B", "C", "D", "F"])
+        XCTAssertEqual(sections.last?.threads.map(\.id), ["f-failed"])
+    }
+
+    func testProjectCatalogLongestPrefixMatchUsesDeepestRoot() {
+        let catalog = CodexDesktopProjectCatalog(workspaceRoots: [
+            .init(path: "/Users/tester/notion-blog", displayName: "notion-blog"),
+            .init(path: "/Users/tester/notion-blog/apps/web", displayName: "web")
+        ])
+
+        let project = catalog.project(for: "/Users/tester/notion-blog/apps/web/pages")
+
+        XCTAssertEqual(project.id, "/Users/tester/notion-blog/apps/web")
+        XCTAssertEqual(project.displayName, "web")
+    }
+
+    func testThreadStatusIconsMatchMenuGlyphs() {
+        XCTAssertEqual(AppStateStore.ThreadStatus.waitingForInput.icon, "💬")
+        XCTAssertEqual(AppStateStore.ThreadStatus.needsApproval.icon, "🟡")
+        XCTAssertEqual(AppStateStore.ThreadStatus.running.icon, "⏳")
+        XCTAssertEqual(AppStateStore.ThreadStatus.idle.icon, "✅")
+        XCTAssertEqual(AppStateStore.ThreadStatus.notLoaded.icon, "◌")
+        XCTAssertEqual(AppStateStore.ThreadStatus.failed(message: nil).icon, "⚠️")
+    }
+
     func testTurnStartedMarksThreadRunning() {
         var store = AppStateStore()
         store.replaceRecentThreads(with: [thread(id: "thread-1", updatedAt: 100, status: .idle)])
@@ -69,6 +184,77 @@ final class AppStateStoreTests: XCTestCase {
         XCTAssertFalse(store.recentThreads.first?.isWatched ?? true)
     }
 
+    func testDesktopFailureOverlayUpdatesUnwatchedThreadFromNotLoaded() {
+        var store = AppStateStore()
+        store.replaceRecentThreads(with: [thread(id: "thread-1", updatedAt: 100, status: .notLoaded)])
+
+        store.apply(
+            desktopSnapshot: CodexDesktopRuntimeSnapshot(
+                activeTurnCount: 0,
+                runningThreadIDs: [],
+                failedThreads: [
+                    "thread-1": .init(
+                        message: "Turn error: stream disconnected before completion",
+                        loggedAt: Date(timeIntervalSince1970: 200)
+                    )
+                ]
+            ),
+            observedAt: Date(timeIntervalSince1970: 200)
+        )
+
+        XCTAssertEqual(
+            store.recentThreads.first?.status,
+            .failed(message: "Turn error: stream disconnected before completion")
+        )
+    }
+
+    func testDesktopRunningOverlayBeatsFailureOverlay() {
+        var store = AppStateStore()
+        store.replaceRecentThreads(with: [thread(id: "thread-1", updatedAt: 100, status: .notLoaded)])
+
+        store.apply(
+            desktopSnapshot: CodexDesktopRuntimeSnapshot(
+                activeTurnCount: 1,
+                runningThreadIDs: ["thread-1"],
+                failedThreads: [
+                    "thread-1": .init(
+                        message: "Turn error: stream disconnected before completion",
+                        loggedAt: Date(timeIntervalSince1970: 200)
+                    )
+                ]
+            ),
+            observedAt: Date(timeIntervalSince1970: 200)
+        )
+
+        XCTAssertEqual(store.recentThreads.first?.status, .running)
+    }
+
+    func testDesktopSnapshotClearsUnwatchedWaitingWhenPendingDisappears() {
+        var store = AppStateStore()
+        store.replaceRecentThreads(with: [thread(id: "thread-1", updatedAt: 100, status: .notLoaded)])
+
+        store.apply(
+            desktopSnapshot: CodexDesktopRuntimeSnapshot(
+                activeTurnCount: 0,
+                runningThreadIDs: [],
+                waitingForInputThreadIDs: ["thread-1"]
+            ),
+            observedAt: Date(timeIntervalSince1970: 200)
+        )
+
+        store.apply(
+            desktopSnapshot: CodexDesktopRuntimeSnapshot(
+                activeTurnCount: 0,
+                runningThreadIDs: [],
+                waitingForInputThreadIDs: []
+            ),
+            observedAt: Date(timeIntervalSince1970: 300)
+        )
+
+        XCTAssertEqual(store.recentThreads.first?.status, .notLoaded)
+        XCTAssertEqual(store.lastDiagnostic, "cleared stale pending thread=thread-1 from=Waiting for input to=Not loaded via desktop snapshot")
+    }
+
     func testUserInputRequestMarksWaitingForInput() {
         var store = AppStateStore()
         store.replaceRecentThreads(with: [thread(id: "thread-1", updatedAt: 100, status: .idle)])
@@ -103,7 +289,7 @@ final class AppStateStoreTests: XCTestCase {
         XCTAssertEqual(store.recentThreads.first?.status, .needsApproval)
     }
 
-    func testDesktopRunningOverlayDoesNotDowngradeWaitingForInput() {
+    func testDesktopRunningOverlayClearsStaleWaitingForInputWhenPendingEvidenceDisappears() {
         var store = AppStateStore()
         store.replaceRecentThreads(with: [thread(id: "thread-1", updatedAt: 100, status: .idle)])
         store.apply(serverRequest: .toolUserInput(
@@ -118,11 +304,11 @@ final class AppStateStoreTests: XCTestCase {
             observedAt: Date(timeIntervalSince1970: 200)
         )
 
-        XCTAssertEqual(store.overallStatus, .waitingForInput)
-        XCTAssertEqual(store.recentThreads.first?.status, .waitingForInput)
+        XCTAssertEqual(store.overallStatus, .running)
+        XCTAssertEqual(store.recentThreads.first?.status, .running)
     }
 
-    func testDesktopRunningOverlayDoesNotDowngradeNeedsApproval() {
+    func testDesktopRunningOverlayClearsStaleNeedsApprovalWhenPendingEvidenceDisappears() {
         var store = AppStateStore()
         store.replaceRecentThreads(with: [thread(id: "thread-1", updatedAt: 100, status: .idle)])
         store.apply(serverRequest: .approval(
@@ -137,8 +323,8 @@ final class AppStateStoreTests: XCTestCase {
             observedAt: Date(timeIntervalSince1970: 200)
         )
 
-        XCTAssertEqual(store.overallStatus, .needsApproval)
-        XCTAssertEqual(store.recentThreads.first?.status, .needsApproval)
+        XCTAssertEqual(store.overallStatus, .running)
+        XCTAssertEqual(store.recentThreads.first?.status, .running)
     }
 
     func testDesktopActiveTurnCountKeepsOverallRunningWithoutThreadOverlay() {
@@ -210,6 +396,53 @@ final class AppStateStoreTests: XCTestCase {
         XCTAssertEqual(store.recentThreads.first?.status, .needsApproval)
     }
 
+    func testDesktopSnapshotClearsWatchedWaitingToRunningWhenRunningEvidenceAppears() {
+        var store = AppStateStore()
+        store.markWatched(thread: thread(id: "thread-1", updatedAt: 100, status: .idle))
+        store.apply(serverRequest: .toolUserInput(
+            ToolRequestUserInputRequest(threadId: "thread-1", turnId: "turn-1", itemId: "item-1")
+        ))
+
+        store.replaceRecentThreads(with: [
+            thread(id: "thread-1", updatedAt: 110, status: .notLoaded)
+        ])
+
+        store.apply(
+            desktopSnapshot: CodexDesktopRuntimeSnapshot(
+                activeTurnCount: 1,
+                runningThreadIDs: ["thread-1"]
+            ),
+            observedAt: Date(timeIntervalSince1970: 200)
+        )
+
+        XCTAssertEqual(store.recentThreads.first?.status, .running)
+        XCTAssertEqual(store.overallStatus, .running)
+        XCTAssertEqual(store.lastDiagnostic, "cleared stale pending thread=thread-1 from=Waiting for input to=Running via desktop snapshot")
+    }
+
+    func testDesktopSnapshotClearsWatchedWaitingToThreadListStatusWhenPendingDisappears() {
+        var store = AppStateStore()
+        store.markWatched(thread: thread(id: "thread-1", updatedAt: 100, status: .idle))
+        store.apply(serverRequest: .toolUserInput(
+            ToolRequestUserInputRequest(threadId: "thread-1", turnId: "turn-1", itemId: "item-1")
+        ))
+
+        store.replaceRecentThreads(with: [
+            thread(id: "thread-1", updatedAt: 110, status: .notLoaded)
+        ])
+
+        store.apply(
+            desktopSnapshot: CodexDesktopRuntimeSnapshot(
+                activeTurnCount: 0,
+                runningThreadIDs: []
+            ),
+            observedAt: Date(timeIntervalSince1970: 200)
+        )
+
+        XCTAssertEqual(store.recentThreads.first?.status, .notLoaded)
+        XCTAssertEqual(store.lastDiagnostic, "cleared stale pending thread=thread-1 from=Waiting for input to=Not loaded via desktop snapshot")
+    }
+
     func testWaitingForInputBeatsRunningInOverallStatus() {
         var store = AppStateStore()
 
@@ -279,14 +512,36 @@ final class AppStateStoreTests: XCTestCase {
         XCTAssertEqual(store.recentThreads.first?.status, .failed(message: "boom"))
     }
 
-    private func thread(id: String, updatedAt: Int, status: CodexThreadStatus) -> CodexThread {
+    func testUnwatchedSystemErrorMarksOverallFailed() {
+        var store = AppStateStore()
+        store.replaceRecentThreads(with: [
+            thread(id: "thread-1", updatedAt: 100, status: .idle),
+            thread(id: "thread-2", updatedAt: 200, status: .systemError)
+        ])
+
+        XCTAssertEqual(store.overallStatus, .failed)
+        XCTAssertEqual(store.recentThreads.first?.status, .failed(message: nil))
+    }
+
+    func testFailedThreadsReturnsNewestFailuresFirst() {
+        var store = AppStateStore()
+        store.replaceRecentThreads(with: [
+            thread(id: "idle", updatedAt: 100, status: .idle),
+            thread(id: "failed-old", updatedAt: 150, status: .systemError),
+            thread(id: "failed-new", updatedAt: 200, status: .systemError)
+        ])
+
+        XCTAssertEqual(store.failedThreads.map(\.id), ["failed-new", "failed-old"])
+    }
+
+    private func thread(id: String, updatedAt: Int, status: CodexThreadStatus, cwd: String? = nil) -> CodexThread {
         CodexThread(
             id: id,
             preview: "Preview \(id)",
             createdAt: updatedAt - 10,
             updatedAt: updatedAt,
             status: status,
-            cwd: "/tmp/\(id)",
+            cwd: cwd ?? "/tmp/\(id)",
             name: nil
         )
     }

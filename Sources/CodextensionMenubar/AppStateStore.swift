@@ -59,6 +59,23 @@ struct AppStateStore {
         case needsApproval
         case failed(message: String?)
 
+        var icon: String {
+            switch self {
+            case .notLoaded:
+                return "◌"
+            case .idle:
+                return "✅"
+            case .waitingForInput:
+                return "💬"
+            case .running:
+                return "⏳"
+            case .needsApproval:
+                return "🟡"
+            case .failed:
+                return "⚠️"
+            }
+        }
+
         var displayName: String {
             switch self {
             case .notLoaded:
@@ -92,9 +109,17 @@ struct AppStateStore {
         var preview: String
         var cwd: String
         var status: ThreadStatus
+        var listedStatus: ThreadStatus
         var updatedAt: Date
         var isWatched: Bool
         var activeTurnID: String?
+    }
+
+    struct ProjectSection: Equatable, Identifiable {
+        let id: String
+        let displayName: String
+        let latestUpdatedAt: Date
+        let threads: [ThreadRow]
     }
 
     enum NotificationEvent {
@@ -124,6 +149,19 @@ struct AppStateStore {
 
             return lhs.updatedAt > rhs.updatedAt
         }
+    }
+
+    func projectSections(
+        using catalog: CodexDesktopProjectCatalog,
+        maxProjects: Int = .max,
+        maxThreads: Int = .max
+    ) -> [ProjectSection] {
+        let allSections = buildProjectSections(from: recentThreads, using: catalog)
+        guard maxProjects != .max || maxThreads != .max else {
+            return allSections
+        }
+
+        return limitedProjectSections(allSections, maxProjects: maxProjects, maxThreads: maxThreads)
     }
 
     var overallStatus: OverallStatus {
@@ -163,9 +201,7 @@ struct AppStateStore {
             return .running
         }
 
-        let watchedThreads = threads.filter(\.isWatched)
-
-        if watchedThreads.contains(where: {
+        if threads.contains(where: {
             if case .failed = $0.status { return true }
             return false
         }) {
@@ -205,6 +241,13 @@ struct AppStateStore {
         }.count
 
         return "Recent \(recentThreads.count) | Watching \(watchedCount) | Running \(runningCount) | Reply \(waitingCount) | Approval \(approvalCount)"
+    }
+
+    var failedThreads: [ThreadRow] {
+        recentThreads.filter {
+            if case .failed = $0.status { return true }
+            return false
+        }
     }
 
     var debugStatusSnapshot: String {
@@ -248,6 +291,7 @@ struct AppStateStore {
             row.updatedAt = thread.updatedDate
 
             let newStatus = ThreadStatus(threadStatus: thread.status)
+            row.listedStatus = newStatus
             if let preservedStatus = preservedStatus(current: row.status, incoming: newStatus, isWatched: row.isWatched) {
                 if row.status.isPending && (newStatus == .idle || newStatus == .notLoaded) {
                     recordDiagnostic("preserved pending thread=\(shortThreadID(thread.id)) kept=\(row.status.displayName) incoming=\(newStatus.displayName)")
@@ -274,6 +318,7 @@ struct AppStateStore {
         row.cwd = thread.cwd
         row.updatedAt = thread.updatedDate
         row.status = ThreadStatus(threadStatus: thread.status)
+        row.listedStatus = row.status
         row.isWatched = true
         threadsByID[thread.id] = row
     }
@@ -281,9 +326,41 @@ struct AppStateStore {
     mutating func apply(desktopSnapshot: CodexDesktopRuntimeSnapshot, observedAt: Date = Date()) {
         desktopActiveTurnCount = max(0, desktopSnapshot.activeTurnCount)
         desktopDebugSummary = desktopSnapshot.debugSummary
+        reconcilePendingThreads(
+            pendingThreadIDs: desktopSnapshot.waitingForInputThreadIDs.union(desktopSnapshot.approvalThreadIDs),
+            runningThreadIDs: desktopSnapshot.runningThreadIDs,
+            observedAt: observedAt
+        )
+        overlayFailedThreads(desktopSnapshot.failedThreads)
         overlayPendingThreads(desktopSnapshot.waitingForInputThreadIDs, status: .waitingForInput, observedAt: observedAt)
         overlayPendingThreads(desktopSnapshot.approvalThreadIDs, status: .needsApproval, observedAt: observedAt)
         overlayRunningThreads(desktopSnapshot.runningThreadIDs, observedAt: observedAt)
+    }
+
+    private mutating func reconcilePendingThreads(
+        pendingThreadIDs: Set<String>,
+        runningThreadIDs: Set<String>,
+        observedAt: Date = Date()
+    ) {
+        for threadID in threadsByID.keys.sorted() {
+            guard var row = threadsByID[threadID], row.status.isPending, !pendingThreadIDs.contains(threadID) else {
+                continue
+            }
+
+            let previousStatus = row.status
+            if runningThreadIDs.contains(threadID) {
+                row.status = .running
+                if row.updatedAt < observedAt {
+                    row.updatedAt = observedAt
+                }
+            } else {
+                row.status = row.listedStatus
+            }
+
+            guard row.status != previousStatus else { continue }
+            threadsByID[threadID] = row
+            recordDiagnostic("cleared stale pending thread=\(shortThreadID(threadID)) from=\(previousStatus.displayName) to=\(row.status.displayName) via desktop snapshot")
+        }
     }
 
     private mutating func overlayPendingThreads(_ threadIDs: Set<String>, status: ThreadStatus, observedAt: Date = Date()) {
@@ -295,6 +372,29 @@ struct AppStateStore {
 
                 if row.updatedAt < observedAt {
                     row.updatedAt = observedAt
+                }
+            }
+        }
+    }
+
+    private mutating func overlayFailedThreads(_ failures: [String: CodexDesktopRuntimeSnapshot.FailedThreadState]) {
+        guard !failures.isEmpty else { return }
+
+        for (threadID, failure) in failures {
+            updateThread(threadID: threadID) { row in
+                guard row.updatedAt <= failure.loggedAt else {
+                    return
+                }
+
+                switch row.status {
+                case .waitingForInput, .needsApproval, .running:
+                    return
+                case .notLoaded, .idle, .failed:
+                    row.status = .failed(message: failure.message)
+                }
+
+                if row.updatedAt < failure.loggedAt {
+                    row.updatedAt = failure.loggedAt
                 }
             }
         }
@@ -326,6 +426,7 @@ struct AppStateStore {
             row.cwd = notification.thread.cwd
             row.updatedAt = notification.thread.updatedDate
             row.status = ThreadStatus(threadStatus: notification.thread.status)
+            row.listedStatus = row.status
             row.isWatched = true
             threadsByID[notification.thread.id] = row
             recordPendingResolution(threadID: notification.thread.id, previous: previousStatus, current: row.status, source: "thread/started")
@@ -334,6 +435,7 @@ struct AppStateStore {
             let previousStatus = row.status
             row.isWatched = true
             row.status = ThreadStatus(threadStatus: notification.status)
+            row.listedStatus = row.status
             row.updatedAt = Date()
             threadsByID[notification.threadId] = row
             recordPendingResolution(threadID: notification.threadId, previous: previousStatus, current: row.status, source: "thread/status/changed")
@@ -342,6 +444,7 @@ struct AppStateStore {
             let previousStatus = row.status
             row.isWatched = true
             row.status = .running
+            row.listedStatus = .running
             row.activeTurnID = notification.turn.id
             row.updatedAt = Date()
             threadsByID[notification.threadId] = row
@@ -361,6 +464,7 @@ struct AppStateStore {
             case .inProgress:
                 row.status = .running
             }
+            row.listedStatus = row.status
 
             threadsByID[notification.threadId] = row
             recordPendingResolution(threadID: notification.threadId, previous: previousStatus, current: row.status, source: "turn/completed")
@@ -372,6 +476,7 @@ struct AppStateStore {
             row.isWatched = true
             row.activeTurnID = notification.turnId
             row.status = .failed(message: notification.error.message)
+            row.listedStatus = row.status
             row.updatedAt = Date()
             threadsByID[notification.threadId] = row
             recordPendingResolution(threadID: notification.threadId, previous: previousStatus, current: row.status, source: "error")
@@ -442,6 +547,7 @@ struct AppStateStore {
             preview: threadID,
             cwd: "",
             status: .notLoaded,
+            listedStatus: .notLoaded,
             updatedAt: Date(),
             isWatched: true,
             activeTurnID: nil
@@ -454,6 +560,157 @@ struct AppStateStore {
         update(&row)
         threadsByID[threadID] = row
     }
+
+    private func buildProjectSections(
+        from threads: [ThreadRow],
+        using catalog: CodexDesktopProjectCatalog
+    ) -> [ProjectSection] {
+        struct Bucket {
+            let id: String
+            let displayName: String
+            var latestUpdatedAt: Date
+            var threads: [ThreadRow]
+        }
+
+        var buckets: [String: Bucket] = [:]
+
+        for thread in threads {
+            let project = catalog.project(for: thread.cwd)
+            if var bucket = buckets[project.id] {
+                if thread.updatedAt > bucket.latestUpdatedAt {
+                    bucket.latestUpdatedAt = thread.updatedAt
+                }
+                bucket.threads.append(thread)
+                buckets[project.id] = bucket
+            } else {
+                buckets[project.id] = Bucket(
+                    id: project.id,
+                    displayName: project.displayName,
+                    latestUpdatedAt: thread.updatedAt,
+                    threads: [thread]
+                )
+            }
+        }
+
+        return buckets.values
+            .map { bucket in
+                ProjectSection(
+                    id: bucket.id,
+                    displayName: bucket.displayName,
+                    latestUpdatedAt: bucket.latestUpdatedAt,
+                    threads: bucket.threads
+                )
+            }
+            .sorted { lhs, rhs in
+                if lhs.latestUpdatedAt == rhs.latestUpdatedAt {
+                    return lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName) == .orderedAscending
+                }
+
+                return lhs.latestUpdatedAt > rhs.latestUpdatedAt
+            }
+    }
+
+    private func limitedProjectSections(
+        _ sections: [ProjectSection],
+        maxProjects: Int,
+        maxThreads: Int
+    ) -> [ProjectSection] {
+        guard maxThreads > 0 else { return [] }
+
+        let failedProjectIDs = Set(
+            sections.compactMap { section in
+                section.threads.contains(where: Self.isFailedThread) ? section.id : nil
+            }
+        )
+        let limitedProjectIDs = Set(
+            sections
+                .filter { failedProjectIDs.contains($0.id) }
+                .map(\.id)
+                + sections
+                    .filter { !failedProjectIDs.contains($0.id) }
+                    .prefix(maxProjectsExcludingFailures(maxProjects: maxProjects, failedProjectIDs: failedProjectIDs))
+                    .map(\.id)
+        )
+        let limitedSections = sections.filter { limitedProjectIDs.contains($0.id) }
+        let threadProjectIDs = Dictionary(
+            uniqueKeysWithValues: limitedSections.flatMap { section in
+                section.threads.map { ($0.id, section.id) }
+            }
+        )
+        var visibleThreadsByProject: [String: [ThreadRow]] = [:]
+        var visibleThreadIDs: Set<String> = []
+        var visibleThreadCount = 0
+
+        let failedThreads = limitedSections
+            .flatMap(\.threads)
+            .filter(Self.isFailedThread)
+            .sorted(by: Self.isNewerThread)
+
+        for thread in failedThreads {
+            guard visibleThreadCount < maxThreads else { break }
+
+            let projectID = threadProjectIDs[thread.id]
+            guard let projectID else { continue }
+
+            visibleThreadsByProject[projectID, default: []].append(thread)
+            visibleThreadIDs.insert(thread.id)
+            visibleThreadCount += 1
+        }
+
+        for section in limitedSections {
+            guard visibleThreadCount < maxThreads,
+                  let thread = section.threads.first(where: { !visibleThreadIDs.contains($0.id) })
+            else {
+                break
+            }
+
+            visibleThreadsByProject[section.id, default: []].append(thread)
+            visibleThreadIDs.insert(thread.id)
+            visibleThreadCount += 1
+        }
+
+        let remainingThreads = limitedSections
+            .flatMap(\.threads)
+            .filter { !visibleThreadIDs.contains($0.id) }
+            .sorted(by: Self.isNewerThread)
+
+        for thread in remainingThreads.prefix(max(0, maxThreads - visibleThreadCount)) {
+            let projectID = threadProjectIDs[thread.id]
+            guard let projectID else { continue }
+            visibleThreadsByProject[projectID, default: []].append(thread)
+        }
+
+        return limitedSections.compactMap { section in
+            guard let visibleThreads = visibleThreadsByProject[section.id], !visibleThreads.isEmpty else {
+                return nil
+            }
+
+            return ProjectSection(
+                id: section.id,
+                displayName: section.displayName,
+                latestUpdatedAt: section.latestUpdatedAt,
+                threads: visibleThreads.sorted(by: Self.isNewerThread)
+            )
+        }
+    }
+
+    private static func isNewerThread(_ lhs: ThreadRow, _ rhs: ThreadRow) -> Bool {
+        if lhs.updatedAt == rhs.updatedAt {
+            return lhs.displayTitle.localizedCaseInsensitiveCompare(rhs.displayTitle) == .orderedAscending
+        }
+
+        return lhs.updatedAt > rhs.updatedAt
+    }
+
+    private static func isFailedThread(_ thread: ThreadRow) -> Bool {
+        if case .failed = thread.status { return true }
+        return false
+    }
+
+    private func maxProjectsExcludingFailures(maxProjects: Int, failedProjectIDs: Set<String>) -> Int {
+        guard maxProjects != .max else { return .max }
+        return max(0, maxProjects - failedProjectIDs.count)
+    }
 }
 
 private extension AppStateStore.ThreadRow {
@@ -463,6 +720,7 @@ private extension AppStateStore.ThreadRow {
         self.preview = thread.previewLine
         self.cwd = thread.cwd
         self.status = .init(threadStatus: thread.status)
+        self.listedStatus = self.status
         self.updatedAt = thread.updatedDate
         self.isWatched = isWatched
         self.activeTurnID = nil

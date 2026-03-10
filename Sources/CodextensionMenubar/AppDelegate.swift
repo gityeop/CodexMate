@@ -8,13 +8,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         static let threadListSeconds: TimeInterval = 5
     }
 
+    private enum ThreadListDisplay {
+        static let fetchLimit = 64
+        static let projectLimit = 5
+        static let visibleThreadLimit = 8
+    }
+
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private let menu = NSMenu()
     private let relativeDateFormatter = RelativeDateTimeFormatter()
     private let client = CodexAppServerClient()
     private let desktopStateReader = CodexDesktopStateReader()
+    private let projectCatalogReader = CodexDesktopProjectCatalogReader()
 
     private var state = AppStateStore()
+    private var projectCatalog = CodexDesktopProjectCatalog.empty
+    private var connectedBinaryPath: String?
     private var desktopActivityTimer: Timer?
     private var threadListTimer: Timer?
 
@@ -75,6 +84,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         do {
             let binaryURL = try CodexBinaryLocator.locate()
             try await client.start(codexBinaryURL: binaryURL)
+            connectedBinaryPath = binaryURL.path
             state.setConnection(.connected(binaryPath: binaryURL.path))
             renderMenu()
 
@@ -89,9 +99,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func refreshThreads() async throws {
         let response: ThreadListResponse = try await client.call(
             method: "thread/list",
-            params: ThreadListParams(limit: 8, archived: false)
+            params: ThreadListParams(limit: ThreadListDisplay.fetchLimit, archived: false)
         )
 
+        markConnectionHealthy()
+        projectCatalog = (try? projectCatalogReader.load()) ?? .empty
         state.replaceRecentThreads(with: response.data)
         applyDesktopRuntimeOverlay()
         renderMenu()
@@ -106,6 +118,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 params: ThreadResumeParams(threadId: thread.id, persistExtendedHistory: false)
             )
 
+            markConnectionHealthy()
             state.markWatched(thread: response.thread)
             renderMenu()
         } catch {
@@ -300,6 +313,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    private func markConnectionHealthy() {
+        guard let connectedBinaryPath else { return }
+        state.setConnection(.connected(binaryPath: connectedBinaryPath))
+    }
+
     private func renderMenu() {
         statusItem.button?.title = state.overallStatus.icon
         menu.removeAllItems()
@@ -321,11 +339,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if state.recentThreads.isEmpty {
             menu.addItem(makeStaticItem(title: "No recent threads"))
         } else {
-            for thread in state.recentThreads {
-                let item = makeActionItem(title: menuTitle(for: thread), action: #selector(openThread(_:)))
-                item.representedObject = thread.id
-                item.toolTip = "\(thread.preview)\n\(thread.cwd)"
-                menu.addItem(item)
+            let sections = state.projectSections(
+                using: projectCatalog,
+                maxProjects: ThreadListDisplay.projectLimit,
+                maxThreads: ThreadListDisplay.visibleThreadLimit
+            )
+
+            for (index, section) in sections.enumerated() {
+                if index > 0 {
+                    menu.addItem(.separator())
+                }
+
+                menu.addItem(makeStaticItem(title: projectSectionTitle(for: section)))
+
+                for thread in section.threads {
+                    let item = makeActionItem(title: menuTitle(for: thread), action: #selector(openThread(_:)))
+                    item.representedObject = thread.id
+                    item.toolTip = tooltip(for: thread)
+                    menu.addItem(item)
+                }
             }
         }
 
@@ -358,7 +390,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func menuTitle(for thread: AppStateStore.ThreadRow) -> String {
         let watchMarker = thread.isWatched ? "• " : ""
         let relativeDate = relativeDateFormatter.localizedString(for: thread.updatedAt, relativeTo: Date())
-        return "\(watchMarker)\(thread.displayTitle) | \(thread.status.displayName) | \(relativeDate)"
+        return "\(thread.status.icon) \(watchMarker)\(thread.displayTitle) | \(relativeDate)"
+    }
+
+    private func projectSectionTitle(for section: AppStateStore.ProjectSection) -> String {
+        let threadCount = section.threads.count
+        let suffix = threadCount == 1 ? "thread" : "threads"
+        return "\(section.displayName) | \(threadCount) \(suffix)"
+    }
+
+    private func tooltip(for thread: AppStateStore.ThreadRow) -> String {
+        var lines: [String] = []
+
+        if case let .failed(message?) = thread.status {
+            let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty {
+                lines.append("Error: \(trimmed)")
+            }
+        }
+
+        lines.append(thread.preview)
+        lines.append(thread.cwd)
+        return lines.joined(separator: "\n")
     }
 
     @objc
