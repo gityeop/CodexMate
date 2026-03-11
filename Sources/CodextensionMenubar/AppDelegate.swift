@@ -23,6 +23,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let relativeDateFormatter = RelativeDateTimeFormatter()
     private let client = CodexAppServerClient()
     private let desktopStateReader = CodexDesktopStateReader()
+    private let conversationActivityReader = CodexDesktopConversationActivityReader()
     private let projectCatalogReader = CodexDesktopProjectCatalogReader()
     private let unreadIndicatorImage = AppDelegate.makeUnreadIndicatorImage()
     private let runningIndicatorImage = AppDelegate.makeTextIndicatorImage("⏳")
@@ -117,6 +118,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         projectCatalog = (try? projectCatalogReader.load()) ?? .empty
         state.replaceRecentThreads(with: response.data)
         applyDesktopRuntimeOverlay()
+        synchronizeThreadReadMarkersFromCodexLogs()
         await resumeVisibleThreadsIfNeeded()
         renderMenu()
     }
@@ -317,6 +319,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func refreshDesktopActivity() {
         applyDesktopRuntimeOverlay()
+        synchronizeThreadReadMarkersFromCodexLogs()
         renderMenu()
     }
 
@@ -346,18 +349,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
         menu.removeAllItems()
 
-        menu.addItem(makeStaticItem(title: "Status: \(MenubarStatusPresentation.statusDisplayName(overallStatus: state.overallStatus, hasUnreadThreads: hasUnreadThreads))"))
-        menu.addItem(makeStaticItem(title: "Click a thread to open it in Codex. Hold Option to copy its id."))
-
-        menu.addItem(.separator())
-        menu.addItem(makeActionItem(title: "Refresh Threads", action: #selector(refreshThreadsAction)))
-
-        let watchItem = makeActionItem(title: "Watch Latest Thread", action: #selector(watchLatestThreadAction))
-        watchItem.isEnabled = !state.recentThreads.isEmpty
-        menu.addItem(watchItem)
-
-        menu.addItem(.separator())
-
         if state.recentThreads.isEmpty {
             menu.addItem(makeStaticItem(title: "No recent threads"))
         } else {
@@ -379,6 +370,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             }
         }
+
+        menu.addItem(.separator())
+        menu.addItem(makeActionItem(title: "Refresh Threads", action: #selector(refreshThreadsAction)))
+
+        let watchItem = makeActionItem(title: "Watch Latest Thread", action: #selector(watchLatestThreadAction))
+        watchItem.isEnabled = !state.recentThreads.isEmpty
+        menu.addItem(watchItem)
 
         menu.addItem(.separator())
         menu.addItem(makeActionItem(title: "Quit", action: #selector(quit)))
@@ -450,6 +448,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         for thread in state.recentThreads {
             if threadReadMarkers.seedIfNeeded(threadID: thread.id) {
+                didChange = true
+            }
+        }
+
+        if didChange {
+            persistThreadReadMarkers()
+        }
+    }
+
+    private func synchronizeThreadReadMarkersFromCodexLogs() {
+        let latestViewedAtByThreadID = conversationActivityReader.latestViewedAtByThreadID()
+        guard !latestViewedAtByThreadID.isEmpty else { return }
+
+        var didChange = false
+
+        for thread in state.recentThreads {
+            let viewedAt = latestViewedAtByThreadID[thread.id]
+            if threadReadMarkers.markReadIfViewedAfterLastTerminalActivity(
+                threadID: thread.id,
+                lastTerminalActivityAt: thread.lastTerminalActivityAt,
+                viewedAt: viewedAt
+            ) {
                 didChange = true
             }
         }

@@ -29,4 +29,34 @@ final class ThreadReadMarkerStoreTests: XCTestCase {
         XCTAssertFalse(store.markRead(threadID: "thread-1", lastTerminalActivityAt: Date(timeIntervalSince1970: 110)))
         XCTAssertFalse(store.hasUnreadContent(threadID: "thread-1", lastTerminalActivityAt: Date(timeIntervalSince1970: 115)))
     }
+
+    func testMarkReadIfViewedAfterLastTerminalActivityClearsUnread() {
+        var store = ThreadReadMarkerStore()
+        let terminalUpdatedAt = Date(timeIntervalSince1970: 120)
+        let viewedAt = Date(timeIntervalSince1970: 130)
+
+        XCTAssertTrue(
+            store.markReadIfViewedAfterLastTerminalActivity(
+                threadID: "thread-1",
+                lastTerminalActivityAt: terminalUpdatedAt,
+                viewedAt: viewedAt
+            )
+        )
+        XCTAssertFalse(store.hasUnreadContent(threadID: "thread-1", lastTerminalActivityAt: terminalUpdatedAt))
+    }
+
+    func testMarkReadIfViewedAfterLastTerminalActivityIgnoresOlderView() {
+        var store = ThreadReadMarkerStore()
+        let terminalUpdatedAt = Date(timeIntervalSince1970: 120)
+        let viewedAt = Date(timeIntervalSince1970: 110)
+
+        XCTAssertFalse(
+            store.markReadIfViewedAfterLastTerminalActivity(
+                threadID: "thread-1",
+                lastTerminalActivityAt: terminalUpdatedAt,
+                viewedAt: viewedAt
+            )
+        )
+        XCTAssertTrue(store.hasUnreadContent(threadID: "thread-1", lastTerminalActivityAt: terminalUpdatedAt))
+    }
 }

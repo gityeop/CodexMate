@@ -41,4 +41,16 @@ struct ThreadReadMarkerStore: Equatable {
         lastReadTerminalAtByThreadID[threadID] = newTimestamp
         return true
     }
+
+    mutating func markReadIfViewedAfterLastTerminalActivity(
+        threadID: String,
+        lastTerminalActivityAt: Date?,
+        viewedAt: Date?
+    ) -> Bool {
+        guard let lastTerminalActivityAt, let viewedAt, viewedAt >= lastTerminalActivityAt else {
+            return false
+        }
+
+        return markRead(threadID: threadID, lastTerminalActivityAt: lastTerminalActivityAt)
+    }
 }
