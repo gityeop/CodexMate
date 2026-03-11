@@ -113,6 +113,7 @@ struct AppStateStore {
         var status: ThreadStatus
         var listedStatus: ThreadStatus
         var updatedAt: Date
+        var statusUpdatedAt: Date = .distantPast
         var isWatched: Bool
         var activeTurnID: String?
         var lastTerminalActivityAt: Date?
@@ -302,6 +303,7 @@ struct AppStateStore {
             var row = threadsByID[thread.id] ?? ThreadRow(thread: thread, isWatched: false)
             let previousStatus = row.status
             let currentUpdatedAt = row.updatedAt
+            let currentStatusUpdatedAt = row.statusUpdatedAt
             let incomingUpdatedAt = thread.updatedDate
             row.displayTitle = thread.displayTitle
             row.preview = thread.previewLine
@@ -314,7 +316,7 @@ struct AppStateStore {
                 incoming: newStatus,
                 isWatched: row.isWatched,
                 activeTurnID: row.activeTurnID,
-                currentUpdatedAt: currentUpdatedAt,
+                currentStatusUpdatedAt: currentStatusUpdatedAt,
                 incomingUpdatedAt: incomingUpdatedAt
             )
             if let preservedStatus {
@@ -325,7 +327,8 @@ struct AppStateStore {
             } else {
                 row.status = newStatus
             }
-            row.updatedAt = preservedStatus == nil ? incomingUpdatedAt : max(currentUpdatedAt, incomingUpdatedAt)
+            row.updatedAt = max(currentUpdatedAt, incomingUpdatedAt)
+            row.statusUpdatedAt = max(currentStatusUpdatedAt, incomingUpdatedAt)
 
             if row.isWatched {
                 row.activeTurnID = updatedActiveTurnID(
@@ -355,6 +358,7 @@ struct AppStateStore {
     mutating func markWatched(thread: CodexThread) {
         var row = threadsByID[thread.id] ?? ThreadRow(thread: thread, isWatched: true)
         let currentUpdatedAt = row.updatedAt
+        let currentStatusUpdatedAt = row.statusUpdatedAt
         let incomingUpdatedAt = thread.updatedDate
         row.displayTitle = thread.displayTitle
         row.preview = thread.previewLine
@@ -365,10 +369,11 @@ struct AppStateStore {
             incoming: newStatus,
             isWatched: true,
             activeTurnID: row.activeTurnID,
-            currentUpdatedAt: currentUpdatedAt,
+            currentStatusUpdatedAt: currentStatusUpdatedAt,
             incomingUpdatedAt: incomingUpdatedAt
         )
-        row.updatedAt = preservedStatus == nil ? incomingUpdatedAt : max(currentUpdatedAt, incomingUpdatedAt)
+        row.updatedAt = max(currentUpdatedAt, incomingUpdatedAt)
+        row.statusUpdatedAt = max(currentStatusUpdatedAt, incomingUpdatedAt)
         row.status = preservedStatus ?? newStatus
         row.listedStatus = newStatus
         row.isWatched = true
@@ -412,12 +417,10 @@ struct AppStateStore {
             let previousStatus = row.status
             if runningThreadIDs.contains(threadID) {
                 row.status = .running
-                if row.updatedAt < observedAt {
-                    row.updatedAt = observedAt
-                }
             } else {
                 row.status = row.listedStatus
             }
+            row.statusUpdatedAt = max(row.statusUpdatedAt, observedAt)
 
             guard row.status != previousStatus else { continue }
             threadsByID[threadID] = row
@@ -435,10 +438,7 @@ struct AppStateStore {
                 }
 
                 row.status = status
-
-                if row.updatedAt < observedAt {
-                    row.updatedAt = observedAt
-                }
+                row.statusUpdatedAt = max(row.statusUpdatedAt, observedAt)
             }
         }
     }
@@ -463,6 +463,7 @@ struct AppStateStore {
                     row.status = .failed(message: failure.message)
                 }
 
+                row.statusUpdatedAt = max(row.statusUpdatedAt, failure.loggedAt)
                 if row.updatedAt < failure.loggedAt {
                     row.updatedAt = failure.loggedAt
                 }
@@ -482,10 +483,7 @@ struct AppStateStore {
                 if !row.status.isPending {
                     row.status = .running
                 }
-
-                if row.updatedAt < observedAt {
-                    row.updatedAt = observedAt
-                }
+                row.statusUpdatedAt = max(row.statusUpdatedAt, observedAt)
             }
         }
     }
@@ -498,7 +496,8 @@ struct AppStateStore {
             row.displayTitle = notification.thread.displayTitle
             row.preview = notification.thread.previewLine
             row.cwd = notification.thread.cwd
-            row.updatedAt = notification.thread.updatedDate
+            row.updatedAt = max(row.updatedAt, notification.thread.updatedDate)
+            row.statusUpdatedAt = max(row.statusUpdatedAt, notification.thread.updatedDate)
             row.status = ThreadStatus(threadStatus: notification.thread.status)
             row.listedStatus = row.status
             row.isWatched = true
@@ -511,26 +510,30 @@ struct AppStateStore {
             row.isWatched = true
             row.status = ThreadStatus(threadStatus: notification.status)
             row.listedStatus = row.status
-            row.updatedAt = Date()
+            row.statusUpdatedAt = Date()
             row.activeTurnID = updatedActiveTurnID(existing: row.activeTurnID, status: row.status, allowClearing: false)
             threadsByID[notification.threadId] = row
             recordPendingResolution(threadID: notification.threadId, previous: previousStatus, current: row.status, source: "thread/status/changed")
         case let .turnStarted(notification):
             var row = threadsByID[notification.threadId] ?? defaultThreadRow(threadID: notification.threadId)
             let previousStatus = row.status
+            let observedAt = Date()
             row.isWatched = true
             row.status = .running
             row.listedStatus = .running
             row.activeTurnID = notification.turn.id
-            row.updatedAt = Date()
+            row.updatedAt = max(row.updatedAt, observedAt)
+            row.statusUpdatedAt = observedAt
             threadsByID[notification.threadId] = row
             recordPendingResolution(threadID: notification.threadId, previous: previousStatus, current: row.status, source: "turn/started")
         case let .turnCompleted(notification):
             var row = threadsByID[notification.threadId] ?? defaultThreadRow(threadID: notification.threadId)
             let previousStatus = row.status
+            let observedAt = Date()
             row.isWatched = true
             row.activeTurnID = nil
-            row.updatedAt = Date()
+            row.updatedAt = max(row.updatedAt, observedAt)
+            row.statusUpdatedAt = observedAt
             row.lastTerminalActivityAt = row.updatedAt
 
             switch notification.turn.status {
@@ -550,11 +553,13 @@ struct AppStateStore {
 
             var row = threadsByID[notification.threadId] ?? defaultThreadRow(threadID: notification.threadId)
             let previousStatus = row.status
+            let observedAt = Date()
             row.isWatched = true
             row.activeTurnID = nil
             row.status = .failed(message: notification.error.message)
             row.listedStatus = row.status
-            row.updatedAt = Date()
+            row.updatedAt = max(row.updatedAt, observedAt)
+            row.statusUpdatedAt = observedAt
             row.lastTerminalActivityAt = row.updatedAt
             threadsByID[notification.threadId] = row
             recordPendingResolution(threadID: notification.threadId, previous: previousStatus, current: row.status, source: "error")
@@ -565,17 +570,21 @@ struct AppStateStore {
         switch serverRequest {
         case let .toolUserInput(request):
             updateThread(threadID: request.threadId) { row in
+                let observedAt = Date()
                 row.isWatched = true
                 row.activeTurnID = request.turnId
                 row.status = .waitingForInput
-                row.updatedAt = Date()
+                row.updatedAt = max(row.updatedAt, observedAt)
+                row.statusUpdatedAt = observedAt
             }
         case let .approval(request):
             updateThread(threadID: request.threadId) { row in
+                let observedAt = Date()
                 row.isWatched = true
                 row.activeTurnID = request.turnId
                 row.status = .needsApproval
-                row.updatedAt = Date()
+                row.updatedAt = max(row.updatedAt, observedAt)
+                row.statusUpdatedAt = observedAt
             }
         }
     }
@@ -590,7 +599,7 @@ struct AppStateStore {
         incoming: ThreadStatus,
         isWatched: Bool,
         activeTurnID: String?,
-        currentUpdatedAt: Date,
+        currentStatusUpdatedAt: Date,
         incomingUpdatedAt: Date
     ) -> ThreadStatus? {
         if activeTurnID != nil {
@@ -600,7 +609,7 @@ struct AppStateStore {
         if shouldPreserveNewerRuntimeStatus(
             current: current,
             incoming: incoming,
-            currentUpdatedAt: currentUpdatedAt,
+            currentStatusUpdatedAt: currentStatusUpdatedAt,
             incomingUpdatedAt: incomingUpdatedAt
         ) {
             return current
@@ -647,6 +656,7 @@ struct AppStateStore {
             status: .notLoaded,
             listedStatus: .notLoaded,
             updatedAt: Date(),
+            statusUpdatedAt: Date(),
             isWatched: true,
             activeTurnID: nil,
             lastTerminalActivityAt: nil
@@ -814,10 +824,10 @@ struct AppStateStore {
     private func shouldPreserveNewerRuntimeStatus(
         current: ThreadStatus,
         incoming: ThreadStatus,
-        currentUpdatedAt: Date,
+        currentStatusUpdatedAt: Date,
         incomingUpdatedAt: Date
     ) -> Bool {
-        guard currentUpdatedAt > incomingUpdatedAt else {
+        guard currentStatusUpdatedAt > incomingUpdatedAt else {
             return false
         }
 
@@ -874,6 +884,7 @@ private extension AppStateStore.ThreadRow {
         self.status = .init(threadStatus: thread.status)
         self.listedStatus = self.status
         self.updatedAt = thread.updatedDate
+        self.statusUpdatedAt = thread.updatedDate
         self.isWatched = isWatched
         self.activeTurnID = nil
         self.lastTerminalActivityAt = nil

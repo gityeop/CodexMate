@@ -184,6 +184,8 @@ final class AppStateStoreTests: XCTestCase {
 
         XCTAssertEqual(store.overallStatus, .running)
         XCTAssertEqual(store.recentThreads.first?.status, .running)
+        XCTAssertEqual(store.recentThreads.first?.updatedAt, Date(timeIntervalSince1970: 100))
+        XCTAssertEqual(store.recentThreads.first?.statusUpdatedAt, Date(timeIntervalSince1970: 200))
         XCTAssertFalse(store.recentThreads.first?.isWatched ?? true)
     }
 
@@ -204,7 +206,8 @@ final class AppStateStoreTests: XCTestCase {
         ])
 
         XCTAssertEqual(store.recentThreads.first?.status, .running)
-        XCTAssertEqual(store.recentThreads.first?.updatedAt, Date(timeIntervalSince1970: 200))
+        XCTAssertEqual(store.recentThreads.first?.updatedAt, Date(timeIntervalSince1970: 150))
+        XCTAssertEqual(store.recentThreads.first?.statusUpdatedAt, Date(timeIntervalSince1970: 200))
     }
 
     func testReplaceRecentThreadsClearsRunningOverlayWhenIncomingIdlePayloadIsNewer() {
@@ -456,7 +459,26 @@ final class AppStateStoreTests: XCTestCase {
         store.markWatched(thread: thread(id: "thread-1", updatedAt: 150, status: .idle))
 
         XCTAssertEqual(store.recentThreads.first?.displayStatus, .running)
+        XCTAssertEqual(store.recentThreads.first?.updatedAt, Date(timeIntervalSince1970: 150))
+        XCTAssertEqual(store.recentThreads.first?.statusUpdatedAt, Date(timeIntervalSince1970: 200))
         XCTAssertNotNil(store.recentThreads.first?.activeTurnID)
+    }
+
+    func testDesktopPendingOverlayDoesNotAdvanceDisplayUpdatedAt() {
+        var store = AppStateStore()
+        store.replaceRecentThreads(with: [thread(id: "thread-1", updatedAt: 100, status: .notLoaded)])
+
+        store.apply(
+            desktopSnapshot: CodexDesktopRuntimeSnapshot(
+                activeTurnCount: 0,
+                runningThreadIDs: [],
+                waitingForInputThreadIDs: ["thread-1"]
+            ),
+            observedAt: Date(timeIntervalSince1970: 200)
+        )
+
+        XCTAssertEqual(store.recentThreads.first?.updatedAt, Date(timeIntervalSince1970: 100))
+        XCTAssertEqual(store.recentThreads.first?.statusUpdatedAt, Date(timeIntervalSince1970: 200))
     }
 
     func testThreadListRefreshPreservesWatchedWaitingForInputWhenIncomingIdle() {
