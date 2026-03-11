@@ -51,6 +51,7 @@ struct CodexThread: Decodable, Equatable {
     let status: CodexThreadStatus
     let cwd: String
     let name: String?
+    let path: String?
 
     init(
         id: String,
@@ -59,7 +60,8 @@ struct CodexThread: Decodable, Equatable {
         updatedAt: Int,
         status: CodexThreadStatus,
         cwd: String,
-        name: String?
+        name: String?,
+        path: String? = nil
     ) {
         self.id = id
         self.preview = preview
@@ -68,6 +70,7 @@ struct CodexThread: Decodable, Equatable {
         self.status = status
         self.cwd = cwd
         self.name = name
+        self.path = path
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -78,6 +81,7 @@ struct CodexThread: Decodable, Equatable {
         case status
         case cwd
         case name
+        case path
     }
 
     init(from decoder: Decoder) throws {
@@ -90,6 +94,7 @@ struct CodexThread: Decodable, Equatable {
         status = try container.decode(CodexThreadStatus.self, forKey: .status)
         cwd = try container.decode(String.self, forKey: .cwd)
         name = try container.decodeIfPresent(String.self, forKey: .name)
+        path = try container.decodeIfPresent(String.self, forKey: .path)
     }
 }
 
@@ -190,6 +195,10 @@ struct ApprovalRequestPayload: Decodable, Equatable {
     let turnId: String
     let itemId: String
     let reason: String?
+}
+
+struct ServerRequestResolvedNotification: Decodable, Equatable {
+    let threadId: String
 }
 
 extension CodexThread {

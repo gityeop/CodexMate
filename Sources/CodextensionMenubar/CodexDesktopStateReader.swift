@@ -31,10 +31,16 @@ struct CodexDesktopRuntimeSnapshot {
 }
 
 struct CodexDesktopStateReader {
+    struct SessionPendingState: Equatable {
+        let waitingForInput: Bool
+        let needsApproval: Bool
+    }
+
     private let fileManager: FileManager
     private let now: () -> Date
     private let recentThreadUpdateInterval: TimeInterval
     private let recentLogInterval: TimeInterval
+    private let sessionPendingStateCache = SessionPendingStateCache()
 
     init(
         fileManager: FileManager = .default,
@@ -49,7 +55,12 @@ struct CodexDesktopStateReader {
     }
 
     func snapshot(candidates: Set<String>) throws -> CodexDesktopRuntimeSnapshot {
+        try snapshot(candidateSessionPaths: Dictionary(uniqueKeysWithValues: candidates.map { ($0, nil) }))
+    }
+
+    func snapshot(candidateSessionPaths: [String: String?]) throws -> CodexDesktopRuntimeSnapshot {
         let databaseURL = try locateStateDatabase()
+        let candidates = Set(candidateSessionPaths.keys)
         let nowTimestamp = Int(now().timeIntervalSince1970)
         let threadUpdateCutoff = nowTimestamp - Int(recentThreadUpdateInterval)
         let logCutoff = nowTimestamp - Int(recentLogInterval)
@@ -82,7 +93,11 @@ struct CodexDesktopStateReader {
             databaseURL: databaseURL
         )
 
-        let pendingStates = try queryPendingThreadStates(candidates: candidates, databaseURL: databaseURL)
+        let pendingStates = try queryPendingThreadStates(
+            candidates: candidates,
+            candidateSessionPaths: candidateSessionPaths,
+            databaseURL: databaseURL
+        )
         let failedThreads = try queryFailedThreads(candidates: candidates, databaseURL: databaseURL)
         let debugSummary = [
             "candidates=\(candidates.count)",
@@ -166,7 +181,22 @@ struct CodexDesktopStateReader {
         return Int(output.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
     }
 
-    private func queryPendingThreadStates(candidates: Set<String>, databaseURL: URL) throws -> (waitingForInputThreadIDs: Set<String>, approvalThreadIDs: Set<String>, debugRows: [String]) {
+    private func queryPendingThreadStates(
+        candidates: Set<String>,
+        candidateSessionPaths: [String: String?],
+        databaseURL: URL
+    ) throws -> (waitingForInputThreadIDs: Set<String>, approvalThreadIDs: Set<String>, debugRows: [String]) {
+        let logStates = try queryLogPendingThreadStates(candidates: candidates, databaseURL: databaseURL)
+        let sessionStates = querySessionPendingThreadStates(candidateSessionPaths: candidateSessionPaths)
+
+        return (
+            waitingForInputThreadIDs: logStates.waitingForInputThreadIDs.union(sessionStates.waitingForInputThreadIDs),
+            approvalThreadIDs: logStates.approvalThreadIDs.union(sessionStates.approvalThreadIDs),
+            debugRows: logStates.debugRows + sessionStates.debugRows
+        )
+    }
+
+    private func queryLogPendingThreadStates(candidates: Set<String>, databaseURL: URL) throws -> (waitingForInputThreadIDs: Set<String>, approvalThreadIDs: Set<String>, debugRows: [String]) {
         let candidateList = candidates
             .map(sqlQuoted)
             .sorted()
@@ -227,6 +257,98 @@ struct CodexDesktopStateReader {
         }
 
         return (waitingThreadIDs, approvalThreadIDs, debugRows)
+    }
+
+    private func querySessionPendingThreadStates(
+        candidateSessionPaths: [String: String?]
+    ) -> (waitingForInputThreadIDs: Set<String>, approvalThreadIDs: Set<String>, debugRows: [String]) {
+        var waitingThreadIDs: Set<String> = []
+        var approvalThreadIDs: Set<String> = []
+        var debugRows: [String] = []
+
+        for (threadID, rawPath) in candidateSessionPaths.sorted(by: { $0.key < $1.key }) {
+            guard let rawPath,
+                  let state = sessionPendingState(forSessionFileAt: URL(fileURLWithPath: rawPath))
+            else {
+                continue
+            }
+
+            let shortID = String(threadID.prefix(8))
+
+            if state.waitingForInput {
+                waitingThreadIDs.insert(threadID)
+                debugRows.append("\(shortID):session-wait")
+            }
+
+            if state.needsApproval {
+                approvalThreadIDs.insert(threadID)
+                debugRows.append("\(shortID):session-approval")
+            }
+        }
+
+        return (waitingThreadIDs, approvalThreadIDs, debugRows)
+    }
+
+    func sessionPendingState(forSessionFileAt sessionURL: URL) -> SessionPendingState? {
+        let modificationDate = (try? sessionURL.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate)
+
+        if let cached = sessionPendingStateCache.value(for: sessionURL.path, modificationDate: modificationDate) {
+            return cached
+        }
+
+        guard let contents = try? String(contentsOf: sessionURL, encoding: .utf8) else {
+            return nil
+        }
+
+        let state = Self.parseSessionPendingState(from: contents)
+        sessionPendingStateCache.store(state, for: sessionURL.path, modificationDate: modificationDate)
+        return state
+    }
+
+    static func parseSessionPendingState(from contents: String) -> SessionPendingState {
+        var unresolvedRequestUserInputCallIDs: Set<String> = []
+        var unresolvedApprovalCallIDs: Set<String> = []
+
+        for line in contents.split(whereSeparator: \.isNewline) {
+            guard let data = String(line).data(using: .utf8),
+                  let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let type = object["type"] as? String,
+                  type == "response_item",
+                  let payload = object["payload"] as? [String: Any],
+                  let payloadType = payload["type"] as? String
+            else {
+                continue
+            }
+
+            switch payloadType {
+            case "function_call":
+                guard let name = payload["name"] as? String,
+                      let callID = payload["call_id"] as? String
+                else {
+                    continue
+                }
+
+                if name == "request_user_input" {
+                    unresolvedRequestUserInputCallIDs.insert(callID)
+                } else if name == "request_approval" || name == "requestApproval" {
+                    unresolvedApprovalCallIDs.insert(callID)
+                }
+            case "function_call_output":
+                guard let callID = payload["call_id"] as? String else {
+                    continue
+                }
+
+                unresolvedRequestUserInputCallIDs.remove(callID)
+                unresolvedApprovalCallIDs.remove(callID)
+            default:
+                continue
+            }
+        }
+
+        return SessionPendingState(
+            waitingForInput: !unresolvedRequestUserInputCallIDs.isEmpty,
+            needsApproval: !unresolvedApprovalCallIDs.isEmpty
+        )
     }
 
     private func queryFailedThreads(candidates: Set<String>, databaseURL: URL) throws -> [String: CodexDesktopRuntimeSnapshot.FailedThreadState] {
@@ -308,6 +430,27 @@ struct CodexDesktopStateReader {
         }
 
         return String(data: outputData, encoding: .utf8) ?? ""
+    }
+}
+
+private final class SessionPendingStateCache {
+    private struct Entry {
+        let modificationDate: Date?
+        let state: CodexDesktopStateReader.SessionPendingState
+    }
+
+    private var entries: [String: Entry] = [:]
+
+    func value(for path: String, modificationDate: Date?) -> CodexDesktopStateReader.SessionPendingState? {
+        guard let entry = entries[path], entry.modificationDate == modificationDate else {
+            return nil
+        }
+
+        return entry.state
+    }
+
+    func store(_ state: CodexDesktopStateReader.SessionPendingState, for path: String, modificationDate: Date?) {
+        entries[path] = Entry(modificationDate: modificationDate, state: state)
     }
 }
 

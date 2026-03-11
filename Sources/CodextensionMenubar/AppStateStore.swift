@@ -110,6 +110,7 @@ struct AppStateStore {
         var displayTitle: String
         var preview: String
         var cwd: String
+        var sessionPath: String? = nil
         var status: ThreadStatus
         var listedStatus: ThreadStatus
         var updatedAt: Date
@@ -140,6 +141,7 @@ struct AppStateStore {
         case turnStarted(TurnStartedNotification)
         case turnCompleted(TurnCompletedNotification)
         case error(ErrorNotificationPayload)
+        case serverRequestResolved(ServerRequestResolvedNotification)
     }
 
     enum ServerRequestEvent {
@@ -308,6 +310,7 @@ struct AppStateStore {
             row.displayTitle = thread.displayTitle
             row.preview = thread.previewLine
             row.cwd = thread.cwd
+            row.sessionPath = thread.path
 
             let newStatus = ThreadStatus(threadStatus: thread.status)
             row.listedStatus = newStatus
@@ -363,6 +366,7 @@ struct AppStateStore {
         row.displayTitle = thread.displayTitle
         row.preview = thread.previewLine
         row.cwd = thread.cwd
+        row.sessionPath = thread.path
         let newStatus = ThreadStatus(threadStatus: thread.status)
         let preservedStatus = preservedStatus(
             current: row.status,
@@ -496,6 +500,7 @@ struct AppStateStore {
             row.displayTitle = notification.thread.displayTitle
             row.preview = notification.thread.previewLine
             row.cwd = notification.thread.cwd
+            row.sessionPath = notification.thread.path
             row.updatedAt = max(row.updatedAt, notification.thread.updatedDate)
             row.statusUpdatedAt = max(row.statusUpdatedAt, notification.thread.updatedDate)
             row.status = ThreadStatus(threadStatus: notification.thread.status)
@@ -563,6 +568,16 @@ struct AppStateStore {
             row.lastTerminalActivityAt = row.updatedAt
             threadsByID[notification.threadId] = row
             recordPendingResolution(threadID: notification.threadId, previous: previousStatus, current: row.status, source: "error")
+        case let .serverRequestResolved(notification):
+            guard var row = threadsByID[notification.threadId], row.status.isPending else {
+                return
+            }
+
+            let previousStatus = row.status
+            row.status = row.hasActiveTurn ? .running : row.listedStatus
+            row.statusUpdatedAt = Date()
+            threadsByID[notification.threadId] = row
+            recordPendingResolution(threadID: notification.threadId, previous: previousStatus, current: row.status, source: "serverRequest/resolved")
         }
     }
 
@@ -653,6 +668,7 @@ struct AppStateStore {
             displayTitle: threadID,
             preview: threadID,
             cwd: "",
+            sessionPath: nil,
             status: .notLoaded,
             listedStatus: .notLoaded,
             updatedAt: Date(),
@@ -881,6 +897,7 @@ private extension AppStateStore.ThreadRow {
         self.displayTitle = thread.displayTitle
         self.preview = thread.previewLine
         self.cwd = thread.cwd
+        self.sessionPath = thread.path
         self.status = .init(threadStatus: thread.status)
         self.listedStatus = self.status
         self.updatedAt = thread.updatedDate

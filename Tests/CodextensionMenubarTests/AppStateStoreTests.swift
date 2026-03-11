@@ -332,6 +332,21 @@ final class AppStateStoreTests: XCTestCase {
         XCTAssertEqual(store.recentThreads.first?.displayStatus, .running)
     }
 
+    func testServerRequestResolvedClearsWaitingForInputToRunning() {
+        var store = AppStateStore()
+        store.replaceRecentThreads(with: [thread(id: "thread-1", updatedAt: 100, status: .idle)])
+        store.apply(serverRequest: .toolUserInput(
+            ToolRequestUserInputRequest(threadId: "thread-1", turnId: "turn-1", itemId: "item-1")
+        ))
+
+        store.apply(notification: .serverRequestResolved(
+            ServerRequestResolvedNotification(threadId: "thread-1")
+        ))
+
+        XCTAssertEqual(store.recentThreads.first?.status, .running)
+        XCTAssertEqual(store.recentThreads.first?.displayStatus, .running)
+    }
+
     func testActiveFlagWaitingOnUserInputMapsToWaitingForInput() {
         var store = AppStateStore()
 

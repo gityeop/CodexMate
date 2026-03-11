@@ -198,6 +198,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     )
                 }
             }
+        case "serverRequest/resolved":
+            decodeAndApply(payload, as: ServerRequestResolvedNotification.self) { [weak self] notification in
+                guard let self else { return }
+                state.apply(notification: .serverRequestResolved(notification))
+            }
         default:
             break
         }
@@ -316,10 +321,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func applyDesktopRuntimeOverlay() {
-        let candidateThreadIDs = Set(state.recentThreads.map(\.id))
-
         do {
-            let snapshot = try desktopStateReader.snapshot(candidates: candidateThreadIDs)
+            let candidateSessionPaths = Dictionary(
+                uniqueKeysWithValues: state.recentThreads.map { ($0.id, $0.sessionPath) }
+            )
+            let snapshot = try desktopStateReader.snapshot(candidateSessionPaths: candidateSessionPaths)
             state.apply(desktopSnapshot: snapshot)
         } catch {
             state.recordDiagnostic("Desktop activity unavailable: \(error.localizedDescription)")
@@ -341,8 +347,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.removeAllItems()
 
         menu.addItem(makeStaticItem(title: "Status: \(MenubarStatusPresentation.statusDisplayName(overallStatus: state.overallStatus, hasUnreadThreads: hasUnreadThreads))"))
-        menu.addItem(makeStaticItem(title: state.connectionDescription))
-        menu.addItem(makeStaticItem(title: state.summaryText))
         menu.addItem(makeStaticItem(title: "Click a thread to open it in Codex. Hold Option to copy its id."))
 
         menu.addItem(.separator())
@@ -374,16 +378,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     menu.addItem(item)
                 }
             }
-        }
-
-        if let diagnostic = state.lastDiagnostic {
-            menu.addItem(.separator())
-            menu.addItem(makeStaticItem(title: "Last diagnostic: \(diagnostic)"))
-        }
-
-        menu.addItem(makeStaticItem(title: "State snapshot: \(state.debugStatusSnapshot)"))
-        if let desktopDebugSummary = state.desktopDebugSummary {
-            menu.addItem(makeStaticItem(title: "Desktop debug: \(desktopDebugSummary)"))
         }
 
         menu.addItem(.separator())
