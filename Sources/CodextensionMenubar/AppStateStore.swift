@@ -824,8 +824,8 @@ struct AppStateStore {
             sessionPath: nil,
             status: .notLoaded,
             listedStatus: .notLoaded,
-            updatedAt: Date(),
-            statusUpdatedAt: Date(),
+            updatedAt: .distantPast,
+            statusUpdatedAt: .distantPast,
             isWatched: false,
             activeTurnID: nil,
             lastTerminalActivityAt: nil

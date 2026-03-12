@@ -360,6 +360,27 @@ final class AppStateStoreTests: XCTestCase {
         XCTAssertEqual(store.lastDiagnostic, "cleared stale running thread=thread-1 from=Running to=Idle via desktop snapshot")
     }
 
+    func testDesktopOverlayPlaceholderDoesNotOverrideActualThreadRecency() {
+        var store = AppStateStore()
+        store.replaceRecentThreads(with: [thread(id: "newer-thread", updatedAt: 150, status: .idle)])
+
+        store.apply(
+            desktopSnapshot: CodexDesktopRuntimeSnapshot(
+                activeTurnCount: 1,
+                runningThreadIDs: ["older-thread"]
+            ),
+            observedAt: Date(timeIntervalSince1970: 200)
+        )
+
+        store.mergeRecentThread(thread(id: "older-thread", updatedAt: 100, status: .idle))
+
+        XCTAssertEqual(store.recentThreads.map(\.id), ["newer-thread", "older-thread"])
+        XCTAssertEqual(
+            store.recentThreads.first(where: { $0.id == "older-thread" })?.updatedAt,
+            Date(timeIntervalSince1970: 100)
+        )
+    }
+
     func testUserInputRequestMarksWaitingForInput() {
         var store = AppStateStore()
         store.replaceRecentThreads(with: [thread(id: "thread-1", updatedAt: 100, status: .idle)])
