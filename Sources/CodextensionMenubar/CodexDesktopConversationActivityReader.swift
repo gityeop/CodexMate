@@ -165,6 +165,13 @@ final class CodexDesktopConversationActivityReader {
                let timestamp = parseTimestamp(String(timestampToken)),
                let threadID = tokenValue(for: "conversationId=", in: line),
                threadID != "null" {
+                if line.contains("Conversation created") {
+                    let currentLatestViewed = latestViewedAtByThreadID[threadID] ?? .distantPast
+                    if timestamp > currentLatestViewed {
+                        latestViewedAtByThreadID[threadID] = timestamp
+                    }
+                }
+
                 if line.contains("[desktop-notifications] show turn-complete") ||
                     (line.contains("maybe_resume_success") && line.contains("latestTurnStatus=completed")) {
                     let currentLatestCompleted = latestTurnCompletedAtByThreadID[threadID] ?? .distantPast

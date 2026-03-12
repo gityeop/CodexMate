@@ -131,6 +131,69 @@ struct CodexDesktopStateReader {
         )
     }
 
+    func threads(threadIDs: Set<String>) throws -> [CodexThread] {
+        guard !threadIDs.isEmpty else {
+            return []
+        }
+
+        let databaseURL = try locateStateDatabase()
+        let candidateList = threadIDs
+            .map(sqlQuoted)
+            .sorted()
+            .joined(separator: ", ")
+        let output = try runSQLite(
+            sql: """
+            SELECT json_object(
+                'id', id,
+                'preview', CASE
+                    WHEN TRIM(first_user_message) != '' THEN first_user_message
+                    ELSE title
+                END,
+                'createdAt', created_at,
+                'updatedAt', updated_at,
+                'cwd', cwd,
+                'name', title,
+                'path', rollout_path
+            )
+            FROM threads
+            WHERE archived = 0
+              AND id IN (\(candidateList))
+            ORDER BY updated_at DESC;
+            """,
+            databaseURL: databaseURL
+        )
+
+        var threads: [CodexThread] = []
+
+        for line in output.split(separator: "\n") {
+            guard let data = line.data(using: .utf8),
+                  let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let id = object["id"] as? String,
+                  let preview = object["preview"] as? String,
+                  let createdAt = object["createdAt"] as? Int ?? (object["createdAt"] as? NSNumber)?.intValue,
+                  let updatedAt = object["updatedAt"] as? Int ?? (object["updatedAt"] as? NSNumber)?.intValue,
+                  let cwd = object["cwd"] as? String
+            else {
+                continue
+            }
+
+            threads.append(
+                CodexThread(
+                    id: id,
+                    preview: preview,
+                    createdAt: createdAt,
+                    updatedAt: updatedAt,
+                    status: .notLoaded,
+                    cwd: cwd,
+                    name: object["name"] as? String,
+                    path: object["path"] as? String
+                )
+            )
+        }
+
+        return threads
+    }
+
     private func locateStateDatabase() throws -> URL {
         let codexDirectory = fileManager.homeDirectoryForCurrentUser.appendingPathComponent(".codex", isDirectory: true)
         let candidateURLs = try fileManager.contentsOfDirectory(

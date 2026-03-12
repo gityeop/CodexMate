@@ -170,6 +170,17 @@ final class AppStateStoreTests: XCTestCase {
         XCTAssertEqual(store.recentThreads.first?.activeTurnID, "turn-1")
     }
 
+    func testMergeRecentThreadAddsUnknownThreadWithoutDroppingExistingThreads() {
+        var store = AppStateStore()
+        store.replaceRecentThreads(with: [thread(id: "thread-1", updatedAt: 100, status: .idle)])
+
+        store.mergeRecentThread(thread(id: "thread-2", updatedAt: 200, status: .notLoaded))
+
+        XCTAssertEqual(store.recentThreads.map(\.id), ["thread-2", "thread-1"])
+        XCTAssertEqual(store.recentThreads.first?.status, .notLoaded)
+        XCTAssertFalse(store.recentThreads.first?.isWatched ?? true)
+    }
+
     func testDesktopRunningOverlayUpdatesUnwatchedThread() {
         var store = AppStateStore()
         store.replaceRecentThreads(with: [thread(id: "thread-1", updatedAt: 100, status: .notLoaded)])
@@ -317,6 +328,36 @@ final class AppStateStoreTests: XCTestCase {
 
         XCTAssertEqual(store.recentThreads.first?.status, .notLoaded)
         XCTAssertEqual(store.lastDiagnostic, "cleared stale pending thread=thread-1 from=Waiting for input to=Not loaded via desktop snapshot")
+    }
+
+    func testDesktopSnapshotClearsUnwatchedRunningWhenRunningEvidenceDisappears() {
+        var store = AppStateStore()
+        store.replaceRecentThreads(with: [thread(id: "thread-1", updatedAt: 100, status: .notLoaded)])
+
+        store.apply(
+            desktopSnapshot: CodexDesktopRuntimeSnapshot(
+                activeTurnCount: 1,
+                runningThreadIDs: ["thread-1"]
+            ),
+            observedAt: Date(timeIntervalSince1970: 200)
+        )
+
+        store.replaceRecentThreads(with: [
+            thread(id: "thread-1", updatedAt: 150, status: .idle)
+        ])
+
+        XCTAssertEqual(store.recentThreads.first?.displayStatus, .running)
+
+        store.apply(
+            desktopSnapshot: CodexDesktopRuntimeSnapshot(
+                activeTurnCount: 1,
+                runningThreadIDs: []
+            ),
+            observedAt: Date(timeIntervalSince1970: 300)
+        )
+
+        XCTAssertEqual(store.recentThreads.first?.displayStatus, .idle)
+        XCTAssertEqual(store.lastDiagnostic, "cleared stale running thread=thread-1 from=Running to=Idle via desktop snapshot")
     }
 
     func testUserInputRequestMarksWaitingForInput() {

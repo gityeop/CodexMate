@@ -27,6 +27,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let relativeDateFormatter = RelativeDateTimeFormatter()
     private let client = CodexAppServerClient()
     private let desktopActivityService = DesktopActivityService()
+    private let desktopStateReader = CodexDesktopStateReader()
     private let projectCatalogReader = CodexDesktopProjectCatalogReader()
     private let unreadIndicatorImage = AppDelegate.makeUnreadIndicatorImage()
     private let runningIndicatorImage = AppDelegate.makeTextIndicatorImage("⏳")
@@ -37,10 +38,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var projectCatalog = CodexDesktopProjectCatalog.empty
     private var threadReadMarkers = ThreadReadMarkerStore(lastReadTerminalAtByThreadID: AppDelegate.loadThreadReadMarkers())
     private var liveSubscribedThreadUpdatedAtByID: [String: Date] = [:]
+    private var pendingDiscoveredThreadIDs: Set<String> = []
     private var connectedBinaryPath: String?
     private var desktopActivityTimer: Timer?
     private var threadListTimer: Timer?
+    private var desktopActivityRefreshGate = RefreshRequestGate()
     private var desktopActivityRefreshTask: Task<Void, Never>?
+    private var threadRefreshGate = RefreshRequestGate()
     private var threadRefreshTask: Task<Void, Never>?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -117,6 +121,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func refreshThreads() async throws {
         let threads = try await fetchRecentThreads(limit: ThreadListDisplay.maxTrackedThreads)
+        recordDiscoveredThreadRefreshResult(threads: threads)
         projectCatalog = (try? projectCatalogReader.load()) ?? .empty
         state.replaceRecentThreads(with: threads)
         await refreshDesktopActivity()
@@ -164,6 +169,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             decodeAndApply(payload, as: ThreadStartedNotification.self) { [weak self] notification in
                 guard let self else { return }
                 state.apply(notification: .threadStarted(notification))
+                pendingDiscoveredThreadIDs.insert(notification.thread.id)
+                debugLog("received thread/started thread=\(shortThreadID(notification.thread.id))")
+                requestThreadRefresh()
             }
         case "thread/status/changed":
             decodeAndApply(payload, as: ThreadStatusChangedNotification.self) { [weak self] notification in
@@ -179,6 +187,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             decodeAndApply(payload, as: TurnCompletedNotification.self) { [weak self] notification in
                 guard let self else { return }
                 state.apply(notification: .turnCompleted(notification))
+                requestDesktopActivityRefresh()
                 sendNotification(
                     title: "Codex turn completed",
                     body: state.notificationBody(forThreadID: notification.threadId, fallback: notification.turn.status.displayName)
@@ -188,6 +197,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             decodeAndApply(payload, as: ErrorNotificationPayload.self) { [weak self] notification in
                 guard let self else { return }
                 state.apply(notification: .error(notification))
+                requestDesktopActivityRefresh()
 
                 if !notification.willRetry {
                     sendNotification(
@@ -315,6 +325,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             uniqueKeysWithValues: state.recentThreads.map { ($0.id, $0.sessionPath) }
         )
         let update = await desktopActivityService.load(candidateSessionPaths: candidateSessionPaths)
+        let recentThreadIDs = Set(state.recentThreads.map(\.id))
+        let discoveredThreadIDs = Set(update.latestViewedAtByThreadID.keys).subtracting(recentThreadIDs)
+        let newlyDiscoveredThreadIDs = discoveredThreadIDs.subtracting(pendingDiscoveredThreadIDs)
+        let shouldRefreshThreads = ThreadActivityRefreshPlanner.shouldRefreshThreads(
+            recentThreadIDs: recentThreadIDs,
+            latestViewedAtByThreadID: update.latestViewedAtByThreadID
+        )
 
         if let runtimeSnapshot = update.runtimeSnapshot {
             state.apply(desktopSnapshot: runtimeSnapshot)
@@ -324,12 +341,63 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         state.apply(desktopCompletionHints: update.latestTurnCompletedAtByThreadID)
         synchronizeThreadReadMarkers(from: update.latestViewedAtByThreadID)
+        if !newlyDiscoveredThreadIDs.isEmpty {
+            pendingDiscoveredThreadIDs.formUnion(newlyDiscoveredThreadIDs)
+            seedDiscoveredThreads(newlyDiscoveredThreadIDs)
+            debugLog(
+                "desktop discovered new threads=\(debugThreadIDs(newlyDiscoveredThreadIDs)) "
+                    + "recent=\(state.recentThreads.count) viewed=\(update.latestViewedAtByThreadID.count)"
+            )
+        }
+        if shouldRefreshThreads {
+            requestThreadRefresh()
+        }
         renderMenu()
     }
 
     private func markConnectionHealthy() {
         guard let connectedBinaryPath else { return }
         state.setConnection(.connected(binaryPath: connectedBinaryPath))
+    }
+
+    private func recordDiscoveredThreadRefreshResult(threads: [CodexThread]) {
+        guard !pendingDiscoveredThreadIDs.isEmpty else {
+            return
+        }
+
+        let fetchedThreadIDs = Set(threads.map(\.id))
+        let resolvedThreadIDs = pendingDiscoveredThreadIDs.intersection(fetchedThreadIDs)
+        let missingThreadIDs = pendingDiscoveredThreadIDs.subtracting(fetchedThreadIDs)
+
+        debugLog(
+            "thread/list resolved=\(debugThreadIDs(resolvedThreadIDs)) "
+                + "missing=\(debugThreadIDs(missingThreadIDs)) total=\(threads.count)"
+        )
+
+        pendingDiscoveredThreadIDs = missingThreadIDs
+    }
+
+    private func seedDiscoveredThreads(_ threadIDs: Set<String>) {
+        guard !threadIDs.isEmpty else {
+            return
+        }
+
+        do {
+            let threads = try desktopStateReader.threads(threadIDs: threadIDs)
+            guard !threads.isEmpty else {
+                debugLog("state db had no discovered threads=\(debugThreadIDs(threadIDs))")
+                return
+            }
+
+            for thread in threads {
+                state.mergeRecentThread(thread)
+            }
+
+            debugLog("state db seeded threads=\(debugThreadIDs(threads.map(\.id)))")
+            requestDesktopActivityRefresh()
+        } catch {
+            debugLog("failed to seed discovered threads: \(error.localizedDescription)")
+        }
     }
 
     private func renderMenu() {
@@ -488,6 +556,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         UserDefaults.standard.set(threadReadMarkers.lastReadTerminalAtByThreadID, forKey: DefaultsKey.threadReadMarkers)
     }
 
+    private func debugLog(_ message: String) {
+        let line = "[CodextensionMenubar] \(message)\n"
+        if let data = line.data(using: .utf8) {
+            try? FileHandle.standardError.write(contentsOf: data)
+        }
+        state.recordDiagnostic(message)
+    }
+
+    private func debugThreadIDs<S: Sequence>(_ threadIDs: S) -> String where S.Element == String {
+        let sortedThreadIDs = threadIDs.sorted()
+        guard !sortedThreadIDs.isEmpty else {
+            return "[]"
+        }
+
+        let sample = sortedThreadIDs.prefix(3).map(shortThreadID)
+        let suffix = sortedThreadIDs.count > sample.count ? ",+\(sortedThreadIDs.count - sample.count)" : ""
+        return "[" + sample.joined(separator: ",") + suffix + "]"
+    }
+
+    private func shortThreadID(_ threadID: String) -> String {
+        String(threadID.prefix(8))
+    }
+
     private static func loadThreadReadMarkers() -> [String: TimeInterval] {
         let rawDictionary = UserDefaults.standard.dictionary(forKey: DefaultsKey.threadReadMarkers) ?? [:]
         return rawDictionary.reduce(into: [:]) { result, element in
@@ -546,13 +637,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func requestThreadRefresh() {
-        guard threadRefreshTask == nil else {
+        guard threadRefreshGate.beginOrQueue() else {
             return
         }
 
         threadRefreshTask = Task { @MainActor in
             defer {
                 threadRefreshTask = nil
+                if threadRefreshGate.finish() {
+                    requestThreadRefresh()
+                }
             }
 
             do {
@@ -565,13 +659,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func requestDesktopActivityRefresh() {
-        guard desktopActivityRefreshTask == nil else {
+        guard desktopActivityRefreshGate.beginOrQueue() else {
             return
         }
 
         desktopActivityRefreshTask = Task { @MainActor in
             defer {
                 desktopActivityRefreshTask = nil
+                if desktopActivityRefreshGate.finish() {
+                    requestDesktopActivityRefresh()
+                }
             }
 
             await refreshDesktopActivity()

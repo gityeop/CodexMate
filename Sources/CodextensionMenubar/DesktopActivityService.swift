@@ -10,15 +10,18 @@ struct DesktopActivityUpdate {
 actor DesktopActivityService {
     private let stateReader: CodexDesktopStateReader
     private let conversationActivityReader: CodexDesktopConversationActivityReader
+    private let completionHintInterval: TimeInterval
     private let runningHintInterval: TimeInterval
 
     init(
         stateReader: CodexDesktopStateReader = .init(),
         conversationActivityReader: CodexDesktopConversationActivityReader = .init(),
-        runningHintInterval: TimeInterval = 30 * 60
+        completionHintInterval: TimeInterval = 30 * 60,
+        runningHintInterval: TimeInterval = 15
     ) {
         self.stateReader = stateReader
         self.conversationActivityReader = conversationActivityReader
+        self.completionHintInterval = completionHintInterval
         self.runningHintInterval = runningHintInterval
     }
 
@@ -26,32 +29,21 @@ actor DesktopActivityService {
         let activitySnapshot = conversationActivityReader.activitySnapshot(now: now)
         let candidateThreadIDs = Set(candidateSessionPaths.keys)
 
-        let latestTurnCompletedAtByThreadID = activitySnapshot.latestTurnCompletedAtByThreadID.reduce(into: [String: Date]()) { result, entry in
-            let (threadID, completedAt) = entry
-            let latestStartedAt = activitySnapshot.latestTurnStartedAtByThreadID[threadID] ?? .distantPast
-
-            guard candidateThreadIDs.contains(threadID),
-                  completedAt >= latestStartedAt,
-                  now.timeIntervalSince(completedAt) <= runningHintInterval else {
-                return
-            }
-
-            result[threadID] = completedAt
-        }
+        let latestTurnCompletedAtByThreadID = DesktopActivityHintPlanner.latestTurnCompletedAtByThreadID(
+            activitySnapshot: activitySnapshot,
+            candidateThreadIDs: candidateThreadIDs,
+            now: now,
+            completionHintInterval: completionHintInterval
+        )
 
         do {
             let runtimeSnapshot = try stateReader.snapshot(candidateSessionPaths: candidateSessionPaths)
-            var hintedRunningThreadIDs: Set<String> = []
-            for (threadID, startedAt) in activitySnapshot.latestTurnStartedAtByThreadID {
-                let completedAt = activitySnapshot.latestTurnCompletedAtByThreadID[threadID] ?? .distantPast
-                guard candidateThreadIDs.contains(threadID),
-                      startedAt > completedAt,
-                      now.timeIntervalSince(startedAt) <= runningHintInterval else {
-                    continue
-                }
-
-                hintedRunningThreadIDs.insert(threadID)
-            }
+            let hintedRunningThreadIDs = DesktopActivityHintPlanner.hintedRunningThreadIDs(
+                activitySnapshot: activitySnapshot,
+                candidateThreadIDs: candidateThreadIDs,
+                now: now,
+                runningHintInterval: runningHintInterval
+            )
 
             let combinedRunningThreadIDs = runtimeSnapshot.runningThreadIDs.union(hintedRunningThreadIDs)
             let combinedActiveTurnCount: Int

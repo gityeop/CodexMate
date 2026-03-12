@@ -29,6 +29,7 @@ final class CodexDesktopConversationActivityReaderTests: XCTestCase {
         2026-03-11T12:19:13.511Z info [ElectronAppServerConnection] response_routed broadcastFallback=false conversationId=thread-3 durationMs=1 errorCode=null hadInternalHandler=false hadPending=true method=turn/start originWebcontentsId=1 requestId=e targetDestroyed=false
         2026-03-11T12:20:00.000Z info [ElectronAppServerConnection] response_routed broadcastFallback=false conversationId=thread-4 durationMs=1 errorCode=null hadInternalHandler=false hadPending=true method=thread/metadata/update originWebcontentsId=1 requestId=f targetDestroyed=false
         2026-03-11T12:20:01.000Z info [ElectronAppServerConnection] response_routed broadcastFallback=false conversationId=thread-5 durationMs=1 errorCode=null hadInternalHandler=false hadPending=true method=thread/name/set originWebcontentsId=1 requestId=g targetDestroyed=false
+        2026-03-11T12:20:02.000Z info [electron-message-handler] Conversation created conversationId=thread-6
         2026-03-11T12:20:30.000Z info [electron-message-handler] [desktop-notifications] show turn-complete conversationId=thread-3 turnId=turn-b
         """.write(to: secondLogURL, atomically: true, encoding: .utf8)
 
@@ -46,11 +47,13 @@ final class CodexDesktopConversationActivityReaderTests: XCTestCase {
         XCTAssertEqual(snapshot.latestViewedAtByThreadID["thread-3"], date("2026-03-11T12:19:13.511Z"))
         XCTAssertEqual(snapshot.latestViewedAtByThreadID["thread-4"], date("2026-03-11T12:20:00.000Z"))
         XCTAssertEqual(snapshot.latestViewedAtByThreadID["thread-5"], date("2026-03-11T12:20:01.000Z"))
+        XCTAssertEqual(snapshot.latestViewedAtByThreadID["thread-6"], date("2026-03-11T12:20:02.000Z"))
         XCTAssertEqual(snapshot.latestTurnStartedAtByThreadID["thread-3"], date("2026-03-11T12:19:13.511Z"))
         XCTAssertEqual(snapshot.latestTurnCompletedAtByThreadID["thread-2"], date("2026-03-11T12:09:20.000Z"))
         XCTAssertEqual(snapshot.latestTurnCompletedAtByThreadID["thread-3"], date("2026-03-11T12:20:30.000Z"))
         XCTAssertNil(snapshot.latestTurnStartedAtByThreadID["thread-4"])
         XCTAssertNil(snapshot.latestTurnStartedAtByThreadID["thread-5"])
+        XCTAssertNil(snapshot.latestTurnStartedAtByThreadID["thread-6"])
     }
 
     private func date(_ value: String) -> Date? {

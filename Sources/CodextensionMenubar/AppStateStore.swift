@@ -393,6 +393,39 @@ struct AppStateStore {
         threadsByID[thread.id] = row
     }
 
+    mutating func mergeRecentThread(_ thread: CodexThread) {
+        var row = threadsByID[thread.id] ?? ThreadRow(thread: thread, isWatched: false)
+        let previousStatus = row.displayStatus
+        let incomingUpdatedAt = thread.updatedDate
+        row.displayTitle = thread.displayTitle
+        row.preview = thread.previewLine
+        row.cwd = thread.cwd
+        row.sessionPath = thread.path
+
+        let newStatus = ThreadStatus(threadStatus: thread.status)
+        row.listedStatus = newStatus
+        row.updatedAt = max(row.updatedAt, incomingUpdatedAt)
+        row.statusUpdatedAt = max(row.statusUpdatedAt, incomingUpdatedAt)
+        row.applyListedStatus(newStatus, observedAt: incomingUpdatedAt)
+
+        if row.isWatched {
+            row.activeTurnID = updatedActiveTurnID(
+                existing: row.activeTurnID,
+                status: row.displayStatus,
+                allowClearing: true
+            )
+        }
+
+        if row.lastTerminalActivityAt == nil,
+           row.isWatched,
+           row.activeTurnID == nil,
+           shouldInferTerminalActivity(previous: previousStatus, current: row.displayStatus) {
+            row.lastTerminalActivityAt = row.updatedAt
+        }
+
+        threadsByID[thread.id] = row
+    }
+
     mutating func markUnwatched(threadIDs: Set<String>) {
         guard !threadIDs.isEmpty else { return }
 
@@ -411,6 +444,10 @@ struct AppStateStore {
     mutating func apply(desktopSnapshot: CodexDesktopRuntimeSnapshot, observedAt: Date = Date()) {
         desktopActiveTurnCount = max(0, desktopSnapshot.activeTurnCount)
         desktopDebugSummary = desktopSnapshot.debugSummary
+        reconcileRunningThreads(
+            runningThreadIDs: desktopSnapshot.runningThreadIDs,
+            observedAt: observedAt
+        )
         reconcilePendingThreads(
             pendingThreadIDs: desktopSnapshot.waitingForInputThreadIDs.union(desktopSnapshot.approvalThreadIDs),
             runningThreadIDs: desktopSnapshot.runningThreadIDs,
@@ -454,6 +491,34 @@ struct AppStateStore {
 
         if clearedRunningState && !recentThreads.contains(where: { $0.presentationStatus == .running }) {
             desktopActiveTurnCount = 0
+        }
+    }
+
+    private mutating func reconcileRunningThreads(
+        runningThreadIDs: Set<String>,
+        observedAt: Date = Date()
+    ) {
+        for threadID in threadsByID.keys.sorted() {
+            guard var row = threadsByID[threadID],
+                  !row.isWatched,
+                  row.presentationStatus == .running,
+                  !runningThreadIDs.contains(threadID)
+            else {
+                continue
+            }
+
+            let previousStatus = row.displayStatus
+            row.pendingRequestKind = nil
+            row.pendingRequestReason = nil
+            row.runtimePhase = .none
+            row.activeTurnID = nil
+            row.status = row.listedStatus
+            row.lastRuntimeEventAt = max(row.lastRuntimeEventAt ?? .distantPast, observedAt)
+            row.statusUpdatedAt = max(row.statusUpdatedAt, observedAt)
+            threadsByID[threadID] = row
+
+            guard row.displayStatus != previousStatus else { continue }
+            recordDiagnostic("cleared stale running thread=\(shortThreadID(threadID)) from=\(previousStatus.displayName) to=\(row.displayStatus.displayName) via desktop snapshot")
         }
     }
 
