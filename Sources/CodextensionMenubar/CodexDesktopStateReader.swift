@@ -40,18 +40,24 @@ struct CodexDesktopStateReader {
     private let now: () -> Date
     private let recentThreadUpdateInterval: TimeInterval
     private let recentLogInterval: TimeInterval
+    private let activeTurnLookbackInterval: TimeInterval
+    private let recentProcessActivityInterval: TimeInterval
     private let sessionPendingStateCache = SessionPendingStateCache()
 
     init(
         fileManager: FileManager = .default,
         now: @escaping () -> Date = Date.init,
         recentThreadUpdateInterval: TimeInterval = 10,
-        recentLogInterval: TimeInterval = 15
+        recentLogInterval: TimeInterval = 15,
+        activeTurnLookbackInterval: TimeInterval = 6 * 60 * 60,
+        recentProcessActivityInterval: TimeInterval = 10 * 60
     ) {
         self.fileManager = fileManager
         self.now = now
         self.recentThreadUpdateInterval = recentThreadUpdateInterval
         self.recentLogInterval = recentLogInterval
+        self.activeTurnLookbackInterval = activeTurnLookbackInterval
+        self.recentProcessActivityInterval = recentProcessActivityInterval
     }
 
     func snapshot(candidates: Set<String>) throws -> CodexDesktopRuntimeSnapshot {
@@ -157,23 +163,25 @@ struct CodexDesktopStateReader {
     }
 
     private func queryActiveTurnCount(databaseURL: URL) throws -> Int {
+        let nowTimestamp = Int(now().timeIntervalSince1970)
+        let activeTurnCutoff = nowTimestamp - Int(activeTurnLookbackInterval)
+        let recentProcessCutoff = nowTimestamp - Int(recentProcessActivityInterval)
         let output = try runSQLite(
             sql: """
-            WITH current_process AS (
-                SELECT process_uuid
+            WITH per_process AS (
+                SELECT
+                    process_uuid,
+                    MAX(ts) AS last_ts,
+                    COALESCE(SUM(CASE WHEN message = 'app-server event: turn/started' THEN 1 ELSE 0 END), 0) AS started_count,
+                    COALESCE(SUM(CASE WHEN message = 'app-server event: turn/completed' THEN 1 ELSE 0 END), 0) AS completed_count
                 FROM logs
                 WHERE target = 'codex_app_server::outgoing_message'
-                ORDER BY ts DESC, ts_nanos DESC, id DESC
-                LIMIT 1
+                  AND ts >= \(activeTurnCutoff)
+                GROUP BY process_uuid
             )
-            SELECT MAX(
-                0,
-                COALESCE(SUM(CASE WHEN message = 'app-server event: turn/started' THEN 1 ELSE 0 END), 0) -
-                COALESCE(SUM(CASE WHEN message = 'app-server event: turn/completed' THEN 1 ELSE 0 END), 0)
-            )
-            FROM logs
-            WHERE target = 'codex_app_server::outgoing_message'
-              AND process_uuid = (SELECT process_uuid FROM current_process);
+            SELECT MAX(0, COALESCE(MAX(started_count - completed_count), 0))
+            FROM per_process
+            WHERE last_ts >= \(recentProcessCutoff);
             """,
             databaseURL: databaseURL
         )

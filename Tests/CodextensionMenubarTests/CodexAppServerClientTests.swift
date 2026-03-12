@@ -57,6 +57,25 @@ final class CodexAppServerClientTests: XCTestCase {
         XCTAssertEqual(response.data[0].createdAt, 123)
         XCTAssertEqual(response.data[0].updatedAt, 123)
     }
+
+    func testThreadListParamsEncodeCursorAndUpdatedAtSortKey() throws {
+        let data = try JSONEncoder().encode(
+            ThreadListParams(cursor: "cursor-1", limit: 64, sortKey: .updatedAt, archived: false)
+        )
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+
+        XCTAssertEqual(object["cursor"] as? String, "cursor-1")
+        XCTAssertEqual(object["limit"] as? Int, 64)
+        XCTAssertEqual(object["sortKey"] as? String, "updated_at")
+        XCTAssertEqual(object["archived"] as? Bool, false)
+    }
+
+    func testThreadUnsubscribeParamsEncodeThreadID() throws {
+        let data = try JSONEncoder().encode(ThreadUnsubscribeParams(threadId: "thread-1"))
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+
+        XCTAssertEqual(object["threadId"] as? String, "thread-1")
+    }
 }
 
 private struct DynamicCodingKey: CodingKey {

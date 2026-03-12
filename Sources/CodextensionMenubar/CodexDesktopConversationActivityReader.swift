@@ -5,6 +5,14 @@ final class CodexDesktopConversationActivityReader {
         let fileSize: Int
         let modificationDate: Date
         let latestViewedAtByThreadID: [String: Date]
+        let latestTurnStartedAtByThreadID: [String: Date]
+        let latestTurnCompletedAtByThreadID: [String: Date]
+    }
+
+    struct ActivitySnapshot {
+        let latestViewedAtByThreadID: [String: Date]
+        let latestTurnStartedAtByThreadID: [String: Date]
+        let latestTurnCompletedAtByThreadID: [String: Date]
     }
 
     private let logsDirectoryURL: URL
@@ -38,11 +46,17 @@ final class CodexDesktopConversationActivityReader {
     }
 
     func latestViewedAtByThreadID(now: Date = Date()) -> [String: Date] {
+        activitySnapshot(now: now).latestViewedAtByThreadID
+    }
+
+    func activitySnapshot(now: Date = Date()) -> ActivitySnapshot {
         let logFiles = recentLogFiles(now: now)
         let logFileSet = Set(logFiles)
         parsedLogSnapshotsByURL = parsedLogSnapshotsByURL.filter { logFileSet.contains($0.key) }
 
         var latestViewedAtByThreadID: [String: Date] = [:]
+        var latestTurnStartedAtByThreadID: [String: Date] = [:]
+        var latestTurnCompletedAtByThreadID: [String: Date] = [:]
 
         for logFileURL in logFiles {
             let snapshot = parsedLogSnapshot(for: logFileURL)
@@ -52,9 +66,25 @@ final class CodexDesktopConversationActivityReader {
                     latestViewedAtByThreadID[threadID] = viewedAt
                 }
             }
+            for (threadID, turnStartedAt) in snapshot.latestTurnStartedAtByThreadID {
+                let currentLatest = latestTurnStartedAtByThreadID[threadID] ?? .distantPast
+                if turnStartedAt > currentLatest {
+                    latestTurnStartedAtByThreadID[threadID] = turnStartedAt
+                }
+            }
+            for (threadID, turnCompletedAt) in snapshot.latestTurnCompletedAtByThreadID {
+                let currentLatest = latestTurnCompletedAtByThreadID[threadID] ?? .distantPast
+                if turnCompletedAt > currentLatest {
+                    latestTurnCompletedAtByThreadID[threadID] = turnCompletedAt
+                }
+            }
         }
 
-        return latestViewedAtByThreadID
+        return ActivitySnapshot(
+            latestViewedAtByThreadID: latestViewedAtByThreadID,
+            latestTurnStartedAtByThreadID: latestTurnStartedAtByThreadID,
+            latestTurnCompletedAtByThreadID: latestTurnCompletedAtByThreadID
+        )
     }
 
     private func recentLogFiles(now: Date) -> [URL] {
@@ -104,27 +134,52 @@ final class CodexDesktopConversationActivityReader {
             return cachedSnapshot
         }
 
+        let activitySnapshot = parseLogFile(at: logFileURL)
         let parsedSnapshot = ParsedLogSnapshot(
             fileSize: fileSize,
             modificationDate: modificationDate,
-            latestViewedAtByThreadID: parseLogFile(at: logFileURL)
+            latestViewedAtByThreadID: activitySnapshot.latestViewedAtByThreadID,
+            latestTurnStartedAtByThreadID: activitySnapshot.latestTurnStartedAtByThreadID,
+            latestTurnCompletedAtByThreadID: activitySnapshot.latestTurnCompletedAtByThreadID
         )
         parsedLogSnapshotsByURL[logFileURL] = parsedSnapshot
         return parsedSnapshot
     }
 
-    private func parseLogFile(at logFileURL: URL) -> [String: Date] {
+    private func parseLogFile(at logFileURL: URL) -> ActivitySnapshot {
         guard let contents = try? String(contentsOf: logFileURL, encoding: .utf8) else {
-            return [:]
+            return ActivitySnapshot(
+                latestViewedAtByThreadID: [:],
+                latestTurnStartedAtByThreadID: [:],
+                latestTurnCompletedAtByThreadID: [:]
+            )
         }
 
         var latestViewedAtByThreadID: [String: Date] = [:]
+        var latestTurnStartedAtByThreadID: [String: Date] = [:]
+        var latestTurnCompletedAtByThreadID: [String: Date] = [:]
 
         for rawLine in contents.split(whereSeparator: \.isNewline) {
             let line = String(rawLine)
-            guard line.contains("method=thread/resume"),
+            if let timestampToken = line.split(separator: " ", maxSplits: 1).first,
+               let timestamp = parseTimestamp(String(timestampToken)),
+               let threadID = tokenValue(for: "conversationId=", in: line),
+               threadID != "null" {
+                if line.contains("[desktop-notifications] show turn-complete") ||
+                    (line.contains("maybe_resume_success") && line.contains("latestTurnStatus=completed")) {
+                    let currentLatestCompleted = latestTurnCompletedAtByThreadID[threadID] ?? .distantPast
+                    if timestamp > currentLatestCompleted {
+                        latestTurnCompletedAtByThreadID[threadID] = timestamp
+                    }
+                }
+            }
+
+            // Recent Codex desktop builds do not consistently emit thread/resume when a thread is opened,
+            // but routed requests with a concrete conversationId still indicate the user is inside that thread.
+            guard line.contains("response_routed"),
                   let threadID = tokenValue(for: "conversationId=", in: line),
                   threadID != "null",
+                  let method = tokenValue(for: "method=", in: line),
                   let timestampToken = line.split(separator: " ", maxSplits: 1).first,
                   let viewedAt = parseTimestamp(String(timestampToken)) else {
                 continue
@@ -134,9 +189,20 @@ final class CodexDesktopConversationActivityReader {
             if viewedAt > currentLatest {
                 latestViewedAtByThreadID[threadID] = viewedAt
             }
+
+            if method == "turn/start" {
+                let currentLatestTurnStart = latestTurnStartedAtByThreadID[threadID] ?? .distantPast
+                if viewedAt > currentLatestTurnStart {
+                    latestTurnStartedAtByThreadID[threadID] = viewedAt
+                }
+            }
         }
 
-        return latestViewedAtByThreadID
+        return ActivitySnapshot(
+            latestViewedAtByThreadID: latestViewedAtByThreadID,
+            latestTurnStartedAtByThreadID: latestTurnStartedAtByThreadID,
+            latestTurnCompletedAtByThreadID: latestTurnCompletedAtByThreadID
+        )
     }
 
     private func tokenValue(for prefix: String, in line: String) -> String? {

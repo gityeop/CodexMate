@@ -24,14 +24,37 @@ struct InitializeResponse: Decodable {
     let userAgent: String
 }
 
+enum ThreadListSortKey: String, Encodable {
+    case createdAt = "created_at"
+    case updatedAt = "updated_at"
+}
+
 struct ThreadListParams: Encodable {
+    let cursor: String?
     let limit: Int?
+    let sortKey: ThreadListSortKey?
     let archived: Bool?
+
+    init(
+        cursor: String? = nil,
+        limit: Int? = nil,
+        sortKey: ThreadListSortKey? = nil,
+        archived: Bool? = nil
+    ) {
+        self.cursor = cursor
+        self.limit = limit
+        self.sortKey = sortKey
+        self.archived = archived
+    }
 }
 
 struct ThreadResumeParams: Encodable {
     let threadId: String
     let persistExtendedHistory: Bool
+}
+
+struct ThreadUnsubscribeParams: Encodable {
+    let threadId: String
 }
 
 struct ThreadListResponse: Decodable {
@@ -41,6 +64,10 @@ struct ThreadListResponse: Decodable {
 
 struct ThreadResumeResponse: Decodable {
     let thread: CodexThread
+}
+
+struct ThreadUnsubscribeResponse: Decodable, Equatable {
+    let status: String
 }
 
 struct CodexThread: Decodable, Equatable {
@@ -198,6 +225,16 @@ struct ApprovalRequestPayload: Decodable, Equatable {
 }
 
 struct ServerRequestResolvedNotification: Decodable, Equatable {
+    let threadId: String
+    let requestId: String?
+
+    init(threadId: String, requestId: String? = nil) {
+        self.threadId = threadId
+        self.requestId = requestId
+    }
+}
+
+struct ThreadClosedNotification: Decodable, Equatable {
     let threadId: String
 }
 

@@ -4,13 +4,12 @@ struct MenubarStatusPresentation {
     enum ThreadIndicator: Equatable {
         case unread
         case running
-        case waitingForInput
-        case needsApproval
+        case waitingForUser
         case failed
     }
 
     static func statusItemIcon(overallStatus: AppStateStore.OverallStatus, hasUnreadThreads: Bool) -> String {
-        if overallStatus == .idle && hasUnreadThreads {
+        if hasUnreadThreads && overallStatus != .connecting && overallStatus != .running && overallStatus != .waitingForUser {
             return "🔵"
         }
 
@@ -18,7 +17,7 @@ struct MenubarStatusPresentation {
     }
 
     static func statusDisplayName(overallStatus: AppStateStore.OverallStatus, hasUnreadThreads: Bool) -> String {
-        if overallStatus == .idle && hasUnreadThreads {
+        if hasUnreadThreads && overallStatus != .connecting && overallStatus != .running && overallStatus != .waitingForUser {
             return "Unread"
         }
 
@@ -30,13 +29,11 @@ struct MenubarStatusPresentation {
     }
 
     static func threadIndicator(for thread: AppStateStore.ThreadRow, hasUnreadContent: Bool) -> ThreadIndicator? {
-        switch thread.displayStatus {
+        switch thread.presentationStatus {
         case .running:
             return .running
-        case .waitingForInput:
-            return .waitingForInput
-        case .needsApproval:
-            return .needsApproval
+        case .waitingForUser:
+            return .waitingForUser
         case .failed:
             return .failed
         case .idle, .notLoaded:

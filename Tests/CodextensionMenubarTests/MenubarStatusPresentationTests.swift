@@ -11,6 +11,10 @@ final class MenubarStatusPresentationTests: XCTestCase {
             MenubarStatusPresentation.statusItemIcon(overallStatus: .running, hasUnreadThreads: true),
             "⏳"
         )
+        XCTAssertEqual(
+            MenubarStatusPresentation.statusItemIcon(overallStatus: .failed, hasUnreadThreads: true),
+            "🔵"
+        )
     }
 
     func testThreadTitleOmitsIdleSymbol() {
@@ -48,6 +52,23 @@ final class MenubarStatusPresentationTests: XCTestCase {
                 hasUnreadContent: false
             ),
             .running
+        )
+    }
+
+    func testThreadIndicatorUsesWaitingForUserForApprovalAndInputStates() {
+        XCTAssertEqual(
+            MenubarStatusPresentation.threadIndicator(
+                for: threadRow(status: .waitingForInput),
+                hasUnreadContent: false
+            ),
+            .waitingForUser
+        )
+        XCTAssertEqual(
+            MenubarStatusPresentation.threadIndicator(
+                for: threadRow(status: .needsApproval),
+                hasUnreadContent: false
+            ),
+            .waitingForUser
         )
     }
 

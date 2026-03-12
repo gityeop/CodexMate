@@ -1,21 +1,34 @@
 import Foundation
 
-struct VisibleThreadResumePlanner {
-    static func threadIDsToResume(
-        from sections: [AppStateStore.ProjectSection],
-        excluding alreadyResumedThreadIDs: Set<String>
-    ) -> [String] {
-        var seenThreadIDs = alreadyResumedThreadIDs
+struct ThreadSubscriptionPlan: Equatable {
+    let targetThreadIDs: [String]
+    let threadIDsToResume: [String]
+    let threadIDsToUnsubscribe: [String]
+}
 
-        return sections
-            .flatMap(\.threads)
-            .compactMap { thread in
-                guard !seenThreadIDs.contains(thread.id) else {
-                    return nil
-                }
+struct ThreadSubscriptionPlanner {
+    static func makePlan(
+        recentThreads: [AppStateStore.ThreadRow],
+        liveThreadUpdatedAtByID: [String: Date],
+        maxSubscribedThreads: Int
+    ) -> ThreadSubscriptionPlan {
+        let targetThreads = Array(recentThreads.prefix(max(0, maxSubscribedThreads)))
+        let targetThreadIDs = targetThreads.map(\.id)
+        let targetThreadIDSet = Set(targetThreadIDs)
+        let liveThreadIDSet = Set(liveThreadUpdatedAtByID.keys)
 
-                seenThreadIDs.insert(thread.id)
-                return thread.id
-            }
+        let threadIDsToResume = targetThreads.compactMap { thread in
+            liveThreadIDSet.contains(thread.id) ? nil : thread.id
+        }
+
+        let threadIDsToUnsubscribe = liveThreadUpdatedAtByID.keys
+            .filter { !targetThreadIDSet.contains($0) }
+            .sorted()
+
+        return ThreadSubscriptionPlan(
+            targetThreadIDs: targetThreadIDs,
+            threadIDsToResume: threadIDsToResume,
+            threadIDsToUnsubscribe: threadIDsToUnsubscribe
+        )
     }
 }
