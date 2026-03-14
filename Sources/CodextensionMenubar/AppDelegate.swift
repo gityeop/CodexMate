@@ -17,6 +17,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         static let subscriptionConcurrency = 4
         static let projectLimit = 5
         static let visibleThreadLimit = 8
+        static let maxProjectDisplayNameLength = 28
+        static let maxThreadDisplayTitleLength = 44
     }
 
     private enum DefaultsKey {
@@ -34,6 +36,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let runningIndicatorImage = AppDelegate.makeTextIndicatorImage("⏳")
     private let waitingForUserIndicatorImage = AppDelegate.makeTextIndicatorImage("💬")
     private let failedIndicatorImage = AppDelegate.makeTextIndicatorImage("⚠️")
+    private let hoverTooltipController = ThreadHoverTooltipController()
     private lazy var recentThreadListing = AppServerRecentThreadListing(
         client: client,
         fetchPageLimit: ThreadListDisplay.fetchPageLimit
@@ -65,6 +68,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var desktopActivityRefreshTask: Task<Void, Never>?
     private var threadRefreshGate = RefreshRequestGate()
     private var threadRefreshTask: Task<Void, Never>?
+    private var hoverTooltipContentsByThreadID: [String: MenubarStatusPresentation.ThreadTooltipContent] = [:]
+    private var hoverTooltipWorkItem: DispatchWorkItem?
+    private var highlightedThreadID: String?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         menu.autoenablesItems = false
@@ -359,6 +365,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func renderMenu() {
+        hoverTooltipWorkItem?.cancel()
+        hoverTooltipWorkItem = nil
+
         let preparedSnapshot = controller.prepareSnapshot(
             additionalTrackedThreadIDs: Set(liveSubscribedThreadUpdatedAtByID.keys)
         )
@@ -371,6 +380,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             overallStatus: snapshot.overallStatus,
             hasUnreadThreads: snapshot.hasUnreadThreads
         )
+        var hoverTooltipContentsByThreadID: [String: MenubarStatusPresentation.ThreadTooltipContent] = [:]
         menu.removeAllItems()
 
         if snapshot.projectSections.isEmpty {
@@ -381,18 +391,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     menu.addItem(.separator())
                 }
 
-                menu.addItem(makeStaticItem(title: projectSectionTitle(for: section.section)))
+                let item = makeStaticItem(title: projectSectionTitle(for: section.section))
+                menu.addItem(item)
 
                 for thread in section.threads {
+                    let tooltipContent = MenubarStatusPresentation.threadTooltipContent(
+                        worktreeDisplayName: section.section.displayName,
+                        thread: thread.thread
+                    )
                     let item = makeActionItem(title: menuTitle(for: thread.thread), action: #selector(openThread(_:)))
                     item.representedObject = thread.id
                     item.image = indicatorImage(for: thread)
-                    item.toolTip = tooltip(for: thread.thread)
+                    item.toolTip = nil
+                    hoverTooltipContentsByThreadID[thread.id] = tooltipContent
                     menu.addItem(item)
                 }
             }
         }
 
+        self.hoverTooltipContentsByThreadID = hoverTooltipContentsByThreadID
+        if let highlightedThreadID,
+           let tooltipContent = hoverTooltipContentsByThreadID[highlightedThreadID],
+           hoverTooltipController.isVisible {
+            hoverTooltipController.show(
+                content: tooltipContent,
+                near: NSEvent.mouseLocation,
+                avoidingMenuWidth: menu.size.width,
+                menuFrame: currentMenuFrame()
+            )
+        } else if highlightedThreadID != nil && hoverTooltipController.isVisible {
+            hideHoverTooltip()
+        }
         menu.addItem(.separator())
         menu.addItem(makeActionItem(title: "Refresh Threads", action: #selector(refreshThreadsAction)))
 
@@ -419,7 +448,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func menuTitle(for thread: AppStateStore.ThreadRow) -> String {
         let relativeDate = relativeDateFormatter.localizedString(for: thread.updatedAt, relativeTo: Date())
-        return MenubarStatusPresentation.threadTitle(for: thread, relativeDate: relativeDate)
+        return MenubarStatusPresentation.threadTitle(
+            for: thread,
+            relativeDate: relativeDate,
+            maxDisplayTitleLength: ThreadListDisplay.maxThreadDisplayTitleLength
+        )
     }
 
     private func indicatorImage(for thread: MenubarThreadSnapshot) -> NSImage? {
@@ -438,30 +471,58 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func projectSectionTitle(for section: AppStateStore.ProjectSection) -> String {
-        let threadCount = section.threads.count
-        let suffix = threadCount == 1 ? "thread" : "threads"
-        return "\(section.displayName) | \(threadCount) \(suffix)"
+        MenubarStatusPresentation.projectSectionTitle(
+            displayName: section.displayName,
+            threadCount: section.threads.count,
+            maxDisplayNameLength: ThreadListDisplay.maxProjectDisplayNameLength
+        )
     }
 
-    private func tooltip(for thread: AppStateStore.ThreadRow) -> String {
-        var lines: [String] = []
-
-        if thread.pendingRequestKind == .approval,
-           let reason = thread.pendingRequestReason?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !reason.isEmpty {
-            lines.append("Approval: \(reason)")
+    private func updateHoverTooltip(for item: NSMenuItem?) {
+        guard let threadID = item?.representedObject as? String,
+              let tooltipContent = hoverTooltipContentsByThreadID[threadID] else {
+            hideHoverTooltip()
+            return
         }
 
-        if case let .failed(message?) = thread.displayStatus {
-            let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !trimmed.isEmpty {
-                lines.append("Error: \(trimmed)")
-            }
+        hoverTooltipWorkItem?.cancel()
+
+        if highlightedThreadID == threadID, hoverTooltipController.isVisible {
+            hoverTooltipController.show(
+                content: tooltipContent,
+                near: NSEvent.mouseLocation,
+                avoidingMenuWidth: menu.size.width,
+                menuFrame: currentMenuFrame()
+            )
+            return
         }
 
-        lines.append(thread.preview)
-        lines.append(thread.cwd)
-        return lines.joined(separator: "\n")
+        highlightedThreadID = threadID
+        let delay: TimeInterval = hoverTooltipController.isVisible ? 0.08 : 0.18
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self, self.highlightedThreadID == threadID else { return }
+            self.hoverTooltipController.show(
+                content: tooltipContent,
+                near: NSEvent.mouseLocation,
+                avoidingMenuWidth: self.menu.size.width,
+                menuFrame: self.currentMenuFrame()
+            )
+        }
+        hoverTooltipWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: workItem)
+    }
+
+    private func currentMenuFrame() -> NSRect? {
+        let frame = menu.accessibilityFrame()
+        guard !frame.isEmpty else { return nil }
+        return frame
+    }
+
+    private func hideHoverTooltip() {
+        hoverTooltipWorkItem?.cancel()
+        hoverTooltipWorkItem = nil
+        highlightedThreadID = nil
+        hoverTooltipController.hide()
     }
 
     private func markThreadRead(_ threadID: String) {
@@ -832,15 +893,23 @@ extension AppDelegate: NSMenuDelegate {
     func menuWillOpen(_ menu: NSMenu) {
         guard menu == self.menu else { return }
 
+        hideHoverTooltip()
         isMenuOpen = true
         scheduleRefreshTimerIfNeeded()
         requestDesktopActivityRefresh()
         requestThreadRefresh()
     }
 
+    func menu(_ menu: NSMenu, willHighlight item: NSMenuItem?) {
+        guard menu == self.menu else { return }
+
+        updateHoverTooltip(for: item)
+    }
+
     func menuDidClose(_ menu: NSMenu) {
         guard menu == self.menu else { return }
 
+        hideHoverTooltip()
         isMenuOpen = false
         scheduleRefreshTimerIfNeeded()
     }

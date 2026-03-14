@@ -141,6 +141,51 @@ final class AppStateStoreTests: XCTestCase {
         XCTAssertEqual(sections.first?.threads.map(\.id), ["f-1"])
     }
 
+    func testProjectSectionsPromoteRunningProjectIntoVisibleLimit() {
+        var store = AppStateStore()
+        store.replaceRecentThreads(with: [
+            thread(id: "a-1", updatedAt: 120, status: .idle, cwd: "/tmp/A/one"),
+            thread(id: "b-1", updatedAt: 119, status: .idle, cwd: "/tmp/B/one"),
+            thread(id: "c-1", updatedAt: 118, status: .idle, cwd: "/tmp/C/one"),
+            thread(id: "d-1", updatedAt: 117, status: .idle, cwd: "/tmp/D/one"),
+            thread(id: "e-1", updatedAt: 116, status: .idle, cwd: "/tmp/E/one"),
+            thread(id: "f-idle", updatedAt: 115, status: .idle, cwd: "/tmp/F/idle"),
+            thread(id: "f-running", updatedAt: 114, status: .active(flags: []), cwd: "/tmp/F/running")
+        ])
+
+        let catalog = CodexDesktopProjectCatalog(workspaceRoots: [
+            .init(path: "/tmp/A", displayName: "A"),
+            .init(path: "/tmp/B", displayName: "B"),
+            .init(path: "/tmp/C", displayName: "C"),
+            .init(path: "/tmp/D", displayName: "D"),
+            .init(path: "/tmp/E", displayName: "E"),
+            .init(path: "/tmp/F", displayName: "F")
+        ])
+
+        let sections = store.projectSections(using: catalog, maxProjects: 5, maxThreads: 5)
+
+        XCTAssertEqual(sections.map(\.displayName), ["A", "B", "C", "D", "F"])
+        XCTAssertEqual(sections.last?.threads.map(\.id), ["f-running"])
+    }
+
+    func testProjectSectionsPreferWaitingThreadOverNewerRunningThreadAtTightLimit() {
+        var store = AppStateStore()
+        store.replaceRecentThreads(with: [
+            thread(id: "running", updatedAt: 120, status: .active(flags: []), cwd: "/tmp/A/running"),
+            thread(id: "waiting", updatedAt: 110, status: .active(flags: [.waitingOnUserInput]), cwd: "/tmp/B/waiting")
+        ])
+
+        let catalog = CodexDesktopProjectCatalog(workspaceRoots: [
+            .init(path: "/tmp/A", displayName: "A"),
+            .init(path: "/tmp/B", displayName: "B")
+        ])
+
+        let sections = store.projectSections(using: catalog, maxProjects: 2, maxThreads: 1)
+
+        XCTAssertEqual(sections.map(\.displayName), ["B"])
+        XCTAssertEqual(sections.first?.threads.map(\.id), ["waiting"])
+    }
+
     func testProjectCatalogLongestPrefixMatchUsesDeepestRoot() {
         let catalog = CodexDesktopProjectCatalog(workspaceRoots: [
             .init(path: "/Users/tester/notion-blog", displayName: "notion-blog"),
@@ -196,6 +241,69 @@ final class AppStateStoreTests: XCTestCase {
         XCTAssertEqual(store.overallStatus, .running)
         XCTAssertEqual(store.recentThreads.first?.displayStatus, .running)
         XCTAssertEqual(store.recentThreads.first?.activeTurnID, "turn-1")
+    }
+
+    func testDesktopSnapshotDoesNotImmediatelyClearWatchedRunningWhileSessionStateLags() throws {
+        var store = AppStateStore()
+        store.replaceRecentThreads(with: [
+            thread(id: "thread-1", updatedAt: 100, status: .idle, path: "/tmp/thread-1.jsonl")
+        ])
+
+        store.apply(notification: .turnStarted(
+            TurnStartedNotification(
+                threadId: "thread-1",
+                turn: CodexTurn(id: "turn-1", status: .inProgress, error: nil)
+            )
+        ))
+
+        store.replaceRecentThreads(with: [
+            thread(id: "thread-1", updatedAt: 150, status: .idle, path: "/tmp/thread-1.jsonl")
+        ])
+
+        let lastRuntimeEventAt = try XCTUnwrap(store.recentThreads.first?.lastRuntimeEventAt)
+
+        store.apply(
+            desktopSnapshot: CodexDesktopRuntimeSnapshot(
+                activeTurnCount: 0,
+                runningThreadIDs: []
+            ),
+            observedAt: lastRuntimeEventAt.addingTimeInterval(4)
+        )
+
+        XCTAssertEqual(store.recentThreads.first?.displayStatus, .running)
+        XCTAssertEqual(store.recentThreads.first?.activeTurnID, "turn-1")
+    }
+
+    func testDesktopSnapshotClearsWatchedRunningWhenSessionBackedIdlePersists() throws {
+        var store = AppStateStore()
+        store.replaceRecentThreads(with: [
+            thread(id: "thread-1", updatedAt: 100, status: .idle, path: "/tmp/thread-1.jsonl")
+        ])
+
+        store.apply(notification: .turnStarted(
+            TurnStartedNotification(
+                threadId: "thread-1",
+                turn: CodexTurn(id: "turn-1", status: .inProgress, error: nil)
+            )
+        ))
+
+        store.replaceRecentThreads(with: [
+            thread(id: "thread-1", updatedAt: 150, status: .idle, path: "/tmp/thread-1.jsonl")
+        ])
+
+        let lastRuntimeEventAt = try XCTUnwrap(store.recentThreads.first?.lastRuntimeEventAt)
+
+        store.apply(
+            desktopSnapshot: CodexDesktopRuntimeSnapshot(
+                activeTurnCount: 0,
+                runningThreadIDs: []
+            ),
+            observedAt: lastRuntimeEventAt.addingTimeInterval(10)
+        )
+
+        XCTAssertEqual(store.recentThreads.first?.displayStatus, .idle)
+        XCTAssertNil(store.recentThreads.first?.activeTurnID)
+        XCTAssertEqual(store.lastDiagnostic, "cleared stale running thread=thread-1 from=Running to=Idle via desktop snapshot")
     }
 
     func testMergeRecentThreadAddsUnknownThreadWithoutDroppingExistingThreads() {

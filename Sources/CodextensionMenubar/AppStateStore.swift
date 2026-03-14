@@ -2,6 +2,7 @@ import Foundation
 
 struct AppStateStore {
     private static let inferredActiveTurnID = "__inferred_active_turn__"
+    private static let watchedRunningReconciliationGraceInterval: TimeInterval = 5
 
     enum ConnectionState: Equatable {
         case disconnected
@@ -500,8 +501,8 @@ struct AppStateStore {
     ) {
         for threadID in threadsByID.keys.sorted() {
             guard var row = threadsByID[threadID],
-                  !row.isWatched,
                   row.presentationStatus == .running,
+                  Self.shouldAcceptDesktopRunningSync(for: row, observedAt: observedAt),
                   !runningThreadIDs.contains(threadID)
             else {
                 continue
@@ -520,6 +521,24 @@ struct AppStateStore {
             guard row.displayStatus != previousStatus else { continue }
             recordDiagnostic("cleared stale running thread=\(shortThreadID(threadID)) from=\(previousStatus.displayName) to=\(row.displayStatus.displayName) via desktop snapshot")
         }
+    }
+
+    private static func shouldAcceptDesktopRunningSync(for row: ThreadRow, observedAt: Date) -> Bool {
+        guard observedAt >= (row.lastRuntimeEventAt ?? .distantPast) else {
+            return false
+        }
+
+        if !row.isWatched {
+            return true
+        }
+
+        guard row.sessionPath != nil,
+              row.listedStatus != .running else {
+            return false
+        }
+
+        // Give session files a moment to catch up before downgrading live running state.
+        return observedAt.timeIntervalSince(row.lastRuntimeEventAt ?? .distantPast) >= watchedRunningReconciliationGraceInterval
     }
 
     private mutating func reconcilePendingThreads(
@@ -911,18 +930,18 @@ struct AppStateStore {
     ) -> [ProjectSection] {
         guard maxThreads > 0 else { return [] }
 
-        let failedProjectIDs = Set(
+        let priorityProjectIDs = Set(
             sections.compactMap { section in
-                section.threads.contains(where: Self.isFailedThread) ? section.id : nil
+                section.threads.contains(where: Self.isPriorityVisibleThread) ? section.id : nil
             }
         )
         let limitedProjectIDs = Set(
             sections
-                .filter { failedProjectIDs.contains($0.id) }
+                .filter { priorityProjectIDs.contains($0.id) }
                 .map(\.id)
                 + sections
-                    .filter { !failedProjectIDs.contains($0.id) }
-                    .prefix(maxProjectsExcludingFailures(maxProjects: maxProjects, failedProjectIDs: failedProjectIDs))
+                    .filter { !priorityProjectIDs.contains($0.id) }
+                    .prefix(maxProjectsExcludingPriority(maxProjects: maxProjects, priorityProjectIDs: priorityProjectIDs))
                     .map(\.id)
         )
         let limitedSections = sections.filter { limitedProjectIDs.contains($0.id) }
@@ -935,12 +954,12 @@ struct AppStateStore {
         var visibleThreadIDs: Set<String> = []
         var visibleThreadCount = 0
 
-        let failedThreads = limitedSections
+        let priorityThreads = limitedSections
             .flatMap(\.threads)
-            .filter(Self.isFailedThread)
-            .sorted(by: Self.isNewerThread)
+            .filter(Self.isPriorityVisibleThread)
+            .sorted(by: Self.isHigherPriorityThread)
 
-        for thread in failedThreads {
+        for thread in priorityThreads {
             guard visibleThreadCount < maxThreads else { break }
 
             let projectID = threadProjectIDs[thread.id]
@@ -952,10 +971,9 @@ struct AppStateStore {
         }
 
         for section in limitedSections {
-            guard visibleThreadCount < maxThreads,
-                  let thread = section.threads.first(where: { !visibleThreadIDs.contains($0.id) })
-            else {
-                break
+            guard visibleThreadCount < maxThreads else { break }
+            guard let thread = section.threads.first(where: { !visibleThreadIDs.contains($0.id) }) else {
+                continue
             }
 
             visibleThreadsByProject[section.id, default: []].append(thread)
@@ -966,7 +984,7 @@ struct AppStateStore {
         let remainingThreads = limitedSections
             .flatMap(\.threads)
             .filter { !visibleThreadIDs.contains($0.id) }
-            .sorted(by: Self.isNewerThread)
+            .sorted(by: Self.isHigherPriorityThread)
 
         for thread in remainingThreads.prefix(max(0, maxThreads - visibleThreadCount)) {
             let projectID = threadProjectIDs[thread.id]
@@ -983,7 +1001,7 @@ struct AppStateStore {
                 id: section.id,
                 displayName: section.displayName,
                 latestUpdatedAt: section.latestUpdatedAt,
-                threads: visibleThreads.sorted(by: Self.isNewerThread)
+                threads: visibleThreads.sorted(by: Self.isHigherPriorityThread)
             )
         }
     }
@@ -996,14 +1014,37 @@ struct AppStateStore {
         return lhs.updatedAt > rhs.updatedAt
     }
 
-    private static func isFailedThread(_ thread: ThreadRow) -> Bool {
-        if case .failed = thread.displayStatus { return true }
-        return false
+    private static func isHigherPriorityThread(_ lhs: ThreadRow, _ rhs: ThreadRow) -> Bool {
+        let lhsRank = visibilityPriority(for: lhs)
+        let rhsRank = visibilityPriority(for: rhs)
+
+        if lhsRank != rhsRank {
+            return lhsRank > rhsRank
+        }
+
+        return isNewerThread(lhs, rhs)
     }
 
-    private func maxProjectsExcludingFailures(maxProjects: Int, failedProjectIDs: Set<String>) -> Int {
+    private static func isPriorityVisibleThread(_ thread: ThreadRow) -> Bool {
+        visibilityPriority(for: thread) > 0
+    }
+
+    private static func visibilityPriority(for thread: ThreadRow) -> Int {
+        switch thread.presentationStatus {
+        case .waitingForUser:
+            return 3
+        case .running:
+            return 2
+        case .failed:
+            return 1
+        case .idle, .notLoaded:
+            return 0
+        }
+    }
+
+    private func maxProjectsExcludingPriority(maxProjects: Int, priorityProjectIDs: Set<String>) -> Int {
         guard maxProjects != .max else { return .max }
-        return max(0, maxProjects - failedProjectIDs.count)
+        return max(0, maxProjects - priorityProjectIDs.count)
     }
 
     private func shouldInferTerminalActivity(previous: ThreadStatus, current: ThreadStatus) -> Bool {

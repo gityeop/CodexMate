@@ -37,6 +37,13 @@ struct CodexDesktopStateReader {
     struct SessionPendingState: Equatable {
         let waitingForInput: Bool
         let needsApproval: Bool
+        let hasActiveTask: Bool
+
+        init(waitingForInput: Bool, needsApproval: Bool, hasActiveTask: Bool = false) {
+            self.waitingForInput = waitingForInput
+            self.needsApproval = needsApproval
+            self.hasActiveTask = hasActiveTask
+        }
     }
 
     private struct PendingLogRow {
@@ -126,6 +133,7 @@ struct CodexDesktopStateReader {
         let failedThreads = queryResult.failedThreads
         let debugSummary = [
             "candidates=\(candidates.count)",
+            "running=\(pendingStates.runningThreadIDs.count)",
             "waiting=\(pendingStates.waitingForInputThreadIDs.count)",
             "approval=\(pendingStates.approvalThreadIDs.count)",
             "failed=\(failedThreads.count)",
@@ -133,12 +141,13 @@ struct CodexDesktopStateReader {
             "sample=\(pendingStates.debugRows.isEmpty ? "[]" : "[" + pendingStates.debugRows.prefix(3).joined(separator: ", ") + (pendingStates.debugRows.count > 3 ? ", +\(pendingStates.debugRows.count - 3)" : "") + "]")"
         ].joined(separator: " ")
 
-        let runningThreadIDs: Set<String>
+        let databaseRunningThreadIDs: Set<String>
         if activeTurnCount > 0 {
-            runningThreadIDs = Set(queryResult.recentUpdatedThreadIDs + queryResult.recentLoggedThreadIDs).intersection(candidates)
+            databaseRunningThreadIDs = Set(queryResult.recentUpdatedThreadIDs + queryResult.recentLoggedThreadIDs).intersection(candidates)
         } else {
-            runningThreadIDs = []
+            databaseRunningThreadIDs = []
         }
+        let runningThreadIDs = databaseRunningThreadIDs.union(pendingStates.runningThreadIDs)
 
         return CodexDesktopRuntimeSnapshot(
             activeTurnCount: activeTurnCount,
@@ -413,13 +422,19 @@ struct CodexDesktopStateReader {
     private func queryPendingThreadStates(
         candidateSessionPaths: [String: String?],
         logPendingRows: [PendingLogRow]
-    ) -> (waitingForInputThreadIDs: Set<String>, approvalThreadIDs: Set<String>, debugRows: [String]) {
+    ) -> (waitingForInputThreadIDs: Set<String>, approvalThreadIDs: Set<String>, runningThreadIDs: Set<String>, debugRows: [String]) {
         let logStates = queryLogPendingThreadStates(logPendingRows: logPendingRows)
         let sessionStates = querySessionPendingThreadStates(candidateSessionPaths: candidateSessionPaths)
+        let waitingForInputThreadIDs = logStates.waitingForInputThreadIDs.union(sessionStates.waitingForInputThreadIDs)
+        let approvalThreadIDs = logStates.approvalThreadIDs.union(sessionStates.approvalThreadIDs)
+        let runningThreadIDs = sessionStates.activeTaskThreadIDs
+            .subtracting(waitingForInputThreadIDs)
+            .subtracting(approvalThreadIDs)
 
         return (
-            waitingForInputThreadIDs: logStates.waitingForInputThreadIDs.union(sessionStates.waitingForInputThreadIDs),
-            approvalThreadIDs: logStates.approvalThreadIDs.union(sessionStates.approvalThreadIDs),
+            waitingForInputThreadIDs: waitingForInputThreadIDs,
+            approvalThreadIDs: approvalThreadIDs,
+            runningThreadIDs: runningThreadIDs,
             debugRows: logStates.debugRows + sessionStates.debugRows
         )
     }
@@ -456,11 +471,12 @@ struct CodexDesktopStateReader {
 
     private func querySessionPendingThreadStates(
         candidateSessionPaths: [String: String?]
-    ) -> (waitingForInputThreadIDs: Set<String>, approvalThreadIDs: Set<String>, debugRows: [String]) {
+    ) -> (waitingForInputThreadIDs: Set<String>, approvalThreadIDs: Set<String>, activeTaskThreadIDs: Set<String>, debugRows: [String]) {
         sessionPendingStateCache.prune(keepingPaths: Set(candidateSessionPaths.values.compactMap { $0 }))
 
         var waitingThreadIDs: Set<String> = []
         var approvalThreadIDs: Set<String> = []
+        var activeTaskThreadIDs: Set<String> = []
         var debugRows: [String] = []
 
         for (threadID, rawPath) in candidateSessionPaths.sorted(by: { $0.key < $1.key }) {
@@ -481,9 +497,14 @@ struct CodexDesktopStateReader {
                 approvalThreadIDs.insert(threadID)
                 debugRows.append("\(shortID):session-approval")
             }
+
+            if state.hasActiveTask {
+                activeTaskThreadIDs.insert(threadID)
+                debugRows.append("\(shortID):session-active")
+            }
         }
 
-        return (waitingThreadIDs, approvalThreadIDs, debugRows)
+        return (waitingThreadIDs, approvalThreadIDs, activeTaskThreadIDs, debugRows)
     }
 
     func sessionPendingState(forSessionFileAt sessionURL: URL) -> SessionPendingState? {
@@ -507,38 +528,55 @@ struct CodexDesktopStateReader {
     static func parseSessionPendingState(from contents: String) -> SessionPendingState {
         var unresolvedRequestUserInputCallIDs: Set<String> = []
         var unresolvedApprovalCallIDs: Set<String> = []
+        var activeTaskIDs: Set<String> = []
 
         for line in contents.split(whereSeparator: \.isNewline) {
             guard let data = String(line).data(using: .utf8),
                   let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let type = object["type"] as? String,
-                  type == "response_item",
                   let payload = object["payload"] as? [String: Any],
                   let payloadType = payload["type"] as? String
             else {
                 continue
             }
 
-            switch payloadType {
-            case "function_call":
-                guard let name = payload["name"] as? String,
-                      let callID = payload["call_id"] as? String
-                else {
+            switch type {
+            case "event_msg":
+                guard let turnID = payload["turn_id"] as? String else {
                     continue
                 }
 
-                if name == "request_user_input" {
-                    unresolvedRequestUserInputCallIDs.insert(callID)
-                } else if name == "request_approval" || name == "requestApproval" {
-                    unresolvedApprovalCallIDs.insert(callID)
+                if payloadType == "task_started" {
+                    // A thread only executes one turn at a time; a newer task start
+                    // supersedes any orphaned active turn that never emitted completion.
+                    activeTaskIDs = [turnID]
+                } else if payloadType == "task_complete" || payloadType == "turn_aborted" {
+                    activeTaskIDs.remove(turnID)
                 }
-            case "function_call_output":
-                guard let callID = payload["call_id"] as? String else {
+            case "response_item":
+                switch payloadType {
+                case "function_call":
+                    guard let name = payload["name"] as? String,
+                          let callID = payload["call_id"] as? String
+                    else {
+                        continue
+                    }
+
+                    if name == "request_user_input" {
+                        unresolvedRequestUserInputCallIDs.insert(callID)
+                    } else if name == "request_approval" || name == "requestApproval" {
+                        unresolvedApprovalCallIDs.insert(callID)
+                    }
+                case "function_call_output":
+                    guard let callID = payload["call_id"] as? String else {
+                        continue
+                    }
+
+                    unresolvedRequestUserInputCallIDs.remove(callID)
+                    unresolvedApprovalCallIDs.remove(callID)
+                default:
                     continue
                 }
-
-                unresolvedRequestUserInputCallIDs.remove(callID)
-                unresolvedApprovalCallIDs.remove(callID)
             default:
                 continue
             }
@@ -546,7 +584,8 @@ struct CodexDesktopStateReader {
 
         return SessionPendingState(
             waitingForInput: !unresolvedRequestUserInputCallIDs.isEmpty,
-            needsApproval: !unresolvedApprovalCallIDs.isEmpty
+            needsApproval: !unresolvedApprovalCallIDs.isEmpty,
+            hasActiveTask: !activeTaskIDs.isEmpty
         )
     }
 
