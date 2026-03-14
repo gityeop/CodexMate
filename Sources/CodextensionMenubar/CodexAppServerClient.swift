@@ -38,6 +38,8 @@ actor CodexAppServerClient {
 
     private var process: Process?
     private var stdinHandle: FileHandle?
+    private var stdoutHandle: FileHandle?
+    private var stderrHandle: FileHandle?
     private var stdoutBuffer = Data()
     private var stderrBuffer = Data()
     private var nextRequestID = 1
@@ -78,6 +80,9 @@ actor CodexAppServerClient {
         stdoutPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
             guard let self else { return }
             let data = handle.availableData
+            if data.isEmpty {
+                handle.readabilityHandler = nil
+            }
 
             Task {
                 await self.handleStandardOutput(data)
@@ -87,6 +92,9 @@ actor CodexAppServerClient {
         stderrPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
             guard let self else { return }
             let data = handle.availableData
+            if data.isEmpty {
+                handle.readabilityHandler = nil
+            }
 
             Task {
                 await self.handleStandardError(data)
@@ -97,6 +105,8 @@ actor CodexAppServerClient {
 
         process = newProcess
         stdinHandle = stdinPipe.fileHandleForWriting
+        stdoutHandle = stdoutPipe.fileHandleForReading
+        stderrHandle = stderrPipe.fileHandleForReading
 
         let _: InitializeResponse = try await call(
             method: "initialize",
@@ -110,6 +120,12 @@ actor CodexAppServerClient {
     }
 
     func stop() {
+        stdoutHandle?.readabilityHandler = nil
+        stderrHandle?.readabilityHandler = nil
+        stdinHandle?.closeFile()
+        stdoutHandle?.closeFile()
+        stderrHandle?.closeFile()
+
         process?.standardOutput = nil
         process?.standardError = nil
         process?.terminationHandler = nil
@@ -118,6 +134,8 @@ actor CodexAppServerClient {
 
         process = nil
         stdinHandle = nil
+        stdoutHandle = nil
+        stderrHandle = nil
         stdoutBuffer.removeAll(keepingCapacity: false)
         stderrBuffer.removeAll(keepingCapacity: false)
 

@@ -2,11 +2,12 @@ import Foundation
 
 final class CodexDesktopConversationActivityReader {
     private struct ParsedLogSnapshot {
-        let fileSize: Int
+        let fileSize: UInt64
         let modificationDate: Date
         let latestViewedAtByThreadID: [String: Date]
         let latestTurnStartedAtByThreadID: [String: Date]
         let latestTurnCompletedAtByThreadID: [String: Date]
+        let trailingFragment: String
     }
 
     struct ActivitySnapshot {
@@ -18,7 +19,9 @@ final class CodexDesktopConversationActivityReader {
     private let logsDirectoryURL: URL
     private let lookbackDays: Int
     private let fileManager: FileManager
+    private let recentLogFileCacheLifetime: TimeInterval
     private var parsedLogSnapshotsByURL: [URL: ParsedLogSnapshot] = [:]
+    private var cachedRecentLogFiles: (key: String, checkedAt: Date, files: [URL])?
 
     private let timestampFormatterWithFractionalSeconds: ISO8601DateFormatter = {
         let formatter = ISO8601DateFormatter()
@@ -38,10 +41,12 @@ final class CodexDesktopConversationActivityReader {
             .appending(path: "Logs")
             .appending(path: "com.openai.codex"),
         lookbackDays: Int = 7,
+        recentLogFileCacheLifetime: TimeInterval = 5,
         fileManager: FileManager = .default
     ) {
         self.logsDirectoryURL = logsDirectoryURL
         self.lookbackDays = max(1, lookbackDays)
+        self.recentLogFileCacheLifetime = max(1, recentLogFileCacheLifetime)
         self.fileManager = fileManager
     }
 
@@ -88,6 +93,13 @@ final class CodexDesktopConversationActivityReader {
     }
 
     private func recentLogFiles(now: Date) -> [URL] {
+        let cacheKey = recentLogFileCacheKey(now: now)
+        if let cachedRecentLogFiles,
+           cachedRecentLogFiles.key == cacheKey,
+           now.timeIntervalSince(cachedRecentLogFiles.checkedAt) < recentLogFileCacheLifetime {
+            return cachedRecentLogFiles.files
+        }
+
         var logFiles: [URL] = []
         let calendar = Calendar(identifier: .gregorian)
 
@@ -120,12 +132,35 @@ final class CodexDesktopConversationActivityReader {
             }
         }
 
-        return logFiles.sorted(by: { $0.path < $1.path })
+        let sortedLogFiles = logFiles.sorted(by: { $0.path < $1.path })
+        cachedRecentLogFiles = (key: cacheKey, checkedAt: now, files: sortedLogFiles)
+        return sortedLogFiles
+    }
+
+    private func recentLogFileCacheKey(now: Date) -> String {
+        let calendar = Calendar(identifier: .gregorian)
+
+        return (0..<lookbackDays)
+            .compactMap { dayOffset in
+                calendar.date(byAdding: .day, value: -dayOffset, to: now)
+            }
+            .compactMap { day in
+                let components = calendar.dateComponents([.year, .month, .day], from: day)
+                guard let year = components.year,
+                      let month = components.month,
+                      let day = components.day
+                else {
+                    return nil
+                }
+
+                return String(format: "%04d-%02d-%02d", year, month, day)
+            }
+            .joined(separator: "|")
     }
 
     private func parsedLogSnapshot(for logFileURL: URL) -> ParsedLogSnapshot {
         let resourceValues = (try? logFileURL.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])) ?? URLResourceValues()
-        let fileSize = resourceValues.fileSize ?? 0
+        let fileSize = currentFileSize(for: logFileURL) ?? UInt64(max(0, resourceValues.fileSize ?? 0))
         let modificationDate = resourceValues.contentModificationDate ?? .distantPast
 
         if let cachedSnapshot = parsedLogSnapshotsByURL[logFileURL],
@@ -134,33 +169,148 @@ final class CodexDesktopConversationActivityReader {
             return cachedSnapshot
         }
 
-        let activitySnapshot = parseLogFile(at: logFileURL)
+        let activitySnapshot: ParsedLogSnapshot
+        if let cachedSnapshot = parsedLogSnapshotsByURL[logFileURL],
+           cachedSnapshot.trailingFragment.isEmpty,
+           fileSize >= cachedSnapshot.fileSize,
+           modificationDate >= cachedSnapshot.modificationDate {
+            let deltaSnapshot = parseLogFile(
+                at: logFileURL,
+                startingAt: cachedSnapshot.fileSize,
+                carryover: cachedSnapshot.trailingFragment
+            )
+            activitySnapshot = ParsedLogSnapshot(
+                fileSize: fileSize,
+                modificationDate: modificationDate,
+                latestViewedAtByThreadID: mergeLatestDates(
+                    existing: cachedSnapshot.latestViewedAtByThreadID,
+                    updates: deltaSnapshot.latestViewedAtByThreadID
+                ),
+                latestTurnStartedAtByThreadID: mergeLatestDates(
+                    existing: cachedSnapshot.latestTurnStartedAtByThreadID,
+                    updates: deltaSnapshot.latestTurnStartedAtByThreadID
+                ),
+                latestTurnCompletedAtByThreadID: mergeLatestDates(
+                    existing: cachedSnapshot.latestTurnCompletedAtByThreadID,
+                    updates: deltaSnapshot.latestTurnCompletedAtByThreadID
+                ),
+                trailingFragment: deltaSnapshot.trailingFragment
+            )
+        } else {
+            let fullSnapshot = parseLogFile(at: logFileURL)
+            activitySnapshot = ParsedLogSnapshot(
+                fileSize: fileSize,
+                modificationDate: modificationDate,
+                latestViewedAtByThreadID: fullSnapshot.latestViewedAtByThreadID,
+                latestTurnStartedAtByThreadID: fullSnapshot.latestTurnStartedAtByThreadID,
+                latestTurnCompletedAtByThreadID: fullSnapshot.latestTurnCompletedAtByThreadID,
+                trailingFragment: fullSnapshot.trailingFragment
+            )
+        }
+
+        parsedLogSnapshotsByURL[logFileURL] = activitySnapshot
+        return activitySnapshot
+    }
+
+    private func currentFileSize(for logFileURL: URL) -> UInt64? {
+        guard let handle = try? FileHandle(forReadingFrom: logFileURL) else {
+            return nil
+        }
+        defer { handle.closeFile() }
+
+        return handle.seekToEndOfFile()
+    }
+
+    private func mergeLatestDates(
+        existing: [String: Date],
+        updates: [String: Date]
+    ) -> [String: Date] {
+        var merged = existing
+        for (threadID, date) in updates {
+            if date > (merged[threadID] ?? .distantPast) {
+                merged[threadID] = date
+            }
+        }
+
+        return merged
+    }
+
+    private func parseLogFile(
+        at logFileURL: URL,
+        startingAt offset: UInt64 = 0,
+        carryover: String = ""
+    ) -> ParsedLogSnapshot {
+        guard let handle = try? FileHandle(forReadingFrom: logFileURL) else {
+            return ParsedLogSnapshot(
+                fileSize: offset,
+                modificationDate: .distantPast,
+                latestViewedAtByThreadID: [:],
+                latestTurnStartedAtByThreadID: [:],
+                latestTurnCompletedAtByThreadID: [:],
+                trailingFragment: carryover
+            )
+        }
+        defer { handle.closeFile() }
+
+        do {
+            try handle.seek(toOffset: offset)
+        } catch {
+            return ParsedLogSnapshot(
+                fileSize: offset,
+                modificationDate: .distantPast,
+                latestViewedAtByThreadID: [:],
+                latestTurnStartedAtByThreadID: [:],
+                latestTurnCompletedAtByThreadID: [:],
+                trailingFragment: carryover
+            )
+        }
+
+        let data = handle.readDataToEndOfFile()
+        let contents = carryover + String(decoding: data, as: UTF8.self)
+        let parsed = parseLogContents(contents)
+
         let parsedSnapshot = ParsedLogSnapshot(
-            fileSize: fileSize,
-            modificationDate: modificationDate,
-            latestViewedAtByThreadID: activitySnapshot.latestViewedAtByThreadID,
-            latestTurnStartedAtByThreadID: activitySnapshot.latestTurnStartedAtByThreadID,
-            latestTurnCompletedAtByThreadID: activitySnapshot.latestTurnCompletedAtByThreadID
+            fileSize: offset + UInt64(data.count),
+            modificationDate: .distantPast,
+            latestViewedAtByThreadID: parsed.latestViewedAtByThreadID,
+            latestTurnStartedAtByThreadID: parsed.latestTurnStartedAtByThreadID,
+            latestTurnCompletedAtByThreadID: parsed.latestTurnCompletedAtByThreadID,
+            trailingFragment: parsed.trailingFragment
         )
-        parsedLogSnapshotsByURL[logFileURL] = parsedSnapshot
         return parsedSnapshot
     }
 
-    private func parseLogFile(at logFileURL: URL) -> ActivitySnapshot {
-        guard let contents = try? String(contentsOf: logFileURL, encoding: .utf8) else {
-            return ActivitySnapshot(
+    private func parseLogContents(_ contents: String) -> ParsedLogSnapshot {
+        guard !contents.isEmpty else {
+            return ParsedLogSnapshot(
+                fileSize: 0,
+                modificationDate: .distantPast,
                 latestViewedAtByThreadID: [:],
                 latestTurnStartedAtByThreadID: [:],
-                latestTurnCompletedAtByThreadID: [:]
+                latestTurnCompletedAtByThreadID: [:],
+                trailingFragment: ""
             )
+        }
+
+        var lines = contents.split(
+            omittingEmptySubsequences: false,
+            whereSeparator: \.isNewline
+        ).map(String.init)
+        let trailingFragment: String
+        if let lastCharacter = contents.last,
+           !lastCharacter.isNewline,
+           let lastLine = lines.last,
+           isLikelyIncompleteLogLine(lastLine) {
+            trailingFragment = lines.removeLast()
+        } else {
+            trailingFragment = ""
         }
 
         var latestViewedAtByThreadID: [String: Date] = [:]
         var latestTurnStartedAtByThreadID: [String: Date] = [:]
         var latestTurnCompletedAtByThreadID: [String: Date] = [:]
 
-        for rawLine in contents.split(whereSeparator: \.isNewline) {
-            let line = String(rawLine)
+        for line in lines where !line.isEmpty {
             if let timestampToken = line.split(separator: " ", maxSplits: 1).first,
                let timestamp = parseTimestamp(String(timestampToken)),
                let threadID = tokenValue(for: "conversationId=", in: line),
@@ -205,11 +355,29 @@ final class CodexDesktopConversationActivityReader {
             }
         }
 
-        return ActivitySnapshot(
+        return ParsedLogSnapshot(
+            fileSize: 0,
+            modificationDate: .distantPast,
             latestViewedAtByThreadID: latestViewedAtByThreadID,
             latestTurnStartedAtByThreadID: latestTurnStartedAtByThreadID,
-            latestTurnCompletedAtByThreadID: latestTurnCompletedAtByThreadID
+            latestTurnCompletedAtByThreadID: latestTurnCompletedAtByThreadID,
+            trailingFragment: trailingFragment
         )
+    }
+
+    private func isLikelyIncompleteLogLine(_ line: String) -> Bool {
+        if line.contains("response_routed") {
+            return tokenValue(for: "conversationId=", in: line) == nil
+                || tokenValue(for: "method=", in: line) == nil
+        }
+
+        if line.contains("Conversation created")
+            || line.contains("maybe_resume_success")
+            || line.contains("[desktop-notifications] show turn-complete") {
+            return tokenValue(for: "conversationId=", in: line) == nil
+        }
+
+        return false
     }
 
     private func tokenValue(for prefix: String, in line: String) -> String? {

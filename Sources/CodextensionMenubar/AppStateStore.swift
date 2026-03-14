@@ -532,7 +532,7 @@ struct AppStateStore {
                 continue
             }
 
-            guard !row.isWatched else {
+            guard Self.shouldAcceptDesktopPendingSync(for: row) else {
                 continue
             }
 
@@ -563,7 +563,7 @@ struct AppStateStore {
 
         for threadID in threadIDs {
             updateThread(threadID: threadID) { row in
-                guard !row.isWatched else {
+                guard Self.shouldAcceptDesktopPendingOverlay(for: row, observedAt: observedAt) else {
                     return
                 }
 
@@ -575,6 +575,22 @@ struct AppStateStore {
                 row.statusUpdatedAt = max(row.statusUpdatedAt, observedAt)
             }
         }
+    }
+
+    private static func shouldAcceptDesktopPendingOverlay(for row: ThreadRow, observedAt: Date) -> Bool {
+        guard observedAt >= (row.lastRuntimeEventAt ?? .distantPast) else {
+            return false
+        }
+
+        return shouldAcceptDesktopPendingSync(for: row)
+    }
+
+    private static func shouldAcceptDesktopPendingSync(for row: ThreadRow) -> Bool {
+        guard row.isWatched else {
+            return true
+        }
+
+        return row.sessionPath != nil
     }
 
     private mutating func overlayFailedThreads(_ failures: [String: CodexDesktopRuntimeSnapshot.FailedThreadState]) {
@@ -876,7 +892,7 @@ struct AppStateStore {
                     id: bucket.id,
                     displayName: bucket.displayName,
                     latestUpdatedAt: bucket.latestUpdatedAt,
-                    threads: bucket.threads
+                    threads: bucket.threads.sorted(by: Self.isNewerThread)
                 )
             }
             .sorted { lhs, rhs in

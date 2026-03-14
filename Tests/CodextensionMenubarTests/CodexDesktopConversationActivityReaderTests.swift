@@ -56,6 +56,100 @@ final class CodexDesktopConversationActivityReaderTests: XCTestCase {
         XCTAssertNil(snapshot.latestTurnStartedAtByThreadID["thread-6"])
     }
 
+    func testActivitySnapshotIncrementallyParsesAppendedLogData() throws {
+        let tempDirectoryURL = FileManager.default.temporaryDirectory
+            .appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: tempDirectoryURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDirectoryURL) }
+
+        let logDirectoryURL = tempDirectoryURL
+            .appending(path: "2026")
+            .appending(path: "03")
+            .appending(path: "11")
+        try FileManager.default.createDirectory(at: logDirectoryURL, withIntermediateDirectories: true)
+
+        let logURL = logDirectoryURL.appending(path: "incremental.log")
+        try """
+        2026-03-11T12:17:11.346Z info [ElectronAppServerConnection] response_routed broadcastFallback=false conversationId=thread-1 durationMs=157 errorCode=null hadInternalHandler=false hadPending=true method=thread/resume originWebcontentsId=1 requestId=a targetDestroyed=false
+
+        """.write(to: logURL, atomically: true, encoding: .utf8)
+
+        let reader = CodexDesktopConversationActivityReader(
+            logsDirectoryURL: tempDirectoryURL,
+            lookbackDays: 2,
+            recentLogFileCacheLifetime: 60
+        )
+
+        let firstSnapshot = reader.activitySnapshot(
+            now: Date(timeIntervalSince1970: 1_773_195_200)
+        )
+        XCTAssertEqual(firstSnapshot.latestViewedAtByThreadID["thread-1"], date("2026-03-11T12:17:11.346Z"))
+
+        let appendedData = """
+        2026-03-11T12:17:12.000Z info [ElectronAppServerConnection] response_routed broadcastFallback=false conversationId=thread-2 durationMs=157 errorCode=null hadInternalHandler=false hadPending=true method=turn/start originWebcontentsId=1 requestId=b targetDestroyed=false
+        2026-03-11T12:17:13.000Z info [electron-message-handler] [desktop-notifications] show turn-complete conversationId=thread-2 turnId=turn-1
+        """
+        if let handle = try? FileHandle(forWritingTo: logURL) {
+            handle.seekToEndOfFile()
+            handle.write(Data(appendedData.utf8))
+            handle.closeFile()
+        } else {
+            XCTFail("Unable to open log file for appending")
+        }
+
+        let secondSnapshot = reader.activitySnapshot(
+            now: Date(timeIntervalSince1970: 1_773_195_200)
+        )
+        XCTAssertEqual(secondSnapshot.latestViewedAtByThreadID["thread-2"], date("2026-03-11T12:17:12.000Z"))
+        XCTAssertEqual(secondSnapshot.latestTurnStartedAtByThreadID["thread-2"], date("2026-03-11T12:17:12.000Z"))
+        XCTAssertEqual(secondSnapshot.latestTurnCompletedAtByThreadID["thread-2"], date("2026-03-11T12:17:13.000Z"))
+    }
+
+    func testActivitySnapshotWaitsForCompletedTrailingLineBeforeParsing() throws {
+        let tempDirectoryURL = FileManager.default.temporaryDirectory
+            .appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: tempDirectoryURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDirectoryURL) }
+
+        let logDirectoryURL = tempDirectoryURL
+            .appending(path: "2026")
+            .appending(path: "03")
+            .appending(path: "11")
+        try FileManager.default.createDirectory(at: logDirectoryURL, withIntermediateDirectories: true)
+
+        let logURL = logDirectoryURL.appending(path: "partial.log")
+        try "2026-03-11T12:17:11.346Z info [ElectronAppServerConnection] response_routed broadcastFallback=false conversationId=thread-1".write(
+            to: logURL,
+            atomically: true,
+            encoding: .utf8
+        )
+
+        let reader = CodexDesktopConversationActivityReader(
+            logsDirectoryURL: tempDirectoryURL,
+            lookbackDays: 2,
+            recentLogFileCacheLifetime: 60
+        )
+
+        let firstSnapshot = reader.activitySnapshot(
+            now: Date(timeIntervalSince1970: 1_773_195_200)
+        )
+        XCTAssertNil(firstSnapshot.latestViewedAtByThreadID["thread-1"])
+
+        let appendedData = " durationMs=157 errorCode=null hadInternalHandler=false hadPending=true method=thread/resume originWebcontentsId=1 requestId=a targetDestroyed=false\n"
+        if let handle = try? FileHandle(forWritingTo: logURL) {
+            handle.seekToEndOfFile()
+            handle.write(Data(appendedData.utf8))
+            handle.closeFile()
+        } else {
+            XCTFail("Unable to open log file for appending")
+        }
+
+        let secondSnapshot = reader.activitySnapshot(
+            now: Date(timeIntervalSince1970: 1_773_195_200)
+        )
+        XCTAssertEqual(secondSnapshot.latestViewedAtByThreadID["thread-1"], date("2026-03-11T12:17:11.346Z"))
+    }
+
     private func date(_ value: String) -> Date? {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]

@@ -56,6 +56,7 @@ actor DesktopActivityService {
             let combinedSnapshot = CodexDesktopRuntimeSnapshot(
                 activeTurnCount: combinedActiveTurnCount,
                 runningThreadIDs: combinedRunningThreadIDs,
+                recentActivityThreadIDs: runtimeSnapshot.recentActivityThreadIDs,
                 waitingForInputThreadIDs: runtimeSnapshot.waitingForInputThreadIDs,
                 approvalThreadIDs: runtimeSnapshot.approvalThreadIDs,
                 failedThreads: runtimeSnapshot.failedThreads,

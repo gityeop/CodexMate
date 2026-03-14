@@ -59,4 +59,28 @@ final class ThreadReadMarkerStoreTests: XCTestCase {
         )
         XCTAssertTrue(store.hasUnreadContent(threadID: "thread-1", lastTerminalActivityAt: terminalUpdatedAt))
     }
+
+    func testPruneKeepsTrackedThreadsAndRecentEntriesOnly() {
+        var store = ThreadReadMarkerStore(
+            lastReadTerminalAtByThreadID: [
+                "recent-thread": 500,
+                "tracked-thread": 0,
+                "stale-thread": 100,
+            ]
+        )
+
+        XCTAssertTrue(
+            store.prune(
+                keeping: ["tracked-thread"],
+                minimumTimestamp: 400
+            )
+        )
+        XCTAssertEqual(
+            store.lastReadTerminalAtByThreadID,
+            [
+                "recent-thread": 500,
+                "tracked-thread": 0,
+            ]
+        )
+    }
 }

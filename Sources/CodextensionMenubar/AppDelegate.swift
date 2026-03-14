@@ -3,9 +3,10 @@ import UserNotifications
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    private enum RefreshInterval {
-        static let desktopActivitySeconds: TimeInterval = 1
-        static let threadListSeconds: TimeInterval = 1
+    private enum RetentionPolicy {
+        static let threadReadMarkerSeconds: TimeInterval = 30 * 24 * 60 * 60
+        static let pendingDiscoveredThreadSeconds: TimeInterval = 2 * 60
+        static let maxPendingDiscoveredThreads = 64
     }
 
     private enum ThreadListDisplay {
@@ -33,15 +34,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let runningIndicatorImage = AppDelegate.makeTextIndicatorImage("⏳")
     private let waitingForUserIndicatorImage = AppDelegate.makeTextIndicatorImage("💬")
     private let failedIndicatorImage = AppDelegate.makeTextIndicatorImage("⚠️")
-
-    private var state = AppStateStore()
-    private var projectCatalog = CodexDesktopProjectCatalog.empty
-    private var threadReadMarkers = ThreadReadMarkerStore(lastReadTerminalAtByThreadID: AppDelegate.loadThreadReadMarkers())
+    private lazy var recentThreadListing = AppServerRecentThreadListing(
+        client: client,
+        fetchPageLimit: ThreadListDisplay.fetchPageLimit
+    )
+    private lazy var controller = MenubarController(
+        desktopActivityLoader: desktopActivityService,
+        recentThreadListing: recentThreadListing,
+        threadMetadataReader: desktopStateReader,
+        projectCatalogLoader: projectCatalogReader,
+        initialThreadReadMarkers: AppDelegate.loadThreadReadMarkers(),
+        configuration: MenubarControllerConfiguration(
+            initialFetchLimit: ThreadListDisplay.initialFetchLimit,
+            maxTrackedThreads: ThreadListDisplay.maxTrackedThreads,
+            projectLimit: ThreadListDisplay.projectLimit,
+            visibleThreadLimit: ThreadListDisplay.visibleThreadLimit,
+            maxPendingDiscoveredThreads: RetentionPolicy.maxPendingDiscoveredThreads,
+            pendingDiscoveredThreadTTL: RetentionPolicy.pendingDiscoveredThreadSeconds,
+            threadReadMarkerRetentionSeconds: RetentionPolicy.threadReadMarkerSeconds
+        )
+    )
     private var liveSubscribedThreadUpdatedAtByID: [String: Date] = [:]
-    private var pendingDiscoveredThreadIDs: Set<String> = []
     private var connectedBinaryPath: String?
-    private var desktopActivityTimer: Timer?
-    private var threadListTimer: Timer?
+    private var refreshTimer: Timer?
+    private var refreshTimerInterval: TimeInterval?
+    private var isMenuOpen = false
+    private var lastDesktopActivityRefreshRequestAt: Date?
+    private var lastThreadRefreshRequestAt: Date?
     private var desktopActivityRefreshGate = RefreshRequestGate()
     private var desktopActivityRefreshTask: Task<Void, Never>?
     private var threadRefreshGate = RefreshRequestGate()
@@ -51,7 +70,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.autoenablesItems = false
         menu.delegate = self
         statusItem.menu = menu
-        statusItem.button?.title = state.overallStatus.icon
+        statusItem.button?.title = controller.overallStatus.icon
 
         configureClientCallbacks()
         requestNotificationPermission()
@@ -91,7 +110,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func requestNotificationPermission() {
         guard notificationsEnabled else {
-            state.recordDiagnostic("User notifications are disabled outside an .app bundle.")
+            controller.recordDiagnostic("User notifications are disabled outside an .app bundle.")
             return
         }
 
@@ -99,45 +118,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func connectAndLoad() async {
-        state.setConnection(.connecting)
+        controller.setConnection(.connecting)
         renderMenu()
 
         do {
             let binaryURL = try CodexBinaryLocator.locate()
             try await client.start(codexBinaryURL: binaryURL)
             connectedBinaryPath = binaryURL.path
-            state.setConnection(.connected(binaryPath: binaryURL.path))
+            controller.setConnection(.connected(binaryPath: binaryURL.path))
             renderMenu()
 
             try await loadInitialThreads()
-            scheduleRefreshTimers()
+            scheduleRefreshTimerIfNeeded()
             requestDesktopActivityRefresh()
             requestInitialSubscriptionWarmup()
         } catch {
-            state.setConnection(.failed(message: error.localizedDescription))
+            controller.setConnection(.failed(message: error.localizedDescription))
             renderMenu()
         }
     }
 
     private func refreshThreads() async throws {
-        let threads = try await fetchRecentThreads(limit: ThreadListDisplay.maxTrackedThreads)
-        recordDiscoveredThreadRefreshResult(threads: threads)
-        projectCatalog = (try? projectCatalogReader.load()) ?? .empty
-        state.replaceRecentThreads(with: threads)
-        await refreshDesktopActivity()
+        let effects = try await controller.refreshThreads()
+        markConnectionHealthy()
+        applyControllerEffects(effects)
         await reconcileLiveSubscriptions()
         renderMenu()
     }
 
     private func loadInitialThreads() async throws {
-        let threads = try await fetchRecentThreads(limit: ThreadListDisplay.initialFetchLimit)
-        projectCatalog = (try? projectCatalogReader.load()) ?? .empty
-        state.replaceRecentThreads(with: threads)
+        try await controller.loadInitialThreads()
+        markConnectionHealthy()
         renderMenu()
     }
 
     private func watchLatestThread() async {
-        guard let thread = state.recentThreads.first else { return }
+        guard let thread = controller.recentThreads.first else { return }
 
         await resumeThreadSubscriptions([thread.id])
         renderMenu()
@@ -147,7 +163,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         invalidateTimers()
 
         let message = reason ?? "app-server process exited"
-        state.setConnection(.failed(message: message))
+        controller.setConnection(.failed(message: message))
         renderMenu()
     }
 
@@ -158,7 +174,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case let .request(_, method, payload):
             handleServerRequest(method: method, payload: payload)
         case let .diagnostic(text):
-            state.recordDiagnostic(text)
+            controller.recordDiagnostic(text)
             renderMenu()
         }
     }
@@ -168,54 +184,53 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case "thread/started":
             decodeAndApply(payload, as: ThreadStartedNotification.self) { [weak self] notification in
                 guard let self else { return }
-                state.apply(notification: .threadStarted(notification))
-                pendingDiscoveredThreadIDs.insert(notification.thread.id)
+                controller.apply(notification: .threadStarted(notification))
                 debugLog("received thread/started thread=\(shortThreadID(notification.thread.id))")
                 requestThreadRefresh()
             }
         case "thread/status/changed":
             decodeAndApply(payload, as: ThreadStatusChangedNotification.self) { [weak self] notification in
                 guard let self else { return }
-                state.apply(notification: .threadStatusChanged(notification))
+                controller.apply(notification: .threadStatusChanged(notification))
             }
         case "turn/started":
             decodeAndApply(payload, as: TurnStartedNotification.self) { [weak self] notification in
                 guard let self else { return }
-                state.apply(notification: .turnStarted(notification))
+                controller.apply(notification: .turnStarted(notification))
             }
         case "turn/completed":
             decodeAndApply(payload, as: TurnCompletedNotification.self) { [weak self] notification in
                 guard let self else { return }
-                state.apply(notification: .turnCompleted(notification))
+                controller.apply(notification: .turnCompleted(notification))
                 requestDesktopActivityRefresh()
                 sendNotification(
                     title: "Codex turn completed",
-                    body: state.notificationBody(forThreadID: notification.threadId, fallback: notification.turn.status.displayName)
+                    body: controller.notificationBody(forThreadID: notification.threadId, fallback: notification.turn.status.displayName)
                 )
             }
         case "error":
             decodeAndApply(payload, as: ErrorNotificationPayload.self) { [weak self] notification in
                 guard let self else { return }
-                state.apply(notification: .error(notification))
+                controller.apply(notification: .error(notification))
                 requestDesktopActivityRefresh()
 
                 if !notification.willRetry {
                     sendNotification(
                         title: "Codex error",
-                        body: state.notificationBody(forThreadID: notification.threadId, fallback: notification.error.message)
+                        body: controller.notificationBody(forThreadID: notification.threadId, fallback: notification.error.message)
                     )
                 }
             }
         case "serverRequest/resolved":
             decodeAndApply(payload, as: ServerRequestResolvedNotification.self) { [weak self] notification in
                 guard let self else { return }
-                state.apply(notification: .serverRequestResolved(notification))
+                controller.apply(notification: .serverRequestResolved(notification))
             }
         case "thread/closed":
             decodeAndApply(payload, as: ThreadClosedNotification.self) { [weak self] notification in
                 guard let self else { return }
                 liveSubscribedThreadUpdatedAtByID.removeValue(forKey: notification.threadId)
-                state.markUnwatched(threadIDs: Set([notification.threadId]))
+                controller.markUnwatched(threadIDs: Set([notification.threadId]))
             }
         default:
             break
@@ -229,31 +244,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case "item/tool/requestUserInput", "tool/requestUserInput":
             decodeAndApply(payload, as: ToolRequestUserInputRequest.self) { [weak self] request in
                 guard let self else { return }
-                state.apply(serverRequest: .toolUserInput(request))
-                state.recordDiagnostic("user-input request method=\(method) thread=\(request.threadId.prefix(8)) turn=\(request.turnId.prefix(8))")
+                controller.apply(serverRequest: .toolUserInput(request))
+                controller.recordDiagnostic("user-input request method=\(method) thread=\(request.threadId.prefix(8)) turn=\(request.turnId.prefix(8))")
                 sendNotification(
                     title: "Codex needs input",
-                    body: state.notificationBody(forThreadID: request.threadId, fallback: "A watched thread is waiting for user input.")
+                    body: controller.notificationBody(forThreadID: request.threadId, fallback: "A watched thread is waiting for user input.")
                 )
             }
         case "item/commandExecution/requestApproval", "commandExecution/requestApproval":
             decodeAndApply(payload, as: ApprovalRequestPayload.self) { [weak self] request in
                 guard let self else { return }
-                state.apply(serverRequest: .approval(request))
-                state.recordDiagnostic("approval request method=\(method) thread=\(request.threadId.prefix(8)) turn=\(request.turnId.prefix(8))")
+                controller.apply(serverRequest: .approval(request))
+                controller.recordDiagnostic("approval request method=\(method) thread=\(request.threadId.prefix(8)) turn=\(request.turnId.prefix(8))")
                 sendNotification(
                     title: "Codex approval required",
-                    body: state.notificationBody(forThreadID: request.threadId, fallback: "A watched thread is waiting for approval.")
+                    body: controller.notificationBody(forThreadID: request.threadId, fallback: "A watched thread is waiting for approval.")
                 )
             }
         case "item/fileChange/requestApproval", "fileChange/requestApproval":
             decodeAndApply(payload, as: ApprovalRequestPayload.self) { [weak self] request in
                 guard let self else { return }
-                state.apply(serverRequest: .approval(request))
-                state.recordDiagnostic("approval request method=\(method) thread=\(request.threadId.prefix(8)) turn=\(request.turnId.prefix(8))")
+                controller.apply(serverRequest: .approval(request))
+                controller.recordDiagnostic("approval request method=\(method) thread=\(request.threadId.prefix(8)) turn=\(request.turnId.prefix(8))")
                 sendNotification(
                     title: "Codex approval required",
-                    body: state.notificationBody(forThreadID: request.threadId, fallback: "A watched thread is waiting for approval.")
+                    body: controller.notificationBody(forThreadID: request.threadId, fallback: "A watched thread is waiting for approval.")
                 )
             }
         default:
@@ -291,141 +306,88 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Bundle.main.bundleURL.pathExtension == "app"
     }
 
-    private func scheduleRefreshTimers() {
+    private func scheduleRefreshTimerIfNeeded() {
+        guard case .connected = controller.connection else {
+            invalidateTimers()
+            return
+        }
+
+        let policy = refreshSchedulingPolicy()
+        guard refreshTimer == nil || refreshTimerInterval != policy.timerInterval else {
+            return
+        }
+
         invalidateTimers()
-
-        desktopActivityTimer = Timer.scheduledTimer(
-            withTimeInterval: RefreshInterval.desktopActivitySeconds,
+        refreshTimerInterval = policy.timerInterval
+        refreshTimer = Timer.scheduledTimer(
+            withTimeInterval: policy.timerInterval,
             repeats: true
         ) { [weak self] _ in
             Task { @MainActor [weak self] in
-                self?.requestDesktopActivityRefresh()
+                self?.handleRefreshTimerTick()
             }
         }
+    }
 
-        threadListTimer = Timer.scheduledTimer(
-            withTimeInterval: RefreshInterval.threadListSeconds,
-            repeats: true
-        ) { [weak self] _ in
-            Task { @MainActor [weak self] in
-                self?.requestThreadRefresh()
-            }
-        }
+    private func refreshSchedulingPolicy() -> RefreshSchedulingPolicy {
+        RefreshSchedulingPolicy.current(
+            isMenuOpen: isMenuOpen,
+            overallStatus: controller.overallStatus
+        )
+    }
+
+    private func handleRefreshTimerTick(now: Date = Date()) {
+        requestDesktopActivityRefresh(force: false, now: now)
+        requestThreadRefresh(force: false, now: now)
     }
 
     private func invalidateTimers() {
-        desktopActivityTimer?.invalidate()
-        desktopActivityTimer = nil
-        threadListTimer?.invalidate()
-        threadListTimer = nil
+        refreshTimer?.invalidate()
+        refreshTimer = nil
+        refreshTimerInterval = nil
     }
 
     private func refreshDesktopActivity() async {
-        let candidateSessionPaths = Dictionary(
-            uniqueKeysWithValues: state.recentThreads.map { ($0.id, $0.sessionPath) }
-        )
-        let update = await desktopActivityService.load(candidateSessionPaths: candidateSessionPaths)
-        let recentThreadIDs = Set(state.recentThreads.map(\.id))
-        let discoveredThreadIDs = Set(update.latestViewedAtByThreadID.keys).subtracting(recentThreadIDs)
-        let newlyDiscoveredThreadIDs = discoveredThreadIDs.subtracting(pendingDiscoveredThreadIDs)
-        let shouldRefreshThreads = ThreadActivityRefreshPlanner.shouldRefreshThreads(
-            recentThreadIDs: recentThreadIDs,
-            latestViewedAtByThreadID: update.latestViewedAtByThreadID
-        )
-
-        if let runtimeSnapshot = update.runtimeSnapshot {
-            state.apply(desktopSnapshot: runtimeSnapshot)
-        } else if let runtimeErrorMessage = update.runtimeErrorMessage {
-            state.recordDiagnostic("Desktop activity unavailable: \(runtimeErrorMessage)")
-        }
-
-        state.apply(desktopCompletionHints: update.latestTurnCompletedAtByThreadID)
-        synchronizeThreadReadMarkers(from: update.latestViewedAtByThreadID)
-        if !newlyDiscoveredThreadIDs.isEmpty {
-            pendingDiscoveredThreadIDs.formUnion(newlyDiscoveredThreadIDs)
-            seedDiscoveredThreads(newlyDiscoveredThreadIDs)
-            debugLog(
-                "desktop discovered new threads=\(debugThreadIDs(newlyDiscoveredThreadIDs)) "
-                    + "recent=\(state.recentThreads.count) viewed=\(update.latestViewedAtByThreadID.count)"
-            )
-        }
-        if shouldRefreshThreads {
-            requestThreadRefresh()
-        }
+        let effects = await controller.refreshDesktopActivity()
+        applyControllerEffects(effects)
         renderMenu()
     }
 
     private func markConnectionHealthy() {
         guard let connectedBinaryPath else { return }
-        state.setConnection(.connected(binaryPath: connectedBinaryPath))
-    }
-
-    private func recordDiscoveredThreadRefreshResult(threads: [CodexThread]) {
-        guard !pendingDiscoveredThreadIDs.isEmpty else {
-            return
-        }
-
-        let fetchedThreadIDs = Set(threads.map(\.id))
-        let resolvedThreadIDs = pendingDiscoveredThreadIDs.intersection(fetchedThreadIDs)
-        let missingThreadIDs = pendingDiscoveredThreadIDs.subtracting(fetchedThreadIDs)
-
-        debugLog(
-            "thread/list resolved=\(debugThreadIDs(resolvedThreadIDs)) "
-                + "missing=\(debugThreadIDs(missingThreadIDs)) total=\(threads.count)"
-        )
-
-        pendingDiscoveredThreadIDs = missingThreadIDs
-    }
-
-    private func seedDiscoveredThreads(_ threadIDs: Set<String>) {
-        guard !threadIDs.isEmpty else {
-            return
-        }
-
-        do {
-            let threads = try desktopStateReader.threads(threadIDs: threadIDs)
-            guard !threads.isEmpty else {
-                debugLog("state db had no discovered threads=\(debugThreadIDs(threadIDs))")
-                return
-            }
-
-            for thread in threads {
-                state.mergeRecentThread(thread)
-            }
-
-            debugLog("state db seeded threads=\(debugThreadIDs(threads.map(\.id)))")
-            requestDesktopActivityRefresh()
-        } catch {
-            debugLog("failed to seed discovered threads: \(error.localizedDescription)")
-        }
+        controller.setConnection(.connected(binaryPath: connectedBinaryPath))
     }
 
     private func renderMenu() {
-        synchronizeThreadReadMarkers()
-        let hasUnreadThreads = state.recentThreads.contains(where: hasUnreadContent)
+        let preparedSnapshot = controller.prepareSnapshot(
+            additionalTrackedThreadIDs: Set(liveSubscribedThreadUpdatedAtByID.keys)
+        )
+        if preparedSnapshot.didChangeReadMarkers {
+            persistThreadReadMarkers()
+        }
+
+        let snapshot = preparedSnapshot.snapshot
         statusItem.button?.title = MenubarStatusPresentation.statusItemIcon(
-            overallStatus: state.overallStatus,
-            hasUnreadThreads: hasUnreadThreads
+            overallStatus: snapshot.overallStatus,
+            hasUnreadThreads: snapshot.hasUnreadThreads
         )
         menu.removeAllItems()
 
-        if state.recentThreads.isEmpty {
+        if snapshot.projectSections.isEmpty {
             menu.addItem(makeStaticItem(title: "No recent threads"))
         } else {
-            let sections = visibleProjectSections()
-
-            for (index, section) in sections.enumerated() {
+            for (index, section) in snapshot.projectSections.enumerated() {
                 if index > 0 {
                     menu.addItem(.separator())
                 }
 
-                menu.addItem(makeStaticItem(title: projectSectionTitle(for: section)))
+                menu.addItem(makeStaticItem(title: projectSectionTitle(for: section.section)))
 
                 for thread in section.threads {
-                    let item = makeActionItem(title: menuTitle(for: thread), action: #selector(openThread(_:)))
+                    let item = makeActionItem(title: menuTitle(for: thread.thread), action: #selector(openThread(_:)))
                     item.representedObject = thread.id
                     item.image = indicatorImage(for: thread)
-                    item.toolTip = tooltip(for: thread)
+                    item.toolTip = tooltip(for: thread.thread)
                     menu.addItem(item)
                 }
             }
@@ -435,11 +397,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(makeActionItem(title: "Refresh Threads", action: #selector(refreshThreadsAction)))
 
         let watchItem = makeActionItem(title: "Watch Latest Thread", action: #selector(watchLatestThreadAction))
-        watchItem.isEnabled = !state.recentThreads.isEmpty
+        watchItem.isEnabled = snapshot.isWatchLatestThreadEnabled
         menu.addItem(watchItem)
 
         menu.addItem(.separator())
         menu.addItem(makeActionItem(title: "Quit", action: #selector(quit)))
+        scheduleRefreshTimerIfNeeded()
     }
 
     private func makeStaticItem(title: String) -> NSMenuItem {
@@ -459,14 +422,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return MenubarStatusPresentation.threadTitle(for: thread, relativeDate: relativeDate)
     }
 
-    private func hasUnreadContent(for thread: AppStateStore.ThreadRow) -> Bool {
-        threadReadMarkers.hasUnreadContent(threadID: thread.id, lastTerminalActivityAt: thread.lastTerminalActivityAt)
-    }
-
-    private func indicatorImage(for thread: AppStateStore.ThreadRow) -> NSImage? {
-        let hasUnread = hasUnreadContent(for: thread)
-
-        switch MenubarStatusPresentation.threadIndicator(for: thread, hasUnreadContent: hasUnread) {
+    private func indicatorImage(for thread: MenubarThreadSnapshot) -> NSImage? {
+        switch MenubarStatusPresentation.threadIndicator(for: thread.thread, hasUnreadContent: thread.hasUnreadContent) {
         case .unread:
             return unreadIndicatorImage
         case .running:
@@ -507,53 +464,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return lines.joined(separator: "\n")
     }
 
-    private func synchronizeThreadReadMarkers() {
-        var didChange = false
-
-        for thread in state.recentThreads {
-            if threadReadMarkers.seedIfNeeded(threadID: thread.id) {
-                didChange = true
-            }
-        }
-
-        if didChange {
-            persistThreadReadMarkers()
-        }
-    }
-
-    private func synchronizeThreadReadMarkers(from latestViewedAtByThreadID: [String: Date]) {
-        guard !latestViewedAtByThreadID.isEmpty else { return }
-
-        var didChange = false
-
-        for thread in state.recentThreads {
-            let viewedAt = latestViewedAtByThreadID[thread.id]
-            if threadReadMarkers.markReadIfViewedAfterLastTerminalActivity(
-                threadID: thread.id,
-                lastTerminalActivityAt: thread.lastTerminalActivityAt,
-                viewedAt: viewedAt
-            ) {
-                didChange = true
-            }
-        }
-
-        if didChange {
-            persistThreadReadMarkers()
-        }
-    }
-
     private func markThreadRead(_ threadID: String) {
-        guard let thread = state.recentThreads.first(where: { $0.id == threadID }) else {
-            return
-        }
-
-        if threadReadMarkers.markRead(threadID: threadID, lastTerminalActivityAt: thread.lastTerminalActivityAt) {
+        if controller.markThreadRead(threadID) {
             persistThreadReadMarkers()
         }
     }
 
     private func persistThreadReadMarkers() {
-        UserDefaults.standard.set(threadReadMarkers.lastReadTerminalAtByThreadID, forKey: DefaultsKey.threadReadMarkers)
+        UserDefaults.standard.set(controller.persistedThreadReadMarkers, forKey: DefaultsKey.threadReadMarkers)
     }
 
     private func debugLog(_ message: String) {
@@ -561,18 +479,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let data = line.data(using: .utf8) {
             try? FileHandle.standardError.write(contentsOf: data)
         }
-        state.recordDiagnostic(message)
+        controller.recordDiagnostic(message)
     }
 
-    private func debugThreadIDs<S: Sequence>(_ threadIDs: S) -> String where S.Element == String {
-        let sortedThreadIDs = threadIDs.sorted()
-        guard !sortedThreadIDs.isEmpty else {
-            return "[]"
+    private func applyControllerEffects(_ effects: MenubarControllerEffects) {
+        for diagnostic in effects.diagnostics {
+            debugLog(diagnostic)
         }
 
-        let sample = sortedThreadIDs.prefix(3).map(shortThreadID)
-        let suffix = sortedThreadIDs.count > sample.count ? ",+\(sortedThreadIDs.count - sample.count)" : ""
-        return "[" + sample.joined(separator: ",") + suffix + "]"
+        if effects.shouldRequestDesktopActivityRefresh {
+            requestDesktopActivityRefresh()
+        }
+
+        if effects.shouldRequestThreadRefresh {
+            requestThreadRefresh()
+        }
     }
 
     private func shortThreadID(_ threadID: String) -> String {
@@ -629,14 +550,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func visibleProjectSections() -> [AppStateStore.ProjectSection] {
-        state.projectSections(
-            using: projectCatalog,
-            maxProjects: ThreadListDisplay.projectLimit,
-            maxThreads: ThreadListDisplay.visibleThreadLimit
-        )
+        controller.visibleProjectSections()
     }
 
-    private func requestThreadRefresh() {
+    private func requestThreadRefresh(force: Bool = true, now: Date = Date()) {
+        if !force {
+            let policy = refreshSchedulingPolicy()
+            guard policy.shouldRefreshThreadList(now: now, lastRequestedAt: lastThreadRefreshRequestAt) else {
+                return
+            }
+        }
+
+        lastThreadRefreshRequestAt = now
         guard threadRefreshGate.beginOrQueue() else {
             return
         }
@@ -652,13 +577,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             do {
                 try await refreshThreads()
             } catch {
-                state.setConnection(.failed(message: error.localizedDescription))
+                controller.setConnection(.failed(message: error.localizedDescription))
                 renderMenu()
             }
         }
     }
 
-    private func requestDesktopActivityRefresh() {
+    private func requestDesktopActivityRefresh(force: Bool = true, now: Date = Date()) {
+        if !force {
+            let policy = refreshSchedulingPolicy()
+            guard policy.shouldRefreshDesktopActivity(now: now, lastRequestedAt: lastDesktopActivityRefreshRequestAt) else {
+                return
+            }
+        }
+
+        lastDesktopActivityRefreshRequestAt = now
         guard desktopActivityRefreshGate.beginOrQueue() else {
             return
         }
@@ -681,32 +614,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    private func fetchRecentThreads(limit: Int) async throws -> [CodexThread] {
-        var threads: [CodexThread] = []
-        var cursor: String?
-
-        repeat {
-            let response: ThreadListResponse = try await client.call(
-                method: "thread/list",
-                params: ThreadListParams(
-                    cursor: cursor,
-                    limit: ThreadListDisplay.fetchPageLimit,
-                    sortKey: .updatedAt,
-                    archived: false
-                )
-            )
-
-            markConnectionHealthy()
-            threads.append(contentsOf: response.data)
-            cursor = response.nextCursor
-        } while cursor != nil && threads.count < limit
-
-        return Array(threads.prefix(limit))
-    }
-
     private func reconcileLiveSubscriptions() async {
         let plan = ThreadSubscriptionPlanner.makePlan(
-            recentThreads: state.recentThreads,
+            recentThreads: controller.recentThreads,
             liveThreadUpdatedAtByID: liveSubscribedThreadUpdatedAtByID,
             maxSubscribedThreads: ThreadListDisplay.maxTrackedThreads
         )
@@ -735,7 +645,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .flatMap(\.threads)
             .map(\.id)
 
-        let candidates = visibleThreadIDs.isEmpty ? state.recentThreads.map(\.id) : visibleThreadIDs
+        let candidates = visibleThreadIDs.isEmpty ? controller.recentThreads.map(\.id) : visibleThreadIDs
         var seenThreadIDs: Set<String> = Set(liveSubscribedThreadUpdatedAtByID.keys)
         var threadIDsToResume: [String] = []
 
@@ -778,9 +688,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if let thread = result.thread {
                 markConnectionHealthy()
                 liveSubscribedThreadUpdatedAtByID[thread.id] = thread.updatedDate
-                state.markWatched(thread: thread)
+                controller.markWatched(thread: thread)
             } else if let errorMessage = result.errorMessage {
-                state.recordDiagnostic("Failed to resume thread \(result.threadID.prefix(8)): \(errorMessage)")
+                controller.recordDiagnostic("Failed to resume thread \(result.threadID.prefix(8)): \(errorMessage)")
             }
         }
     }
@@ -808,10 +718,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if let status = result.responseStatus {
                 liveSubscribedThreadUpdatedAtByID.removeValue(forKey: result.threadID)
                 if ["unsubscribed", "notSubscribed", "notLoaded"].contains(status) {
-                    state.markUnwatched(threadIDs: Set([result.threadID]))
+                    controller.markUnwatched(threadIDs: Set([result.threadID]))
                 }
             } else if let errorMessage = result.errorMessage {
-                state.recordDiagnostic("Failed to unsubscribe thread \(result.threadID.prefix(8)): \(errorMessage)")
+                controller.recordDiagnostic("Failed to unsubscribe thread \(result.threadID.prefix(8)): \(errorMessage)")
             }
         }
     }
@@ -874,7 +784,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         guard let deepLinkURL = CodexDeepLink.threadURL(threadID: threadID) else {
-            state.recordDiagnostic("Unable to build a Codex deeplink for thread \(threadID).")
+            controller.recordDiagnostic("Unable to build a Codex deeplink for thread \(threadID).")
             renderMenu()
             return
         }
@@ -887,7 +797,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         guard let appURL = CodexApplicationLocator.locate() else {
             copyThreadID(threadID)
-            state.recordDiagnostic("Unable to open Codex deeplink. Copied thread id instead.")
+            controller.recordDiagnostic("Unable to open Codex deeplink. Copied thread id instead.")
             renderMenu()
             return
         }
@@ -902,7 +812,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             renderMenu()
         } catch {
             copyThreadID(threadID)
-            state.recordDiagnostic("Failed to open Codex thread. Copied thread id instead: \(error.localizedDescription)")
+            controller.recordDiagnostic("Failed to open Codex thread. Copied thread id instead: \(error.localizedDescription)")
             renderMenu()
         }
     }
@@ -922,7 +832,16 @@ extension AppDelegate: NSMenuDelegate {
     func menuWillOpen(_ menu: NSMenu) {
         guard menu == self.menu else { return }
 
+        isMenuOpen = true
+        scheduleRefreshTimerIfNeeded()
         requestDesktopActivityRefresh()
         requestThreadRefresh()
+    }
+
+    func menuDidClose(_ menu: NSMenu) {
+        guard menu == self.menu else { return }
+
+        isMenuOpen = false
+        scheduleRefreshTimerIfNeeded()
     }
 }

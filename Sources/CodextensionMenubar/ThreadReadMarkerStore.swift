@@ -53,4 +53,17 @@ struct ThreadReadMarkerStore: Equatable {
 
         return markRead(threadID: threadID, lastTerminalActivityAt: lastTerminalActivityAt)
     }
+
+    mutating func prune(keeping threadIDs: Set<String>, minimumTimestamp: TimeInterval) -> Bool {
+        let filteredMarkers = lastReadTerminalAtByThreadID.filter { threadID, timestamp in
+            threadIDs.contains(threadID) || timestamp >= minimumTimestamp
+        }
+
+        guard filteredMarkers.count != lastReadTerminalAtByThreadID.count else {
+            return false
+        }
+
+        lastReadTerminalAtByThreadID = filteredMarkers
+        return true
+    }
 }

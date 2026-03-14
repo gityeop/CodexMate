@@ -8,6 +8,7 @@ struct CodexDesktopRuntimeSnapshot {
 
     let activeTurnCount: Int
     let runningThreadIDs: Set<String>
+    let recentActivityThreadIDs: Set<String>
     let waitingForInputThreadIDs: Set<String>
     let approvalThreadIDs: Set<String>
     let failedThreads: [String: FailedThreadState]
@@ -16,6 +17,7 @@ struct CodexDesktopRuntimeSnapshot {
     init(
         activeTurnCount: Int,
         runningThreadIDs: Set<String>,
+        recentActivityThreadIDs: Set<String> = [],
         waitingForInputThreadIDs: Set<String> = [],
         approvalThreadIDs: Set<String> = [],
         failedThreads: [String: FailedThreadState] = [:],
@@ -23,6 +25,7 @@ struct CodexDesktopRuntimeSnapshot {
     ) {
         self.activeTurnCount = activeTurnCount
         self.runningThreadIDs = runningThreadIDs
+        self.recentActivityThreadIDs = recentActivityThreadIDs
         self.waitingForInputThreadIDs = waitingForInputThreadIDs
         self.approvalThreadIDs = approvalThreadIDs
         self.failedThreads = failedThreads
@@ -36,13 +39,34 @@ struct CodexDesktopStateReader {
         let needsApproval: Bool
     }
 
+    private struct PendingLogRow {
+        let threadID: String
+        let message: String
+    }
+
+    private struct SnapshotQueryResult {
+        let activeTurnCount: Int
+        let recentUpdatedThreadIDs: [String]
+        let recentLoggedThreadIDs: [String]
+        let pendingLogRows: [PendingLogRow]
+        let failedThreads: [String: CodexDesktopRuntimeSnapshot.FailedThreadState]
+    }
+
+    private struct SQLiteQuerySection {
+        let name: String
+        let sql: String
+    }
+
     private let fileManager: FileManager
     private let now: () -> Date
     private let recentThreadUpdateInterval: TimeInterval
     private let recentLogInterval: TimeInterval
     private let activeTurnLookbackInterval: TimeInterval
     private let recentProcessActivityInterval: TimeInterval
+    private let databaseLocationCacheLifetime: TimeInterval
+    private let stateDatabaseURLOverride: URL?
     private let sessionPendingStateCache = SessionPendingStateCache()
+    private let stateDatabaseURLCache = StateDatabaseURLCache()
 
     init(
         fileManager: FileManager = .default,
@@ -50,7 +74,9 @@ struct CodexDesktopStateReader {
         recentThreadUpdateInterval: TimeInterval = 10,
         recentLogInterval: TimeInterval = 15,
         activeTurnLookbackInterval: TimeInterval = 6 * 60 * 60,
-        recentProcessActivityInterval: TimeInterval = 10 * 60
+        recentProcessActivityInterval: TimeInterval = 10 * 60,
+        databaseLocationCacheLifetime: TimeInterval = 30,
+        stateDatabaseURLOverride: URL? = nil
     ) {
         self.fileManager = fileManager
         self.now = now
@@ -58,6 +84,8 @@ struct CodexDesktopStateReader {
         self.recentLogInterval = recentLogInterval
         self.activeTurnLookbackInterval = activeTurnLookbackInterval
         self.recentProcessActivityInterval = recentProcessActivityInterval
+        self.databaseLocationCacheLifetime = max(1, databaseLocationCacheLifetime)
+        self.stateDatabaseURLOverride = stateDatabaseURLOverride
     }
 
     func snapshot(candidates: Set<String>) throws -> CodexDesktopRuntimeSnapshot {
@@ -70,41 +98,32 @@ struct CodexDesktopStateReader {
         let nowTimestamp = Int(now().timeIntervalSince1970)
         let threadUpdateCutoff = nowTimestamp - Int(recentThreadUpdateInterval)
         let logCutoff = nowTimestamp - Int(recentLogInterval)
-        let activeTurnCount = try queryActiveTurnCount(databaseURL: databaseURL)
+        let activeTurnCutoff = nowTimestamp - Int(activeTurnLookbackInterval)
+        let recentProcessCutoff = nowTimestamp - Int(recentProcessActivityInterval)
+        let queryResult = try querySnapshotState(
+            candidates: candidates,
+            databaseURL: databaseURL,
+            threadUpdateCutoff: threadUpdateCutoff,
+            logCutoff: logCutoff,
+            activeTurnCutoff: activeTurnCutoff,
+            recentProcessCutoff: recentProcessCutoff
+        )
+        let activeTurnCount = queryResult.activeTurnCount
+        let recentActivityThreadIDs = Set(queryResult.recentUpdatedThreadIDs + queryResult.recentLoggedThreadIDs)
 
         guard !candidates.isEmpty else {
-            return CodexDesktopRuntimeSnapshot(activeTurnCount: activeTurnCount, runningThreadIDs: [])
+            return CodexDesktopRuntimeSnapshot(
+                activeTurnCount: activeTurnCount,
+                runningThreadIDs: [],
+                recentActivityThreadIDs: recentActivityThreadIDs
+            )
         }
 
-        let recentUpdates = try queryThreadIDs(
-            sql: """
-            SELECT id
-            FROM threads
-            WHERE archived = 0
-              AND updated_at >= \(threadUpdateCutoff)
-            ORDER BY updated_at DESC
-            LIMIT 32;
-            """,
-            databaseURL: databaseURL
-        )
-
-        let recentLogs = try queryThreadIDs(
-            sql: """
-            SELECT thread_id
-            FROM logs
-            WHERE thread_id IS NOT NULL
-              AND ts >= \(logCutoff)
-            GROUP BY thread_id;
-            """,
-            databaseURL: databaseURL
-        )
-
-        let pendingStates = try queryPendingThreadStates(
-            candidates: candidates,
+        let pendingStates = queryPendingThreadStates(
             candidateSessionPaths: candidateSessionPaths,
-            databaseURL: databaseURL
+            logPendingRows: queryResult.pendingLogRows
         )
-        let failedThreads = try queryFailedThreads(candidates: candidates, databaseURL: databaseURL)
+        let failedThreads = queryResult.failedThreads
         let debugSummary = [
             "candidates=\(candidates.count)",
             "waiting=\(pendingStates.waitingForInputThreadIDs.count)",
@@ -116,7 +135,7 @@ struct CodexDesktopStateReader {
 
         let runningThreadIDs: Set<String>
         if activeTurnCount > 0 {
-            runningThreadIDs = Set(recentUpdates + recentLogs).intersection(candidates)
+            runningThreadIDs = Set(queryResult.recentUpdatedThreadIDs + queryResult.recentLoggedThreadIDs).intersection(candidates)
         } else {
             runningThreadIDs = []
         }
@@ -124,6 +143,7 @@ struct CodexDesktopStateReader {
         return CodexDesktopRuntimeSnapshot(
             activeTurnCount: activeTurnCount,
             runningThreadIDs: runningThreadIDs,
+            recentActivityThreadIDs: recentActivityThreadIDs,
             waitingForInputThreadIDs: pendingStates.waitingForInputThreadIDs,
             approvalThreadIDs: pendingStates.approvalThreadIDs,
             failedThreads: failedThreads,
@@ -195,6 +215,19 @@ struct CodexDesktopStateReader {
     }
 
     private func locateStateDatabase() throws -> URL {
+        if let stateDatabaseURLOverride {
+            return stateDatabaseURLOverride
+        }
+
+        let referenceNow = now()
+        if let cachedURL = stateDatabaseURLCache.value(
+            now: referenceNow,
+            fileManager: fileManager,
+            cacheLifetime: databaseLocationCacheLifetime
+        ) {
+            return cachedURL
+        }
+
         let codexDirectory = fileManager.homeDirectoryForCurrentUser.appendingPathComponent(".codex", isDirectory: true)
         let candidateURLs = try fileManager.contentsOfDirectory(
             at: codexDirectory,
@@ -213,51 +246,175 @@ struct CodexDesktopStateReader {
             throw ReaderError.databaseNotFound
         }
 
+        stateDatabaseURLCache.store(databaseURL, checkedAt: referenceNow)
         return databaseURL
     }
 
-    private func queryThreadIDs(sql: String, databaseURL: URL) throws -> [String] {
-        let output = try runSQLite(sql: sql, databaseURL: databaseURL)
-        return output
-            .split(separator: "\n")
-            .map(String.init)
+    private func querySnapshotState(
+        candidates: Set<String>,
+        databaseURL: URL,
+        threadUpdateCutoff: Int,
+        logCutoff: Int,
+        activeTurnCutoff: Int,
+        recentProcessCutoff: Int
+    ) throws -> SnapshotQueryResult {
+        var sections = [
+            SQLiteQuerySection(
+                name: "activeTurnCount",
+                sql: """
+                WITH per_process AS (
+                    SELECT
+                        process_uuid,
+                        MAX(ts) AS last_ts,
+                        COALESCE(SUM(CASE WHEN message = 'app-server event: turn/started' THEN 1 ELSE 0 END), 0) AS started_count,
+                        COALESCE(SUM(CASE WHEN message = 'app-server event: turn/completed' THEN 1 ELSE 0 END), 0) AS completed_count
+                    FROM logs
+                    WHERE target = 'codex_app_server::outgoing_message'
+                      AND ts >= \(activeTurnCutoff)
+                    GROUP BY process_uuid
+                )
+                SELECT MAX(0, COALESCE(MAX(started_count - completed_count), 0))
+                FROM per_process
+                WHERE last_ts >= \(recentProcessCutoff);
+                """
+            ),
+            SQLiteQuerySection(
+                name: "recentUpdates",
+                sql: """
+                SELECT id
+                FROM threads
+                WHERE archived = 0
+                  AND updated_at >= \(threadUpdateCutoff)
+                ORDER BY updated_at DESC
+                LIMIT 32;
+                """
+            ),
+            SQLiteQuerySection(
+                name: "recentLogs",
+                sql: """
+                SELECT thread_id
+                FROM logs
+                WHERE thread_id IS NOT NULL
+                  AND ts >= \(logCutoff)
+                GROUP BY thread_id;
+                """
+            )
+        ]
+
+        if !candidates.isEmpty {
+            let candidateList = candidates
+                .map(sqlQuoted)
+                .sorted()
+                .joined(separator: ", ")
+            sections.append(
+                SQLiteQuerySection(
+                    name: "pendingLogs",
+                    sql: """
+                    WITH ranked AS (
+                        SELECT
+                            thread_id,
+                            REPLACE(REPLACE(message, char(10), ' '), char(13), ' ') AS message,
+                            ROW_NUMBER() OVER (PARTITION BY thread_id ORDER BY ts DESC, ts_nanos DESC, id DESC) AS row_number
+                        FROM logs
+                        WHERE thread_id IN (\(candidateList))
+                          AND target = 'codex_core::stream_events_utils'
+                          AND (
+                            message = 'Output item'
+                            OR message LIKE 'ToolCall:%'
+                          )
+                    )
+                    SELECT json_object('thread_id', thread_id, 'message', message)
+                    FROM ranked
+                    WHERE row_number = 1;
+                    """
+                )
+            )
+            sections.append(
+                SQLiteQuerySection(
+                    name: "failedThreads",
+                    sql: """
+                    WITH ranked AS (
+                        SELECT
+                            thread_id,
+                            message,
+                            ts,
+                            ROW_NUMBER() OVER (PARTITION BY thread_id ORDER BY ts DESC, ts_nanos DESC, id DESC) AS row_number
+                        FROM logs
+                        WHERE thread_id IN (\(candidateList))
+                          AND target = 'codex_core::codex'
+                          AND message LIKE 'Turn error:%'
+                    )
+                    SELECT json_object('thread_id', thread_id, 'message', message, 'ts', ts)
+                    FROM ranked
+                    WHERE row_number = 1;
+                    """
+                )
+            )
+        }
+
+        let sectionedOutput = try runSQLiteSections(sections, databaseURL: databaseURL)
+        let activeTurnCount = Int(sectionedOutput["activeTurnCount"]?.first ?? "") ?? 0
+        let recentUpdatedThreadIDs = parseSQLiteLines(sectionedOutput["recentUpdates"] ?? [])
+        let recentLoggedThreadIDs = parseSQLiteLines(sectionedOutput["recentLogs"] ?? [])
+        let pendingLogRows = parsePendingLogRows(sectionedOutput["pendingLogs"] ?? [])
+        let failedThreads = parseFailedThreads(sectionedOutput["failedThreads"] ?? [])
+
+        return SnapshotQueryResult(
+            activeTurnCount: activeTurnCount,
+            recentUpdatedThreadIDs: recentUpdatedThreadIDs,
+            recentLoggedThreadIDs: recentLoggedThreadIDs,
+            pendingLogRows: pendingLogRows,
+            failedThreads: failedThreads
+        )
+    }
+
+    private func parseSQLiteLines(_ lines: [String]) -> [String] {
+        lines
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
     }
 
-    private func queryActiveTurnCount(databaseURL: URL) throws -> Int {
-        let nowTimestamp = Int(now().timeIntervalSince1970)
-        let activeTurnCutoff = nowTimestamp - Int(activeTurnLookbackInterval)
-        let recentProcessCutoff = nowTimestamp - Int(recentProcessActivityInterval)
-        let output = try runSQLite(
-            sql: """
-            WITH per_process AS (
-                SELECT
-                    process_uuid,
-                    MAX(ts) AS last_ts,
-                    COALESCE(SUM(CASE WHEN message = 'app-server event: turn/started' THEN 1 ELSE 0 END), 0) AS started_count,
-                    COALESCE(SUM(CASE WHEN message = 'app-server event: turn/completed' THEN 1 ELSE 0 END), 0) AS completed_count
-                FROM logs
-                WHERE target = 'codex_app_server::outgoing_message'
-                  AND ts >= \(activeTurnCutoff)
-                GROUP BY process_uuid
-            )
-            SELECT MAX(0, COALESCE(MAX(started_count - completed_count), 0))
-            FROM per_process
-            WHERE last_ts >= \(recentProcessCutoff);
-            """,
-            databaseURL: databaseURL
-        )
+    private func parsePendingLogRows(_ lines: [String]) -> [PendingLogRow] {
+        lines.compactMap { line in
+            guard let data = line.data(using: .utf8),
+                  let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let threadID = object["thread_id"] as? String,
+                  let message = object["message"] as? String
+            else {
+                return nil
+            }
 
-        return Int(output.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
+            return PendingLogRow(threadID: threadID, message: message)
+        }
+    }
+
+    private func parseFailedThreads(_ lines: [String]) -> [String: CodexDesktopRuntimeSnapshot.FailedThreadState] {
+        var failedThreads: [String: CodexDesktopRuntimeSnapshot.FailedThreadState] = [:]
+
+        for line in lines {
+            guard let data = line.data(using: .utf8),
+                  let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let threadID = object["thread_id"] as? String,
+                  let message = object["message"] as? String,
+                  let timestamp = object["ts"] as? Double ?? (object["ts"] as? NSNumber)?.doubleValue
+            else {
+                continue
+            }
+
+            failedThreads[threadID] = CodexDesktopRuntimeSnapshot.FailedThreadState(
+                message: message,
+                loggedAt: Date(timeIntervalSince1970: timestamp)
+            )
+        }
+
+        return failedThreads
     }
 
     private func queryPendingThreadStates(
-        candidates: Set<String>,
         candidateSessionPaths: [String: String?],
-        databaseURL: URL
-    ) throws -> (waitingForInputThreadIDs: Set<String>, approvalThreadIDs: Set<String>, debugRows: [String]) {
-        let logStates = try queryLogPendingThreadStates(candidates: candidates, databaseURL: databaseURL)
+        logPendingRows: [PendingLogRow]
+    ) -> (waitingForInputThreadIDs: Set<String>, approvalThreadIDs: Set<String>, debugRows: [String]) {
+        let logStates = queryLogPendingThreadStates(logPendingRows: logPendingRows)
         let sessionStates = querySessionPendingThreadStates(candidateSessionPaths: candidateSessionPaths)
 
         return (
@@ -267,47 +424,14 @@ struct CodexDesktopStateReader {
         )
     }
 
-    private func queryLogPendingThreadStates(candidates: Set<String>, databaseURL: URL) throws -> (waitingForInputThreadIDs: Set<String>, approvalThreadIDs: Set<String>, debugRows: [String]) {
-        let candidateList = candidates
-            .map(sqlQuoted)
-            .sorted()
-            .joined(separator: ", ")
-
-        let output = try runSQLite(
-            sql: """
-            WITH ranked AS (
-                SELECT
-                    thread_id,
-                    REPLACE(REPLACE(message, char(10), ' '), char(13), ' ') AS message,
-                    ROW_NUMBER() OVER (PARTITION BY thread_id ORDER BY ts DESC, ts_nanos DESC, id DESC) AS row_number
-                FROM logs
-                WHERE thread_id IN (\(candidateList))
-                  AND target = 'codex_core::stream_events_utils'
-                  AND (
-                    message = 'Output item'
-                    OR message LIKE 'ToolCall:%'
-                  )
-            )
-            SELECT json_object('thread_id', thread_id, 'message', message)
-            FROM ranked
-            WHERE row_number = 1;
-            """,
-            databaseURL: databaseURL
-        )
-
+    private func queryLogPendingThreadStates(logPendingRows: [PendingLogRow]) -> (waitingForInputThreadIDs: Set<String>, approvalThreadIDs: Set<String>, debugRows: [String]) {
         var waitingThreadIDs: Set<String> = []
         var approvalThreadIDs: Set<String> = []
         var debugRows: [String] = []
 
-        for line in output.split(separator: "\n") {
-            guard let data = line.data(using: .utf8),
-                  let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let threadID = object["thread_id"] as? String,
-                  let message = object["message"] as? String
-            else {
-                continue
-            }
-
+        for row in logPendingRows {
+            let threadID = row.threadID
+            let message = row.message
             let shortID = String(threadID.prefix(8))
 
             if message.hasPrefix("ToolCall: request_user_input ") {
@@ -333,6 +457,8 @@ struct CodexDesktopStateReader {
     private func querySessionPendingThreadStates(
         candidateSessionPaths: [String: String?]
     ) -> (waitingForInputThreadIDs: Set<String>, approvalThreadIDs: Set<String>, debugRows: [String]) {
+        sessionPendingStateCache.prune(keepingPaths: Set(candidateSessionPaths.values.compactMap { $0 }))
+
         var waitingThreadIDs: Set<String> = []
         var approvalThreadIDs: Set<String> = []
         var debugRows: [String] = []
@@ -361,9 +487,11 @@ struct CodexDesktopStateReader {
     }
 
     func sessionPendingState(forSessionFileAt sessionURL: URL) -> SessionPendingState? {
-        let modificationDate = (try? sessionURL.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate)
+        let resourceValues = (try? sessionURL.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])) ?? URLResourceValues()
+        let modificationDate = resourceValues.contentModificationDate
+        let fileSize = resourceValues.fileSize
 
-        if let cached = sessionPendingStateCache.value(for: sessionURL.path, modificationDate: modificationDate) {
+        if let cached = sessionPendingStateCache.value(for: sessionURL.path, modificationDate: modificationDate, fileSize: fileSize) {
             return cached
         }
 
@@ -372,7 +500,7 @@ struct CodexDesktopStateReader {
         }
 
         let state = Self.parseSessionPendingState(from: contents)
-        sessionPendingStateCache.store(state, for: sessionURL.path, modificationDate: modificationDate)
+        sessionPendingStateCache.store(state, for: sessionURL.path, modificationDate: modificationDate, fileSize: fileSize)
         return state
     }
 
@@ -422,55 +550,45 @@ struct CodexDesktopStateReader {
         )
     }
 
-    private func queryFailedThreads(candidates: Set<String>, databaseURL: URL) throws -> [String: CodexDesktopRuntimeSnapshot.FailedThreadState] {
-        let candidateList = candidates
-            .map(sqlQuoted)
-            .sorted()
-            .joined(separator: ", ")
+    private func sqlQuoted(_ value: String) -> String {
+        "'" + value.replacingOccurrences(of: "'", with: "''") + "'"
+    }
 
-        let output = try runSQLite(
-            sql: """
-            WITH ranked AS (
-                SELECT
-                    thread_id,
-                    message,
-                    ts,
-                    ROW_NUMBER() OVER (PARTITION BY thread_id ORDER BY ts DESC, ts_nanos DESC, id DESC) AS row_number
-                FROM logs
-                WHERE thread_id IN (\(candidateList))
-                  AND target = 'codex_core::codex'
-                  AND message LIKE 'Turn error:%'
-            )
-            SELECT json_object('thread_id', thread_id, 'message', message, 'ts', ts)
-            FROM ranked
-            WHERE row_number = 1;
-            """,
-            databaseURL: databaseURL
-        )
+    private func runSQLiteSections(
+        _ sections: [SQLiteQuerySection],
+        databaseURL: URL
+    ) throws -> [String: [String]] {
+        let markerPrefix = "__codextension_section__:"
+        let combinedSQL = sections
+            .map { section in
+                """
+                SELECT '\(markerPrefix)\(section.name)';
+                \(section.sql)
+                """
+            }
+            .joined(separator: "\n")
 
-        var failedThreads: [String: CodexDesktopRuntimeSnapshot.FailedThreadState] = [:]
+        let output = try runSQLite(sql: combinedSQL, databaseURL: databaseURL)
+        var linesBySection: [String: [String]] = [:]
+        var currentSectionName: String?
 
-        for line in output.split(separator: "\n") {
-            guard let data = line.data(using: .utf8),
-                  let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let threadID = object["thread_id"] as? String,
-                  let message = object["message"] as? String,
-                  let timestamp = object["ts"] as? Double ?? (object["ts"] as? NSNumber)?.doubleValue
-            else {
+        for line in output.split(separator: "\n", omittingEmptySubsequences: false).map(String.init) {
+            if line.hasPrefix(markerPrefix) {
+                currentSectionName = String(line.dropFirst(markerPrefix.count))
+                if let currentSectionName {
+                    linesBySection[currentSectionName] = []
+                }
                 continue
             }
 
-            failedThreads[threadID] = CodexDesktopRuntimeSnapshot.FailedThreadState(
-                message: message,
-                loggedAt: Date(timeIntervalSince1970: timestamp)
-            )
+            guard let currentSectionName, !line.isEmpty else {
+                continue
+            }
+
+            linesBySection[currentSectionName, default: []].append(line)
         }
 
-        return failedThreads
-    }
-
-    private func sqlQuoted(_ value: String) -> String {
-        "'" + value.replacingOccurrences(of: "'", with: "''") + "'"
+        return linesBySection
     }
 
     private func runSQLite(sql: String, databaseURL: URL) throws -> String {
@@ -504,24 +622,60 @@ struct CodexDesktopStateReader {
     }
 }
 
-private final class SessionPendingStateCache {
+final class SessionPendingStateCache {
     private struct Entry {
         let modificationDate: Date?
+        let fileSize: Int?
         let state: CodexDesktopStateReader.SessionPendingState
     }
 
     private var entries: [String: Entry] = [:]
 
-    func value(for path: String, modificationDate: Date?) -> CodexDesktopStateReader.SessionPendingState? {
-        guard let entry = entries[path], entry.modificationDate == modificationDate else {
+    func value(for path: String, modificationDate: Date?, fileSize: Int?) -> CodexDesktopStateReader.SessionPendingState? {
+        guard let entry = entries[path],
+              entry.modificationDate == modificationDate,
+              entry.fileSize == fileSize
+        else {
             return nil
         }
 
         return entry.state
     }
 
-    func store(_ state: CodexDesktopStateReader.SessionPendingState, for path: String, modificationDate: Date?) {
-        entries[path] = Entry(modificationDate: modificationDate, state: state)
+    func store(_ state: CodexDesktopStateReader.SessionPendingState, for path: String, modificationDate: Date?, fileSize: Int?) {
+        entries[path] = Entry(modificationDate: modificationDate, fileSize: fileSize, state: state)
+    }
+
+    func prune(keepingPaths: Set<String>) {
+        entries = entries.filter { keepingPaths.contains($0.key) }
+    }
+}
+
+private final class StateDatabaseURLCache {
+    private struct Entry {
+        let url: URL
+        let checkedAt: Date
+    }
+
+    private var entry: Entry?
+
+    func value(
+        now: Date,
+        fileManager: FileManager,
+        cacheLifetime: TimeInterval
+    ) -> URL? {
+        guard let entry,
+              now.timeIntervalSince(entry.checkedAt) < cacheLifetime,
+              fileManager.fileExists(atPath: entry.url.path)
+        else {
+            return nil
+        }
+
+        return entry.url
+    }
+
+    func store(_ url: URL, checkedAt: Date) {
+        entry = Entry(url: url, checkedAt: checkedAt)
     }
 }
 
