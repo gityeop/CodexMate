@@ -641,7 +641,7 @@ final class AppStateStoreTests: XCTestCase {
         XCTAssertEqual(store.recentThreads.first?.displayStatus, .running)
     }
 
-    func testServerRequestResolvedRefreshesThreadUpdatedAt() {
+    func testServerRequestResolvedRefreshesActivityUpdatedAtWithoutChangingThreadUpdatedAt() {
         var store = AppStateStore()
         store.replaceRecentThreads(with: [thread(id: "thread-1", updatedAt: 100, status: .idle)])
         store.apply(serverRequest: .toolUserInput(
@@ -649,12 +649,17 @@ final class AppStateStoreTests: XCTestCase {
         ))
 
         usleep(10_000)
+        let beforeResolvedAt = Date()
 
         store.apply(notification: .serverRequestResolved(
             ServerRequestResolvedNotification(threadId: "thread-1")
         ))
 
-        XCTAssertEqual(store.recentThreads.first?.updatedAt, store.recentThreads.first?.statusUpdatedAt)
+        let activityUpdatedAt = store.recentThreads.first?.activityUpdatedAt
+
+        XCTAssertEqual(store.recentThreads.first?.updatedAt, Date(timeIntervalSince1970: 100))
+        XCTAssertNotNil(activityUpdatedAt)
+        XCTAssertGreaterThanOrEqual(activityUpdatedAt ?? .distantPast, beforeResolvedAt)
     }
 
     func testActiveFlagWaitingOnUserInputMapsToWaitingForInput() {
@@ -1217,12 +1222,51 @@ final class AppStateStoreTests: XCTestCase {
         XCTAssertNil(store.recentThreads.first?.lastTerminalActivityAt)
     }
 
+    func testThreadListRefreshReplacesInferredCompletionTimeWithAuthoritativeUpdatedAt() {
+        var store = AppStateStore()
+        store.replaceRecentThreads(with: [thread(id: "thread-1", updatedAt: 100, status: .idle)])
+
+        store.apply(notification: .turnCompleted(
+            TurnCompletedNotification(
+                threadId: "thread-1",
+                turn: CodexTurn(id: "turn-1", status: .completed, error: nil)
+            )
+        ))
+
+        store.replaceRecentThreads(with: [
+            thread(id: "thread-1", updatedAt: 120, status: .idle)
+        ])
+
+        XCTAssertEqual(store.recentThreads.first?.updatedAt, Date(timeIntervalSince1970: 120))
+        XCTAssertEqual(store.recentThreads.first?.lastTerminalActivityAt, Date(timeIntervalSince1970: 120))
+        XCTAssertFalse(store.recentThreads.first?.hasInferredTerminalActivity ?? true)
+    }
+
     func testMarkWatchedIdleInfersLastTerminalActivityAt() {
         var store = AppStateStore()
 
         store.markWatched(thread: thread(id: "thread-1", updatedAt: 120, status: .idle))
 
         XCTAssertEqual(store.recentThreads.first?.lastTerminalActivityAt, Date(timeIntervalSince1970: 120))
+    }
+
+    func testClearLiveRuntimeStateFallsBackToAuthoritativeCompletionTime() {
+        var store = AppStateStore()
+        store.replaceRecentThreads(with: [thread(id: "thread-1", updatedAt: 120, status: .idle)])
+
+        store.apply(notification: .turnCompleted(
+            TurnCompletedNotification(
+                threadId: "thread-1",
+                turn: CodexTurn(id: "turn-1", status: .completed, error: nil)
+            )
+        ))
+
+        store.clearLiveRuntimeState()
+
+        XCTAssertEqual(store.recentThreads.first?.displayStatus, .idle)
+        XCTAssertEqual(store.recentThreads.first?.lastTerminalActivityAt, Date(timeIntervalSince1970: 120))
+        XCTAssertEqual(store.recentThreads.first?.activityUpdatedAt, Date(timeIntervalSince1970: 120))
+        XCTAssertNil(store.recentThreads.first?.lastRuntimeEventAt)
     }
 
     func testErrorNotificationClearsActiveTurnAndRecordsLastTerminalActivityAt() {

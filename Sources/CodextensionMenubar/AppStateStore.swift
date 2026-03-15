@@ -145,6 +145,7 @@ struct AppStateStore {
         var lastRuntimeEventAt: Date?
         var activeTurnID: String?
         var lastTerminalActivityAt: Date?
+        var hasInferredTerminalActivity = false
 
         var hasActiveTurn: Bool {
             activeTurnID != nil
@@ -345,6 +346,7 @@ struct AppStateStore {
         for thread in threads {
             var row = threadsByID[thread.id] ?? ThreadRow(thread: thread, isWatched: false)
             let previousStatus = row.displayStatus
+            let previousUpdatedAt = row.updatedAt
             let incomingUpdatedAt = thread.updatedDate
             row.displayTitle = thread.displayTitle
             row.preview = thread.previewLine
@@ -365,11 +367,19 @@ struct AppStateStore {
                 )
             }
 
+            synchronizeTerminalActivityFromAuthoritativeUpdate(
+                row: &row,
+                previousStatus: previousStatus,
+                previousUpdatedAt: previousUpdatedAt,
+                incomingUpdatedAt: incomingUpdatedAt
+            )
+
             if row.lastTerminalActivityAt == nil,
                row.isWatched,
                row.activeTurnID == nil,
                shouldInferTerminalActivity(previous: previousStatus, current: row.displayStatus) {
                 row.lastTerminalActivityAt = row.updatedAt
+                row.hasInferredTerminalActivity = false
             }
 
             updatedThreads[thread.id] = row
@@ -384,6 +394,8 @@ struct AppStateStore {
 
     mutating func markWatched(thread: CodexThread) {
         var row = threadsByID[thread.id] ?? ThreadRow(thread: thread, isWatched: true)
+        let previousStatus = row.displayStatus
+        let previousUpdatedAt = row.updatedAt
         let incomingUpdatedAt = thread.updatedDate
         row.displayTitle = thread.displayTitle
         row.preview = thread.previewLine
@@ -397,10 +409,17 @@ struct AppStateStore {
         row.lastRuntimeEventAt = max(row.lastRuntimeEventAt ?? .distantPast, incomingUpdatedAt)
         row.applyListedStatus(newStatus, observedAt: incomingUpdatedAt)
         row.activeTurnID = updatedActiveTurnID(existing: row.activeTurnID, status: row.displayStatus, allowClearing: true)
+        synchronizeTerminalActivityFromAuthoritativeUpdate(
+            row: &row,
+            previousStatus: previousStatus,
+            previousUpdatedAt: previousUpdatedAt,
+            incomingUpdatedAt: incomingUpdatedAt
+        )
         if row.lastTerminalActivityAt == nil,
            row.activeTurnID == nil,
            isUnreadEligibleTerminalStatus(row.displayStatus) {
             row.lastTerminalActivityAt = row.updatedAt
+            row.hasInferredTerminalActivity = false
         }
         threadsByID[thread.id] = row
     }
@@ -408,6 +427,7 @@ struct AppStateStore {
     mutating func mergeRecentThread(_ thread: CodexThread) {
         var row = threadsByID[thread.id] ?? ThreadRow(thread: thread, isWatched: false)
         let previousStatus = row.displayStatus
+        let previousUpdatedAt = row.updatedAt
         let incomingUpdatedAt = thread.updatedDate
         row.displayTitle = thread.displayTitle
         row.preview = thread.previewLine
@@ -428,11 +448,19 @@ struct AppStateStore {
             )
         }
 
+        synchronizeTerminalActivityFromAuthoritativeUpdate(
+            row: &row,
+            previousStatus: previousStatus,
+            previousUpdatedAt: previousUpdatedAt,
+            incomingUpdatedAt: incomingUpdatedAt
+        )
+
         if row.lastTerminalActivityAt == nil,
            row.isWatched,
            row.activeTurnID == nil,
            shouldInferTerminalActivity(previous: previousStatus, current: row.displayStatus) {
             row.lastTerminalActivityAt = row.updatedAt
+            row.hasInferredTerminalActivity = false
         }
 
         threadsByID[thread.id] = row
@@ -449,6 +477,35 @@ struct AppStateStore {
             row.runtimePhase = .none
             row.activeTurnID = nil
             row.status = row.listedStatus
+            threadsByID[threadID] = row
+        }
+    }
+
+    mutating func clearLiveRuntimeState() {
+        desktopActiveTurnCount = 0
+        desktopDebugSummary = nil
+
+        for threadID in threadsByID.keys.sorted() {
+            guard var row = threadsByID[threadID] else {
+                continue
+            }
+
+            row.pendingRequestKind = nil
+            row.pendingRequestReason = nil
+            row.runtimePhase = .none
+            row.activeTurnID = nil
+            row.status = row.listedStatus
+            row.lastRuntimeEventAt = nil
+
+            if row.hasInferredTerminalActivity {
+                if isUnreadEligibleTerminalStatus(row.listedStatus) {
+                    row.lastTerminalActivityAt = row.updatedAt
+                } else {
+                    row.lastTerminalActivityAt = nil
+                }
+                row.hasInferredTerminalActivity = false
+            }
+
             threadsByID[threadID] = row
         }
     }
@@ -493,6 +550,7 @@ struct AppStateStore {
             row.lastRuntimeEventAt = max(row.lastRuntimeEventAt ?? .distantPast, completedAt)
             row.statusUpdatedAt = max(row.statusUpdatedAt, completedAt)
             row.lastTerminalActivityAt = max(row.lastTerminalActivityAt ?? .distantPast, completedAt)
+            row.hasInferredTerminalActivity = false
             threadsByID[threadID] = row
 
             if previousStatus != row.displayStatus {
@@ -738,7 +796,6 @@ struct AppStateStore {
             let observedAt = Date()
             row.isWatched = true
             row.activeTurnID = notification.turn.id
-            row.updatedAt = max(row.updatedAt, observedAt)
             row.statusUpdatedAt = observedAt
             row.applyRuntimeStatus(.running, observedAt: observedAt)
             threadsByID[notification.threadId] = row
@@ -749,9 +806,9 @@ struct AppStateStore {
             let observedAt = Date()
             row.isWatched = true
             row.activeTurnID = nil
-            row.updatedAt = max(row.updatedAt, observedAt)
             row.statusUpdatedAt = observedAt
-            row.lastTerminalActivityAt = row.updatedAt
+            row.lastTerminalActivityAt = observedAt
+            row.hasInferredTerminalActivity = true
 
             let currentStatus: ThreadStatus
             switch notification.turn.status {
@@ -774,9 +831,9 @@ struct AppStateStore {
             let observedAt = Date()
             row.isWatched = true
             row.activeTurnID = nil
-            row.updatedAt = max(row.updatedAt, observedAt)
             row.statusUpdatedAt = observedAt
-            row.lastTerminalActivityAt = row.updatedAt
+            row.lastTerminalActivityAt = observedAt
+            row.hasInferredTerminalActivity = true
             row.applyRuntimeStatus(.failed(message: notification.error.message), observedAt: observedAt)
             threadsByID[notification.threadId] = row
             recordPendingResolution(threadID: notification.threadId, previous: previousStatus, current: row.displayStatus, source: "error")
@@ -792,7 +849,6 @@ struct AppStateStore {
             row.runtimePhase = (row.activeTurnID != nil || row.status == .running) ? .running : .none
             row.status = row.runtimePhase == .running ? .running : row.listedStatus
             row.lastRuntimeEventAt = max(row.lastRuntimeEventAt ?? .distantPast, observedAt)
-            row.updatedAt = max(row.updatedAt, observedAt)
             row.statusUpdatedAt = observedAt
             threadsByID[notification.threadId] = row
             recordPendingResolution(threadID: notification.threadId, previous: previousStatus, current: row.displayStatus, source: "serverRequest/resolved")
@@ -811,7 +867,6 @@ struct AppStateStore {
                 row.pendingRequestReason = nil
                 row.runtimePhase = .none
                 row.lastRuntimeEventAt = max(row.lastRuntimeEventAt ?? .distantPast, observedAt)
-                row.updatedAt = max(row.updatedAt, observedAt)
                 row.statusUpdatedAt = observedAt
             }
         case let .approval(request):
@@ -824,7 +879,6 @@ struct AppStateStore {
                 row.pendingRequestReason = request.reason
                 row.runtimePhase = .none
                 row.lastRuntimeEventAt = max(row.lastRuntimeEventAt ?? .distantPast, observedAt)
-                row.updatedAt = max(row.updatedAt, observedAt)
                 row.statusUpdatedAt = observedAt
             }
         }
@@ -867,7 +921,8 @@ struct AppStateStore {
             statusUpdatedAt: .distantPast,
             isWatched: false,
             activeTurnID: nil,
-            lastTerminalActivityAt: nil
+            lastTerminalActivityAt: nil,
+            hasInferredTerminalActivity: false
         )
     }
 
@@ -1051,6 +1106,29 @@ struct AppStateStore {
         return max(0, maxProjects - priorityProjectIDs.count)
     }
 
+    private func synchronizeTerminalActivityFromAuthoritativeUpdate(
+        row: inout ThreadRow,
+        previousStatus: ThreadStatus,
+        previousUpdatedAt: Date,
+        incomingUpdatedAt: Date
+    ) {
+        guard row.isWatched, row.activeTurnID == nil, isUnreadEligibleTerminalStatus(row.displayStatus) else {
+            return
+        }
+
+        if row.hasInferredTerminalActivity, incomingUpdatedAt > previousUpdatedAt {
+            row.lastTerminalActivityAt = row.updatedAt
+            row.hasInferredTerminalActivity = false
+            return
+        }
+
+        if row.lastTerminalActivityAt == nil,
+           shouldInferTerminalActivity(previous: previousStatus, current: row.displayStatus) {
+            row.lastTerminalActivityAt = row.updatedAt
+            row.hasInferredTerminalActivity = false
+        }
+    }
+
     private func shouldInferTerminalActivity(previous: ThreadStatus, current: ThreadStatus) -> Bool {
         if previous == current {
             return isUnreadEligibleTerminalStatus(current)
@@ -1109,6 +1187,7 @@ private extension AppStateStore.ThreadRow {
         self.lastRuntimeEventAt = isWatched ? thread.updatedDate : nil
         self.activeTurnID = nil
         self.lastTerminalActivityAt = nil
+        self.hasInferredTerminalActivity = false
     }
 
     mutating func applyListedStatus(_ newStatus: AppStateStore.ThreadStatus, observedAt: Date) {

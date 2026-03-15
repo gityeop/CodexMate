@@ -250,6 +250,10 @@ final class MenubarController {
         state.markUnwatched(threadIDs: threadIDs)
     }
 
+    func clearLiveRuntimeState() {
+        state.clearLiveRuntimeState()
+    }
+
     func prepareSnapshot(additionalTrackedThreadIDs: Set<String> = []) -> MenubarPreparedSnapshot {
         let didChangeReadMarkers = pruneThreadReadMarkersIfNeeded(
             now: now(),

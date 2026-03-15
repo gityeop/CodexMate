@@ -185,6 +185,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 scheduleRefreshTimerIfNeeded()
                 requestDesktopActivityRefresh()
                 requestThreadRefresh()
+                requestInitialSubscriptionWarmup()
                 return
             }
 
@@ -220,6 +221,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func handleClientTermination(reason: String?) {
         invalidateTimers()
+        liveSubscribedThreadUpdatedAtByID.removeAll()
+        controller.clearLiveRuntimeState()
 
         let message = reason ?? "app-server process exited"
         controller.setConnection(.failed(message: message))
