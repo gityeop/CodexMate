@@ -9,6 +9,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         static let maxPendingDiscoveredThreads = 64
     }
 
+    private enum ForegroundRefreshPolicy {
+        static let minimumInterval: TimeInterval = 1
+    }
+
     private enum ThreadListDisplay {
         static let initialFetchLimit = 32
         static let fetchPageLimit = 64
@@ -71,6 +75,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var hoverTooltipContentsByThreadID: [String: MenubarStatusPresentation.ThreadTooltipContent] = [:]
     private var hoverTooltipWorkItem: DispatchWorkItem?
     private var highlightedThreadID: String?
+    private var foregroundRefreshObserverTokens: [NSObjectProtocol] = []
+    private var foregroundRefreshThrottle = ForegroundRefreshThrottle(
+        minimumInterval: ForegroundRefreshPolicy.minimumInterval
+    )
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         menu.autoenablesItems = false
@@ -79,6 +87,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem.button?.title = controller.overallStatus.icon
 
         configureClientCallbacks()
+        configureForegroundRefreshObservers()
         requestNotificationPermission()
         renderMenu()
 
@@ -88,6 +97,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        removeForegroundRefreshObservers()
         invalidateTimers()
 
         Task {
@@ -121,6 +131,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
+    }
+
+    private func configureForegroundRefreshObservers() {
+        let workspaceCenter = NSWorkspace.shared.notificationCenter
+        let names: [Notification.Name] = [
+            NSWorkspace.screensDidWakeNotification,
+            NSWorkspace.sessionDidBecomeActiveNotification
+        ]
+
+        for name in names {
+            let token = workspaceCenter.addObserver(
+                forName: name,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    self?.handleForegroundRefreshNotification(name)
+                }
+            }
+            foregroundRefreshObserverTokens.append(token)
+        }
+    }
+
+    private func removeForegroundRefreshObservers() {
+        guard !foregroundRefreshObserverTokens.isEmpty else {
+            return
+        }
+
+        let workspaceCenter = NSWorkspace.shared.notificationCenter
+        for token in foregroundRefreshObserverTokens {
+            workspaceCenter.removeObserver(token)
+        }
+        foregroundRefreshObserverTokens.removeAll()
     }
 
     private func connectAndLoad() async {
@@ -316,6 +359,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
 
         UNUserNotificationCenter.current().add(request, withCompletionHandler: nil)
+    }
+
+    private func handleForegroundRefreshNotification(_ name: Notification.Name, now: Date = Date()) {
+        guard case .connected = controller.connection else {
+            return
+        }
+
+        guard foregroundRefreshThrottle.shouldTrigger(now: now) else {
+            return
+        }
+
+        controller.recordDiagnostic("foreground refresh via \(name.rawValue)")
+        scheduleRefreshTimerIfNeeded()
+        requestDesktopActivityRefresh(now: now)
+        requestThreadRefresh(now: now)
     }
 
     private var notificationsEnabled: Bool {
