@@ -19,6 +19,25 @@ final class AppStateStoreTests: XCTestCase {
         XCTAssertEqual(store.recentThreads.map(\.id), ["newer", "older"])
     }
 
+    func testRecentThreadsPromoteLatestRuntimeActivityFirst() {
+        var store = AppStateStore()
+
+        store.replaceRecentThreads(with: [
+            thread(id: "older", updatedAt: 100, status: .idle),
+            thread(id: "newer", updatedAt: 200, status: .idle),
+        ])
+
+        store.apply(
+            desktopSnapshot: CodexDesktopRuntimeSnapshot(
+                activeTurnCount: 1,
+                runningThreadIDs: ["older"]
+            ),
+            observedAt: Date(timeIntervalSince1970: 300)
+        )
+
+        XCTAssertEqual(store.recentThreads.map(\.id), ["older", "newer"])
+    }
+
     func testProjectSectionsGroupThreadsBySavedWorkspaceRoot() {
         var store = AppStateStore()
         store.replaceRecentThreads(with: [
@@ -37,6 +56,32 @@ final class AppStateStoreTests: XCTestCase {
         XCTAssertEqual(sections.map(\.displayName), ["Maccy", "notion-blog"])
         XCTAssertEqual(sections[0].threads.map(\.id), ["thread-2"])
         XCTAssertEqual(sections[1].threads.map(\.id), ["thread-3", "thread-1"])
+    }
+
+    func testProjectSectionsPromoteLatestRuntimeActivityProjectFirst() {
+        var store = AppStateStore()
+        store.replaceRecentThreads(with: [
+            thread(id: "thread-a", updatedAt: 200, status: .idle, cwd: "/tmp/A/work"),
+            thread(id: "thread-b", updatedAt: 100, status: .idle, cwd: "/tmp/B/work")
+        ])
+
+        store.apply(
+            desktopSnapshot: CodexDesktopRuntimeSnapshot(
+                activeTurnCount: 1,
+                runningThreadIDs: ["thread-b"]
+            ),
+            observedAt: Date(timeIntervalSince1970: 300)
+        )
+
+        let catalog = CodexDesktopProjectCatalog(workspaceRoots: [
+            .init(path: "/tmp/A", displayName: "A"),
+            .init(path: "/tmp/B", displayName: "B")
+        ])
+
+        let sections = store.projectSections(using: catalog)
+
+        XCTAssertEqual(sections.map(\.displayName), ["B", "A"])
+        XCTAssertEqual(sections.first?.threads.map(\.id), ["thread-b"])
     }
 
     func testProjectSectionsFallBackToFolderNameForUnmatchedCWD() {
@@ -543,7 +588,7 @@ final class AppStateStoreTests: XCTestCase {
         XCTAssertEqual(store.lastDiagnostic, "cleared stale running thread=thread-1 from=Running to=Idle via desktop snapshot")
     }
 
-    func testDesktopOverlayPlaceholderDoesNotOverrideActualThreadRecency() {
+    func testDesktopOverlayPlaceholderPromotesActualThreadByRuntimeActivity() {
         var store = AppStateStore()
         store.replaceRecentThreads(with: [thread(id: "newer-thread", updatedAt: 150, status: .idle)])
 
@@ -557,10 +602,14 @@ final class AppStateStoreTests: XCTestCase {
 
         store.mergeRecentThread(thread(id: "older-thread", updatedAt: 100, status: .idle))
 
-        XCTAssertEqual(store.recentThreads.map(\.id), ["newer-thread", "older-thread"])
+        XCTAssertEqual(store.recentThreads.map(\.id), ["older-thread", "newer-thread"])
         XCTAssertEqual(
             store.recentThreads.first(where: { $0.id == "older-thread" })?.updatedAt,
             Date(timeIntervalSince1970: 100)
+        )
+        XCTAssertEqual(
+            store.recentThreads.first(where: { $0.id == "older-thread" })?.activityUpdatedAt,
+            Date(timeIntervalSince1970: 200)
         )
     }
 

@@ -81,7 +81,7 @@ final class MenubarControllerIntegrationTests: XCTestCase {
         XCTAssertEqual(afterRefreshSnapshot.projectSections.map(\.section.displayName), ["B", "A"])
     }
 
-    func testSnapshotKeepsLatestProjectOrderWhileReflectingRunningStatus() async throws {
+    func testSnapshotPromotesRuntimeActiveProjectOrder() async throws {
         let controller = makeController(
             desktopUpdates: [
                 desktopUpdate(
@@ -110,8 +110,8 @@ final class MenubarControllerIntegrationTests: XCTestCase {
         _ = await controller.refreshDesktopActivity()
         let snapshot = controller.prepareSnapshot().snapshot
 
-        XCTAssertEqual(snapshot.projectSections.map(\.section.displayName), ["A", "B"])
-        XCTAssertEqual(snapshot.projectSections.last?.threads.first?.thread.displayStatus, .running)
+        XCTAssertEqual(snapshot.projectSections.map(\.section.displayName), ["B", "A"])
+        XCTAssertEqual(snapshot.projectSections.first?.threads.first?.thread.displayStatus, .running)
     }
 
     func testCompletionHintsClearWaitingStateInSnapshot() async throws {

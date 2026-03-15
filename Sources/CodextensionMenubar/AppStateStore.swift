@@ -218,11 +218,11 @@ struct AppStateStore {
 
     var recentThreads: [ThreadRow] {
         threadsByID.values.sorted { lhs, rhs in
-            if lhs.updatedAt == rhs.updatedAt {
+            if lhs.activityUpdatedAt == rhs.activityUpdatedAt {
                 return lhs.displayTitle.localizedCaseInsensitiveCompare(rhs.displayTitle) == .orderedAscending
             }
 
-            return lhs.updatedAt > rhs.updatedAt
+            return lhs.activityUpdatedAt > rhs.activityUpdatedAt
         }
     }
 
@@ -894,8 +894,8 @@ struct AppStateStore {
         for thread in threads {
             let project = catalog.project(for: thread.cwd)
             if var bucket = buckets[project.id] {
-                if thread.updatedAt > bucket.latestUpdatedAt {
-                    bucket.latestUpdatedAt = thread.updatedAt
+                if thread.activityUpdatedAt > bucket.latestUpdatedAt {
+                    bucket.latestUpdatedAt = thread.activityUpdatedAt
                 }
                 bucket.threads.append(thread)
                 buckets[project.id] = bucket
@@ -903,7 +903,7 @@ struct AppStateStore {
                 buckets[project.id] = Bucket(
                     id: project.id,
                     displayName: project.displayName,
-                    latestUpdatedAt: thread.updatedAt,
+                    latestUpdatedAt: thread.activityUpdatedAt,
                     threads: [thread]
                 )
             }
@@ -1011,11 +1011,11 @@ struct AppStateStore {
     }
 
     private static func isNewerThread(_ lhs: ThreadRow, _ rhs: ThreadRow) -> Bool {
-        if lhs.updatedAt == rhs.updatedAt {
+        if lhs.activityUpdatedAt == rhs.activityUpdatedAt {
             return lhs.displayTitle.localizedCaseInsensitiveCompare(rhs.displayTitle) == .orderedAscending
         }
 
-        return lhs.updatedAt > rhs.updatedAt
+        return lhs.activityUpdatedAt > rhs.activityUpdatedAt
     }
 
     private static func isHigherPriorityThread(_ lhs: ThreadRow, _ rhs: ThreadRow) -> Bool {
