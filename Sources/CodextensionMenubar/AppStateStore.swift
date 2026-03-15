@@ -150,6 +150,17 @@ struct AppStateStore {
             activeTurnID != nil
         }
 
+        var activityUpdatedAt: Date {
+            let terminalActivityAt = max(updatedAt, lastTerminalActivityAt ?? .distantPast)
+
+            switch presentationStatus {
+            case .running, .waitingForUser:
+                return max(terminalActivityAt, lastRuntimeEventAt ?? .distantPast)
+            case .idle, .notLoaded, .failed:
+                return terminalActivityAt
+            }
+        }
+
         var displayStatus: ThreadStatus {
             if let pendingRequestKind {
                 return pendingRequestKind.status
@@ -675,15 +686,7 @@ struct AppStateStore {
     }
 
     private static func shouldAcceptDesktopCompletionHint(for row: ThreadRow, completedAt: Date) -> Bool {
-        guard completedAt >= (row.lastTerminalActivityAt ?? .distantPast) else {
-            return false
-        }
-
-        return row.activeTurnID != nil ||
-            row.runtimePhase == .running ||
-            row.pendingRequestKind != nil ||
-            row.status == .running ||
-            row.status.isPending
+        completedAt >= (row.lastTerminalActivityAt ?? .distantPast)
     }
 
     private static func terminalStatusAfterDesktopCompletion(for row: ThreadRow) -> ThreadStatus {
@@ -789,6 +792,7 @@ struct AppStateStore {
             row.runtimePhase = (row.activeTurnID != nil || row.status == .running) ? .running : .none
             row.status = row.runtimePhase == .running ? .running : row.listedStatus
             row.lastRuntimeEventAt = max(row.lastRuntimeEventAt ?? .distantPast, observedAt)
+            row.updatedAt = max(row.updatedAt, observedAt)
             row.statusUpdatedAt = observedAt
             threadsByID[notification.threadId] = row
             recordPendingResolution(threadID: notification.threadId, previous: previousStatus, current: row.displayStatus, source: "serverRequest/resolved")

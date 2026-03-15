@@ -219,6 +219,65 @@ final class CodexDesktopStateReaderTests: XCTestCase {
         XCTAssertEqual(snapshot.waitingForInputThreadIDs, ["thread-1"])
     }
 
+    func testSnapshotFallsBackToOlderStateDatabaseWhenNewestCandidateCannotBeOpened() throws {
+        let tempDirectoryURL = FileManager.default.temporaryDirectory
+            .appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: tempDirectoryURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDirectoryURL) }
+
+        let goodDatabaseURL = tempDirectoryURL.appending(path: "state_1.sqlite")
+        try createStateDatabase(
+            at: goodDatabaseURL,
+            sql: """
+            CREATE TABLE threads (
+                id TEXT PRIMARY KEY,
+                first_user_message TEXT NOT NULL DEFAULT '',
+                title TEXT NOT NULL DEFAULT '',
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                cwd TEXT NOT NULL,
+                rollout_path TEXT,
+                archived INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE TABLE logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                process_uuid TEXT,
+                target TEXT,
+                message TEXT,
+                ts INTEGER NOT NULL,
+                ts_nanos INTEGER NOT NULL DEFAULT 0,
+                thread_id TEXT
+            );
+            INSERT INTO threads (id, first_user_message, title, created_at, updated_at, cwd, rollout_path, archived)
+            VALUES ('thread-1', 'Preview', 'Thread 1', 150, 195, '/tmp/project', NULL, 0);
+            """
+        )
+
+        let unreadableDatabaseURL = tempDirectoryURL.appending(path: "state_2.sqlite", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: unreadableDatabaseURL, withIntermediateDirectories: true)
+
+        try FileManager.default.setAttributes(
+            [.modificationDate: Date(timeIntervalSince1970: 100)],
+            ofItemAtPath: goodDatabaseURL.path
+        )
+        try FileManager.default.setAttributes(
+            [.modificationDate: Date(timeIntervalSince1970: 200)],
+            ofItemAtPath: unreadableDatabaseURL.path
+        )
+
+        let reader = CodexDesktopStateReader(
+            now: { Date(timeIntervalSince1970: 200) },
+            recentThreadUpdateInterval: 10,
+            recentLogInterval: 15,
+            codexDirectoryURLOverride: tempDirectoryURL
+        )
+
+        let snapshot = try reader.snapshot(candidateSessionPaths: [:])
+
+        XCTAssertEqual(snapshot.recentActivityThreadIDs, ["thread-1"])
+        XCTAssertTrue(snapshot.runningThreadIDs.isEmpty)
+    }
+
     private func createStateDatabase(at databaseURL: URL, sql: String) throws {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/sqlite3")

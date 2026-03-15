@@ -63,7 +63,7 @@ final class ThreadHoverTooltipController {
         menuFrame: NSRect?
     ) -> NSPoint {
         // Slight overlap cancels the visible seam caused by the floating panel shadow.
-        let horizontalGap: CGFloat = -2
+        let horizontalGap: CGFloat = -1
         let margin: CGFloat = 12
         let visibleFrame = NSScreen.screens.first(where: { $0.frame.contains(screenPoint) })?.visibleFrame
             ?? NSScreen.main?.visibleFrame
@@ -134,8 +134,6 @@ private final class ThreadHoverTooltipView: NSView {
         backgroundView.wantsLayer = true
         backgroundView.layer?.cornerRadius = 14
         backgroundView.layer?.masksToBounds = true
-        backgroundView.layer?.borderWidth = 1
-        backgroundView.layer?.borderColor = NSColor.separatorColor.withAlphaComponent(0.35).cgColor
 
         containerStack.translatesAutoresizingMaskIntoConstraints = false
         containerStack.orientation = .vertical

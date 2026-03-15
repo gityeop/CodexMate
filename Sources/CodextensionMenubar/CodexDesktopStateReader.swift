@@ -72,6 +72,7 @@ struct CodexDesktopStateReader {
     private let recentProcessActivityInterval: TimeInterval
     private let databaseLocationCacheLifetime: TimeInterval
     private let stateDatabaseURLOverride: URL?
+    private let codexDirectoryURLOverride: URL?
     private let sessionPendingStateCache = SessionPendingStateCache()
     private let stateDatabaseURLCache = StateDatabaseURLCache()
 
@@ -83,7 +84,8 @@ struct CodexDesktopStateReader {
         activeTurnLookbackInterval: TimeInterval = 6 * 60 * 60,
         recentProcessActivityInterval: TimeInterval = 10 * 60,
         databaseLocationCacheLifetime: TimeInterval = 30,
-        stateDatabaseURLOverride: URL? = nil
+        stateDatabaseURLOverride: URL? = nil,
+        codexDirectoryURLOverride: URL? = nil
     ) {
         self.fileManager = fileManager
         self.now = now
@@ -93,6 +95,7 @@ struct CodexDesktopStateReader {
         self.recentProcessActivityInterval = recentProcessActivityInterval
         self.databaseLocationCacheLifetime = max(1, databaseLocationCacheLifetime)
         self.stateDatabaseURLOverride = stateDatabaseURLOverride
+        self.codexDirectoryURLOverride = codexDirectoryURLOverride
     }
 
     func snapshot(candidates: Set<String>) throws -> CodexDesktopRuntimeSnapshot {
@@ -100,21 +103,22 @@ struct CodexDesktopStateReader {
     }
 
     func snapshot(candidateSessionPaths: [String: String?]) throws -> CodexDesktopRuntimeSnapshot {
-        let databaseURL = try locateStateDatabase()
         let candidates = Set(candidateSessionPaths.keys)
         let nowTimestamp = Int(now().timeIntervalSince1970)
         let threadUpdateCutoff = nowTimestamp - Int(recentThreadUpdateInterval)
         let logCutoff = nowTimestamp - Int(recentLogInterval)
         let activeTurnCutoff = nowTimestamp - Int(activeTurnLookbackInterval)
         let recentProcessCutoff = nowTimestamp - Int(recentProcessActivityInterval)
-        let queryResult = try querySnapshotState(
-            candidates: candidates,
-            databaseURL: databaseURL,
-            threadUpdateCutoff: threadUpdateCutoff,
-            logCutoff: logCutoff,
-            activeTurnCutoff: activeTurnCutoff,
-            recentProcessCutoff: recentProcessCutoff
-        )
+        let queryResult = try withStateDatabase { databaseURL in
+            try querySnapshotState(
+                candidates: candidates,
+                databaseURL: databaseURL,
+                threadUpdateCutoff: threadUpdateCutoff,
+                logCutoff: logCutoff,
+                activeTurnCutoff: activeTurnCutoff,
+                recentProcessCutoff: recentProcessCutoff
+            )
+        }
         let activeTurnCount = queryResult.activeTurnCount
         let recentActivityThreadIDs = Set(queryResult.recentUpdatedThreadIDs + queryResult.recentLoggedThreadIDs)
 
@@ -165,32 +169,33 @@ struct CodexDesktopStateReader {
             return []
         }
 
-        let databaseURL = try locateStateDatabase()
         let candidateList = threadIDs
             .map(sqlQuoted)
             .sorted()
             .joined(separator: ", ")
-        let output = try runSQLite(
-            sql: """
-            SELECT json_object(
-                'id', id,
-                'preview', CASE
-                    WHEN TRIM(first_user_message) != '' THEN first_user_message
-                    ELSE title
-                END,
-                'createdAt', created_at,
-                'updatedAt', updated_at,
-                'cwd', cwd,
-                'name', title,
-                'path', rollout_path
+        let output = try withStateDatabase { databaseURL in
+            try runSQLite(
+                sql: """
+                SELECT json_object(
+                    'id', id,
+                    'preview', CASE
+                        WHEN TRIM(first_user_message) != '' THEN first_user_message
+                        ELSE title
+                    END,
+                    'createdAt', created_at,
+                    'updatedAt', updated_at,
+                    'cwd', cwd,
+                    'name', title,
+                    'path', rollout_path
+                )
+                FROM threads
+                WHERE archived = 0
+                  AND id IN (\(candidateList))
+                ORDER BY updated_at DESC;
+                """,
+                databaseURL: databaseURL
             )
-            FROM threads
-            WHERE archived = 0
-              AND id IN (\(candidateList))
-            ORDER BY updated_at DESC;
-            """,
-            databaseURL: databaseURL
-        )
+        }
 
         var threads: [CodexThread] = []
 
@@ -223,21 +228,62 @@ struct CodexDesktopStateReader {
         return threads
     }
 
-    private func locateStateDatabase() throws -> URL {
+    private func withStateDatabase<Result>(_ operation: (URL) throws -> Result) throws -> Result {
         if let stateDatabaseURLOverride {
-            return stateDatabaseURLOverride
+            return try operation(stateDatabaseURLOverride)
         }
 
         let referenceNow = now()
+        var candidateURLs: [URL] = []
+
         if let cachedURL = stateDatabaseURLCache.value(
             now: referenceNow,
             fileManager: fileManager,
             cacheLifetime: databaseLocationCacheLifetime
         ) {
-            return cachedURL
+            candidateURLs.append(cachedURL)
         }
 
-        let codexDirectory = fileManager.homeDirectoryForCurrentUser.appendingPathComponent(".codex", isDirectory: true)
+        for url in try locateStateDatabaseCandidates() where !candidateURLs.contains(url) {
+            candidateURLs.append(url)
+        }
+
+        guard !candidateURLs.isEmpty else {
+            throw ReaderError.databaseNotFound
+        }
+
+        var lastRetriableError: ReaderError?
+
+        for candidateURL in candidateURLs {
+            do {
+                let result = try operation(candidateURL)
+                stateDatabaseURLCache.store(candidateURL, checkedAt: referenceNow)
+                return result
+            } catch let error as ReaderError where error.isRetriableDatabaseOpenFailure {
+                lastRetriableError = error
+                stateDatabaseURLCache.clear()
+                continue
+            }
+        }
+
+        if let lastRetriableError {
+            throw lastRetriableError
+        }
+
+        throw ReaderError.databaseNotFound
+    }
+
+    private func locateStateDatabase() throws -> URL {
+        try withStateDatabase { $0 }
+    }
+
+    private func locateStateDatabaseCandidates() throws -> [URL] {
+        if let stateDatabaseURLOverride {
+            return [stateDatabaseURLOverride]
+        }
+
+        let codexDirectory = codexDirectoryURLOverride
+            ?? fileManager.homeDirectoryForCurrentUser.appendingPathComponent(".codex", isDirectory: true)
         let candidateURLs = try fileManager.contentsOfDirectory(
             at: codexDirectory,
             includingPropertiesForKeys: [.contentModificationDateKey],
@@ -247,16 +293,17 @@ struct CodexDesktopStateReader {
             url.lastPathComponent.hasPrefix("state_") && url.pathExtension == "sqlite"
         }
 
-        guard let databaseURL = candidateURLs.max(by: { lhs, rhs in
+        let sortedCandidateURLs = candidateURLs.sorted { lhs, rhs in
             let lhsDate = (try? lhs.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
             let rhsDate = (try? rhs.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
-            return lhsDate < rhsDate
-        }) else {
+            return lhsDate > rhsDate
+        }
+
+        guard !sortedCandidateURLs.isEmpty else {
             throw ReaderError.databaseNotFound
         }
 
-        stateDatabaseURLCache.store(databaseURL, checkedAt: referenceNow)
-        return databaseURL
+        return sortedCandidateURLs
     }
 
     private func querySnapshotState(
@@ -716,6 +763,10 @@ private final class StateDatabaseURLCache {
     func store(_ url: URL, checkedAt: Date) {
         entry = Entry(url: url, checkedAt: checkedAt)
     }
+
+    func clear() {
+        entry = nil
+    }
 }
 
 extension CodexDesktopStateReader {
@@ -729,6 +780,15 @@ extension CodexDesktopStateReader {
                 return "Could not find a Codex state database in ~/.codex."
             case let .queryFailed(message):
                 return message
+            }
+        }
+
+        var isRetriableDatabaseOpenFailure: Bool {
+            switch self {
+            case .databaseNotFound:
+                return false
+            case let .queryFailed(message):
+                return message.localizedCaseInsensitiveContains("unable to open database file")
             }
         }
     }

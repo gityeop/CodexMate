@@ -134,7 +134,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             controller.setConnection(.connected(binaryPath: binaryURL.path))
             renderMenu()
 
-            try await loadInitialThreads()
+            do {
+                try await loadInitialThreads()
+            } catch {
+                controller.recordDiagnostic("Initial thread load failed: \(error.localizedDescription)")
+                renderMenu()
+                scheduleRefreshTimerIfNeeded()
+                requestDesktopActivityRefresh()
+                requestThreadRefresh()
+                return
+            }
+
             scheduleRefreshTimerIfNeeded()
             requestDesktopActivityRefresh()
             requestInitialSubscriptionWarmup()
@@ -338,7 +348,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func refreshSchedulingPolicy() -> RefreshSchedulingPolicy {
         RefreshSchedulingPolicy.current(
             isMenuOpen: isMenuOpen,
-            overallStatus: controller.overallStatus
+            overallStatus: controller.overallStatus,
+            hasRecentThreads: !controller.recentThreads.isEmpty
         )
     }
 
@@ -447,7 +458,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func menuTitle(for thread: AppStateStore.ThreadRow) -> String {
-        let relativeDate = relativeDateFormatter.localizedString(for: thread.updatedAt, relativeTo: Date())
+        let relativeDate = relativeDateFormatter.localizedString(for: thread.activityUpdatedAt, relativeTo: Date())
         return MenubarStatusPresentation.threadTitle(
             for: thread,
             relativeDate: relativeDate,
@@ -638,7 +649,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             do {
                 try await refreshThreads()
             } catch {
-                controller.setConnection(.failed(message: error.localizedDescription))
+                controller.recordDiagnostic("Thread refresh failed: \(error.localizedDescription)")
                 renderMenu()
             }
         }

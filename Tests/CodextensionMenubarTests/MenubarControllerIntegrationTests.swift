@@ -150,6 +150,37 @@ final class MenubarControllerIntegrationTests: XCTestCase {
         XCTAssertEqual(snapshot.projectSections.first?.threads.first?.thread.displayStatus, .idle)
     }
 
+    func testCompletionHintsMarkIdleThreadUnreadEvenWithoutObservedRunningState() async throws {
+        let controller = makeController(
+            desktopUpdates: [
+                desktopUpdate(
+                    runtimeSnapshot: CodexDesktopRuntimeSnapshot(
+                        activeTurnCount: 0,
+                        runningThreadIDs: []
+                    ),
+                    latestCompleted: [
+                        "thread-a": Date(timeIntervalSince1970: 200)
+                    ]
+                )
+            ],
+            recentThreadResponses: [
+                [thread(id: "thread-a", updatedAt: 100, cwd: "/tmp/A/work")]
+            ],
+            projectCatalog: .success(
+                CodexDesktopProjectCatalog(workspaceRoots: [
+                    .init(path: "/tmp/A", displayName: "A")
+                ])
+            )
+        )
+
+        try await controller.loadInitialThreads()
+        _ = await controller.refreshDesktopActivity()
+        let snapshot = controller.prepareSnapshot().snapshot
+
+        XCTAssertTrue(snapshot.projectSections.first?.threads.first?.hasUnreadContent ?? false)
+        XCTAssertEqual(snapshot.overallStatus, .idle)
+    }
+
     func testRefreshThreadsFallsBackToFolderNameWhenProjectCatalogLoadFails() async throws {
         let controller = makeController(
             recentThreadResponses: [

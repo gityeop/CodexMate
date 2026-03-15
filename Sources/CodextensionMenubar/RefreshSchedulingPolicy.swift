@@ -18,11 +18,19 @@ struct RefreshSchedulingPolicy: Equatable {
 
     static func current(
         isMenuOpen: Bool,
-        overallStatus: AppStateStore.OverallStatus
+        overallStatus: AppStateStore.OverallStatus,
+        hasRecentThreads: Bool
     ) -> RefreshSchedulingPolicy {
         if isMenuOpen {
             return RefreshSchedulingPolicy(
                 desktopActivityInterval: Interval.fastDesktopActivity,
+                threadListInterval: Interval.menuThreadList
+            )
+        }
+
+        if !hasRecentThreads {
+            return RefreshSchedulingPolicy(
+                desktopActivityInterval: Interval.idleDesktopActivity,
                 threadListInterval: Interval.menuThreadList
             )
         }

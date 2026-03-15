@@ -333,7 +333,54 @@ final class AppStateStoreTests: XCTestCase {
         XCTAssertEqual(store.recentThreads.first?.status, .running)
         XCTAssertEqual(store.recentThreads.first?.updatedAt, Date(timeIntervalSince1970: 100))
         XCTAssertEqual(store.recentThreads.first?.statusUpdatedAt, Date(timeIntervalSince1970: 200))
+        XCTAssertEqual(store.recentThreads.first?.activityUpdatedAt, Date(timeIntervalSince1970: 200))
         XCTAssertFalse(store.recentThreads.first?.isWatched ?? true)
+    }
+
+    func testIdleThreadActivityUpdatedAtPrefersTerminalActivity() {
+        var store = AppStateStore()
+        store.replaceRecentThreads(with: [thread(id: "thread-1", updatedAt: 100, status: .notLoaded)])
+
+        store.apply(
+            desktopSnapshot: CodexDesktopRuntimeSnapshot(
+                activeTurnCount: 1,
+                runningThreadIDs: ["thread-1"]
+            ),
+            observedAt: Date(timeIntervalSince1970: 200)
+        )
+        store.apply(desktopCompletionHints: [
+            "thread-1": Date(timeIntervalSince1970: 300)
+        ])
+
+        XCTAssertEqual(store.recentThreads.first?.displayStatus, .idle)
+        XCTAssertEqual(store.recentThreads.first?.updatedAt, Date(timeIntervalSince1970: 100))
+        XCTAssertEqual(store.recentThreads.first?.activityUpdatedAt, Date(timeIntervalSince1970: 300))
+    }
+
+    func testIdleThreadActivityUpdatedAtDoesNotKeepStaleRuntimeHeartbeat() {
+        var store = AppStateStore()
+        store.replaceRecentThreads(with: [thread(id: "thread-1", updatedAt: 100, status: .notLoaded)])
+
+        store.apply(
+            desktopSnapshot: CodexDesktopRuntimeSnapshot(
+                activeTurnCount: 1,
+                runningThreadIDs: ["thread-1"]
+            ),
+            observedAt: Date(timeIntervalSince1970: 200)
+        )
+        store.replaceRecentThreads(with: [
+            thread(id: "thread-1", updatedAt: 150, status: .idle)
+        ])
+        store.apply(
+            desktopSnapshot: CodexDesktopRuntimeSnapshot(
+                activeTurnCount: 0,
+                runningThreadIDs: []
+            ),
+            observedAt: Date(timeIntervalSince1970: 300)
+        )
+
+        XCTAssertEqual(store.recentThreads.first?.displayStatus, .idle)
+        XCTAssertEqual(store.recentThreads.first?.activityUpdatedAt, Date(timeIntervalSince1970: 150))
     }
 
     func testReplaceRecentThreadsPreservesNewerRunningOverlayAgainstStaleIdlePayload() {
@@ -543,6 +590,22 @@ final class AppStateStoreTests: XCTestCase {
 
         XCTAssertEqual(store.recentThreads.first?.status, .running)
         XCTAssertEqual(store.recentThreads.first?.displayStatus, .running)
+    }
+
+    func testServerRequestResolvedRefreshesThreadUpdatedAt() {
+        var store = AppStateStore()
+        store.replaceRecentThreads(with: [thread(id: "thread-1", updatedAt: 100, status: .idle)])
+        store.apply(serverRequest: .toolUserInput(
+            ToolRequestUserInputRequest(threadId: "thread-1", turnId: "turn-1", itemId: "item-1")
+        ))
+
+        usleep(10_000)
+
+        store.apply(notification: .serverRequestResolved(
+            ServerRequestResolvedNotification(threadId: "thread-1")
+        ))
+
+        XCTAssertEqual(store.recentThreads.first?.updatedAt, store.recentThreads.first?.statusUpdatedAt)
     }
 
     func testActiveFlagWaitingOnUserInputMapsToWaitingForInput() {
