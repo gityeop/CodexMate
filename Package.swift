@@ -5,6 +5,7 @@ import PackageDescription
 
 let package = Package(
     name: "CodextensionMenubar",
+    defaultLocalization: "en",
     platforms: [
         .macOS(.v13),
     ],
@@ -14,9 +15,20 @@ let package = Package(
             targets: ["CodextensionMenubar"]
         ),
     ],
+    dependencies: [
+        .package(url: "https://github.com/sindresorhus/KeyboardShortcuts.git", from: "1.9.4"),
+        .package(url: "https://github.com/sparkle-project/Sparkle.git", exact: "2.9.0"),
+    ],
     targets: [
         .executableTarget(
-            name: "CodextensionMenubar"
+            name: "CodextensionMenubar",
+            dependencies: [
+                "KeyboardShortcuts",
+                "Sparkle",
+            ],
+            resources: [
+                .process("Resources"),
+            ]
         ),
         .testTarget(
             name: "CodextensionMenubarTests",

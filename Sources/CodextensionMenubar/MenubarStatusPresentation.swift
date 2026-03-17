@@ -15,26 +15,15 @@ struct MenubarStatusPresentation {
             enum Kind: Equatable {
                 case approval
                 case error
-
-                var label: String {
-                    switch self {
-                    case .approval:
-                        return "Approval"
-                    case .error:
-                        return "Error"
-                    }
-                }
             }
 
             let kind: Kind
             let text: String
-
-            var displayText: String {
-                "\(kind.label): \(text)"
-            }
         }
 
+        let headerTitle: String?
         let worktreeDisplayName: String?
+        let worktreeLine: String?
         let title: String?
         let details: [Detail]
         let preview: String?
@@ -42,15 +31,15 @@ struct MenubarStatusPresentation {
         var lines: [String] {
             var lines: [String] = []
 
-            if let worktreeDisplayName {
-                lines.append("Worktree: \(worktreeDisplayName)")
+            if let worktreeLine {
+                lines.append(worktreeLine)
             }
 
             if let title {
                 lines.append(title)
             }
 
-            lines.append(contentsOf: details.map(\.displayText))
+            lines.append(contentsOf: details.map(\.text))
 
             if let preview {
                 lines.append(preview)
@@ -68,9 +57,14 @@ struct MenubarStatusPresentation {
         return overallStatus.icon
     }
 
-    static func statusDisplayName(overallStatus: AppStateStore.OverallStatus, hasUnreadThreads: Bool) -> String {
+    static func statusDisplayName(
+        overallStatus: AppStateStore.OverallStatus,
+        hasUnreadThreads: Bool,
+        strings: AppStrings = .shared,
+        language: AppLanguage = .english
+    ) -> String {
         if hasUnreadThreads && overallStatus != .connecting && overallStatus != .running && overallStatus != .waitingForUser {
-            return "Unread"
+            return strings.text("status.unread", language: language)
         }
 
         return overallStatus.displayName
@@ -87,37 +81,71 @@ struct MenubarStatusPresentation {
     static func projectSectionTitle(
         displayName: String,
         threadCount: Int,
-        maxDisplayNameLength: Int? = nil
+        maxDisplayNameLength: Int? = nil,
+        strings: AppStrings = .shared,
+        language: AppLanguage = .english
     ) -> String {
-        let suffix = threadCount == 1 ? "thread" : "threads"
-        return "\(truncated(displayName, maxLength: maxDisplayNameLength)) | \(threadCount) \(suffix)"
+        let key = threadCount == 1 ? "menu.projectSection.one" : "menu.projectSection.other"
+        return strings.format(
+            key,
+            language: language,
+            truncated(displayName, maxLength: maxDisplayNameLength),
+            Int64(threadCount)
+        )
     }
 
-    static func threadTooltipContent(worktreeDisplayName: String, thread: AppStateStore.ThreadRow) -> ThreadTooltipContent {
+    static func threadTooltipContent(
+        worktreeDisplayName: String,
+        thread: AppStateStore.ThreadRow,
+        strings: AppStrings = .shared,
+        language: AppLanguage = .english
+    ) -> ThreadTooltipContent {
         let title = normalizedLine(thread.displayTitle)
         let preview = normalizedLine(thread.preview)
         var details: [ThreadTooltipContent.Detail] = []
 
         if thread.pendingRequestKind == .approval,
            let reason = normalizedLine(thread.pendingRequestReason) {
-            details.append(ThreadTooltipContent.Detail(kind: .approval, text: reason))
+            details.append(
+                ThreadTooltipContent.Detail(
+                    kind: .approval,
+                    text: strings.format("tooltip.detail.approval", language: language, reason)
+                )
+            )
         }
 
         if case let .failed(message?) = thread.displayStatus,
            let message = normalizedLine(message) {
-            details.append(ThreadTooltipContent.Detail(kind: .error, text: message))
+            details.append(
+                ThreadTooltipContent.Detail(
+                    kind: .error,
+                    text: strings.format("tooltip.detail.error", language: language, message)
+                )
+            )
         }
 
         return ThreadTooltipContent(
+            headerTitle: strings.text("tooltip.worktreeHeader", language: language),
             worktreeDisplayName: normalizedLine(worktreeDisplayName),
+            worktreeLine: strings.format("tooltip.worktreeLine", language: language, worktreeDisplayName),
             title: title,
             details: details,
             preview: preview == title ? nil : preview
         )
     }
 
-    static func threadTooltip(worktreeDisplayName: String, thread: AppStateStore.ThreadRow) -> String {
-        threadTooltipContent(worktreeDisplayName: worktreeDisplayName, thread: thread)
+    static func threadTooltip(
+        worktreeDisplayName: String,
+        thread: AppStateStore.ThreadRow,
+        strings: AppStrings = .shared,
+        language: AppLanguage = .english
+    ) -> String {
+        threadTooltipContent(
+            worktreeDisplayName: worktreeDisplayName,
+            thread: thread,
+            strings: strings,
+            language: language
+        )
             .lines
             .joined(separator: "\n")
     }

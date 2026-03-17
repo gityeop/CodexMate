@@ -1,4 +1,6 @@
 import AppKit
+import Combine
+import KeyboardShortcuts
 import UserNotifications
 
 @MainActor
@@ -32,10 +34,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private let menu = NSMenu()
     private let relativeDateFormatter = RelativeDateTimeFormatter()
+    private let preferences = AppPreferencesStore()
+    private let strings = AppStrings.shared
     private let client = CodexAppServerClient()
     private let desktopActivityService = DesktopActivityService()
     private let desktopStateReader = CodexDesktopStateReader()
     private let projectCatalogReader = CodexDesktopProjectCatalogReader()
+    private let launchAtLoginService = LaunchAtLoginService()
+    private let updaterService = UpdaterService()
     private let unreadIndicatorImage = AppDelegate.makeUnreadIndicatorImage()
     private let runningIndicatorImage = AppDelegate.makeTextIndicatorImage("⏳")
     private let waitingForUserIndicatorImage = AppDelegate.makeTextIndicatorImage("💬")
@@ -76,15 +82,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var hoverTooltipWorkItem: DispatchWorkItem?
     private var highlightedThreadID: String?
     private var foregroundRefreshObserverTokens: [NSObjectProtocol] = []
+    private var cancellables: Set<AnyCancellable> = []
     private var foregroundRefreshThrottle = ForegroundRefreshThrottle(
         minimumInterval: ForegroundRefreshPolicy.minimumInterval
+    )
+    private lazy var settingsViewModel = SettingsViewModel(
+        preferences: preferences,
+        strings: strings,
+        launchAtLoginService: launchAtLoginService,
+        updaterService: updaterService
+    )
+    private lazy var settingsWindowController = SettingsWindowController(viewModel: settingsViewModel)
+    private lazy var menuToggleController = MenuToggleController(
+        openMenu: { [weak self] in
+            self?.openMenu()
+        },
+        closeMenu: { [weak self] in
+            self?.closeMenu()
+        }
     )
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         menu.autoenablesItems = false
         menu.delegate = self
-        statusItem.menu = menu
-        statusItem.button?.title = controller.overallStatus.icon
+        configureMainMenu()
+        configureStatusItemButton()
+        configurePreferencesObservers()
+        configureGlobalShortcut()
+        relativeDateFormatter.locale = preferences.locale
 
         configureClientCallbacks()
         configureForegroundRefreshObservers()
@@ -102,6 +127,76 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         Task {
             await client.stop()
+        }
+    }
+
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        false
+    }
+
+    private func configureStatusItemButton() {
+        statusItem.menu = menu
+        statusItem.button?.title = controller.overallStatus.icon
+    }
+
+    private func configureMainMenu() {
+        NSApp.mainMenu = buildMainMenu()
+    }
+
+    private func buildMainMenu() -> NSMenu {
+        let mainMenu = NSMenu()
+        let appMenuItem = NSMenuItem()
+        mainMenu.addItem(appMenuItem)
+
+        let appMenu = NSMenu()
+        let settingsItem = NSMenuItem(
+            title: strings.text("menu.settings", language: preferences.language),
+            action: #selector(openSettingsAction),
+            keyEquivalent: ","
+        )
+        settingsItem.target = self
+        appMenu.addItem(settingsItem)
+        appMenu.addItem(.separator())
+
+        let quitTitle = "\(strings.text("menu.quit", language: preferences.language)) \(applicationDisplayName)"
+        let quitItem = NSMenuItem(title: quitTitle, action: #selector(quit), keyEquivalent: "q")
+        quitItem.target = self
+        appMenu.addItem(quitItem)
+
+        appMenuItem.submenu = appMenu
+        return mainMenu
+    }
+
+    private var applicationDisplayName: String {
+        if let displayName = Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String,
+           !displayName.isEmpty {
+            return displayName
+        }
+
+        if let bundleName = Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String,
+           !bundleName.isEmpty {
+            return bundleName
+        }
+
+        return ProcessInfo.processInfo.processName
+    }
+
+    private func configurePreferencesObservers() {
+        preferences.$language
+            .sink { [weak self] _ in
+                guard let self else { return }
+                self.relativeDateFormatter.locale = self.preferences.locale
+                NSApp.mainMenu = self.buildMainMenu()
+                self.renderMenu()
+            }
+            .store(in: &cancellables)
+    }
+
+    private func configureGlobalShortcut() {
+        KeyboardShortcuts.onKeyUp(for: .toggleMenuBarDropdown) { [weak self] in
+            Task { @MainActor [weak self] in
+                self?.menuToggleController.toggleMenu()
+            }
         }
     }
 
@@ -265,10 +360,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 guard let self else { return }
                 controller.apply(notification: .turnCompleted(notification))
                 requestDesktopActivityRefresh()
-                sendNotification(
-                    title: "Codex turn completed",
-                    body: controller.notificationBody(forThreadID: notification.threadId, fallback: notification.turn.status.displayName)
-                )
+                if preferences.completionNotificationsEnabled {
+                    sendNotification(
+                        title: strings.text("notification.turnCompleted.title", language: preferences.language),
+                        body: controller.notificationBody(
+                            forThreadID: notification.threadId,
+                            fallback: strings.text("notification.turnCompleted.bodyFallback", language: preferences.language)
+                        )
+                    )
+                }
             }
         case "error":
             decodeAndApply(payload, as: ErrorNotificationPayload.self) { [weak self] notification in
@@ -276,10 +376,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 controller.apply(notification: .error(notification))
                 requestDesktopActivityRefresh()
 
-                if !notification.willRetry {
+                if !notification.willRetry && preferences.failureNotificationsEnabled {
                     sendNotification(
-                        title: "Codex error",
-                        body: controller.notificationBody(forThreadID: notification.threadId, fallback: notification.error.message)
+                        title: strings.text("notification.error.title", language: preferences.language),
+                        body: controller.notificationBody(
+                            forThreadID: notification.threadId,
+                            fallback: notification.error.message.isEmpty
+                                ? strings.text("notification.error.bodyFallback", language: preferences.language)
+                                : notification.error.message
+                        )
                     )
                 }
             }
@@ -308,30 +413,45 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 guard let self else { return }
                 controller.apply(serverRequest: .toolUserInput(request))
                 controller.recordDiagnostic("user-input request method=\(method) thread=\(request.threadId.prefix(8)) turn=\(request.turnId.prefix(8))")
-                sendNotification(
-                    title: "Codex needs input",
-                    body: controller.notificationBody(forThreadID: request.threadId, fallback: "A watched thread is waiting for user input.")
-                )
+                if preferences.attentionNotificationsEnabled {
+                    sendNotification(
+                        title: strings.text("notification.needsInput.title", language: preferences.language),
+                        body: controller.notificationBody(
+                            forThreadID: request.threadId,
+                            fallback: strings.text("notification.needsInput.bodyFallback", language: preferences.language)
+                        )
+                    )
+                }
             }
         case "item/commandExecution/requestApproval", "commandExecution/requestApproval":
             decodeAndApply(payload, as: ApprovalRequestPayload.self) { [weak self] request in
                 guard let self else { return }
                 controller.apply(serverRequest: .approval(request))
                 controller.recordDiagnostic("approval request method=\(method) thread=\(request.threadId.prefix(8)) turn=\(request.turnId.prefix(8))")
-                sendNotification(
-                    title: "Codex approval required",
-                    body: controller.notificationBody(forThreadID: request.threadId, fallback: "A watched thread is waiting for approval.")
-                )
+                if preferences.attentionNotificationsEnabled {
+                    sendNotification(
+                        title: strings.text("notification.approval.title", language: preferences.language),
+                        body: controller.notificationBody(
+                            forThreadID: request.threadId,
+                            fallback: strings.text("notification.approval.bodyFallback", language: preferences.language)
+                        )
+                    )
+                }
             }
         case "item/fileChange/requestApproval", "fileChange/requestApproval":
             decodeAndApply(payload, as: ApprovalRequestPayload.self) { [weak self] request in
                 guard let self else { return }
                 controller.apply(serverRequest: .approval(request))
                 controller.recordDiagnostic("approval request method=\(method) thread=\(request.threadId.prefix(8)) turn=\(request.turnId.prefix(8))")
-                sendNotification(
-                    title: "Codex approval required",
-                    body: controller.notificationBody(forThreadID: request.threadId, fallback: "A watched thread is waiting for approval.")
-                )
+                if preferences.attentionNotificationsEnabled {
+                    sendNotification(
+                        title: strings.text("notification.approval.title", language: preferences.language),
+                        body: controller.notificationBody(
+                            forThreadID: request.threadId,
+                            fallback: strings.text("notification.approval.bodyFallback", language: preferences.language)
+                        )
+                    )
+                }
             }
         default:
             break
@@ -456,7 +576,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.removeAllItems()
 
         if snapshot.projectSections.isEmpty {
-            menu.addItem(makeStaticItem(title: "No recent threads"))
+            menu.addItem(makeStaticItem(title: strings.text("menu.noRecentThreads", language: preferences.language)))
         } else {
             for (index, section) in snapshot.projectSections.enumerated() {
                 if index > 0 {
@@ -469,7 +589,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 for thread in section.threads {
                     let tooltipContent = MenubarStatusPresentation.threadTooltipContent(
                         worktreeDisplayName: section.section.displayName,
-                        thread: thread.thread
+                        thread: thread.thread,
+                        strings: strings,
+                        language: preferences.language
                     )
                     let item = makeActionItem(title: menuTitle(for: thread.thread), action: #selector(openThread(_:)))
                     item.representedObject = thread.id
@@ -495,14 +617,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             hideHoverTooltip()
         }
         menu.addItem(.separator())
-        menu.addItem(makeActionItem(title: "Refresh Threads", action: #selector(refreshThreadsAction)))
+        menu.addItem(
+            makeActionItem(
+                title: strings.text("menu.refreshThreads", language: preferences.language),
+                action: #selector(refreshThreadsAction)
+            )
+        )
 
-        let watchItem = makeActionItem(title: "Watch Latest Thread", action: #selector(watchLatestThreadAction))
+        let watchItem = makeActionItem(
+            title: strings.text("menu.watchLatestThread", language: preferences.language),
+            action: #selector(watchLatestThreadAction)
+        )
         watchItem.isEnabled = snapshot.isWatchLatestThreadEnabled
         menu.addItem(watchItem)
 
         menu.addItem(.separator())
-        menu.addItem(makeActionItem(title: "Quit", action: #selector(quit)))
+        let settingsItem = makeActionItem(
+            title: strings.text("menu.settings", language: preferences.language),
+            action: #selector(openSettingsAction)
+        )
+        settingsItem.keyEquivalent = ","
+        settingsItem.keyEquivalentModifierMask = [.command]
+        menu.addItem(settingsItem)
+        menu.addItem(
+            makeActionItem(
+                title: strings.text("menu.quit", language: preferences.language),
+                action: #selector(quit)
+            )
+        )
         scheduleRefreshTimerIfNeeded()
     }
 
@@ -546,7 +688,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         MenubarStatusPresentation.projectSectionTitle(
             displayName: section.displayName,
             threadCount: section.threads.count,
-            maxDisplayNameLength: ThreadListDisplay.maxProjectDisplayNameLength
+            maxDisplayNameLength: ThreadListDisplay.maxProjectDisplayNameLength,
+            strings: strings,
+            language: preferences.language
         )
     }
 
@@ -894,6 +1038,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return results
     }
 
+    private func openMenu() {
+        statusItem.button?.performClick(nil)
+    }
+
+    private func closeMenu() {
+        menu.cancelTracking()
+    }
+
     @objc
     private func refreshThreadsAction() {
         requestDesktopActivityRefresh()
@@ -905,6 +1057,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Task {
             await watchLatestThread()
         }
+    }
+
+    @objc
+    private func openSettingsAction() {
+        launchAtLoginService.refresh()
+        updaterService.refresh()
+        settingsWindowController.showWindow(nil)
     }
 
     @objc
@@ -967,6 +1126,7 @@ extension AppDelegate: NSMenuDelegate {
 
         hideHoverTooltip()
         isMenuOpen = true
+        menuToggleController.menuWillOpen()
         scheduleRefreshTimerIfNeeded()
         requestDesktopActivityRefresh()
         requestThreadRefresh()
@@ -983,6 +1143,7 @@ extension AppDelegate: NSMenuDelegate {
 
         hideHoverTooltip()
         isMenuOpen = false
+        menuToggleController.menuDidClose()
         scheduleRefreshTimerIfNeeded()
     }
 }

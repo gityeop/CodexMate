@@ -186,7 +186,10 @@ struct CodexDesktopStateReader {
                     'updatedAt', updated_at,
                     'cwd', cwd,
                     'name', title,
-                    'path', rollout_path
+                    'path', rollout_path,
+                    'source', source,
+                    'agentRole', agent_role,
+                    'agentNickname', agent_nickname
                 )
                 FROM threads
                 WHERE archived = 0
@@ -220,7 +223,10 @@ struct CodexDesktopStateReader {
                     status: .notLoaded,
                     cwd: cwd,
                     name: object["name"] as? String,
-                    path: object["path"] as? String
+                    path: object["path"] as? String,
+                    source: object["source"] as? String,
+                    agentRole: object["agentRole"] as? String,
+                    agentNickname: object["agentNickname"] as? String
                 )
             )
         }
@@ -688,18 +694,16 @@ struct CodexDesktopStateReader {
         ]
 
         let outputPipe = Pipe()
-        let errorPipe = Pipe()
         process.standardOutput = outputPipe
-        process.standardError = errorPipe
+        process.standardError = outputPipe
 
         try process.run()
-        process.waitUntilExit()
 
         let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
-        let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
 
         guard process.terminationStatus == 0 else {
-            let message = String(data: errorData, encoding: .utf8)?
+            let message = String(data: outputData, encoding: .utf8)?
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             throw ReaderError.queryFailed(message: message ?? "sqlite3 exited with status \(process.terminationStatus)")
         }

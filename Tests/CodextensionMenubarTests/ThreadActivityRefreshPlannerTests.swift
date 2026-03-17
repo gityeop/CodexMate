@@ -2,7 +2,7 @@ import XCTest
 @testable import CodextensionMenubar
 
 final class ThreadActivityRefreshPlannerTests: XCTestCase {
-    func testShouldRefreshThreadsWhenConversationActivityIncludesUnknownThread() {
+    func testShouldNotRefreshThreadsWhenUnknownThreadWasOnlyViewed() {
         let shouldRefresh = ThreadActivityRefreshPlanner.shouldRefreshThreads(
             recentThreadIDs: ["thread-1", "thread-2"],
             latestViewedAtByThreadID: [
@@ -13,7 +13,7 @@ final class ThreadActivityRefreshPlannerTests: XCTestCase {
             discoveryLookbackInterval: 30
         )
 
-        XCTAssertTrue(shouldRefresh)
+        XCTAssertFalse(shouldRefresh)
     }
 
     func testShouldRefreshThreadsWhenStateSnapshotIncludesUnknownRecentActivity() {

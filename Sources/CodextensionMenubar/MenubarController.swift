@@ -156,7 +156,7 @@ final class MenubarController {
     }
 
     var recentThreads: [AppStateStore.ThreadRow] {
-        state.recentThreads
+        state.visibleRecentThreads
     }
 
     var persistedThreadReadMarkers: [String: TimeInterval] {
@@ -172,13 +172,13 @@ final class MenubarController {
     }
 
     func loadInitialThreads() async throws {
-        let threads = try await loadRecentThreads(configuration.initialFetchLimit)
+        let threads = try await hydratedRecentThreads(limit: configuration.initialFetchLimit)
         projectCatalog = (try? loadProjectCatalog()) ?? .empty
         state.replaceRecentThreads(with: threads)
     }
 
     func refreshThreads() async throws -> MenubarControllerEffects {
-        let threads = try await loadRecentThreads(configuration.maxTrackedThreads)
+        let threads = try await hydratedRecentThreads(limit: configuration.maxTrackedThreads)
         let effects = recordDiscoveredThreadRefreshResult(threads: threads)
         projectCatalog = (try? loadProjectCatalog()) ?? .empty
         state.replaceRecentThreads(with: threads)
@@ -189,11 +189,11 @@ final class MenubarController {
         pendingDiscoveredThreads.prune(now: now())
 
         let candidateSessionPaths = Dictionary(
-            uniqueKeysWithValues: state.recentThreads.map { ($0.id, $0.sessionPath) }
+            uniqueKeysWithValues: state.visibleRecentThreads.map { ($0.id, $0.sessionPath) }
         )
         let activityObservedAt = now()
         let update = await loadDesktopActivity(candidateSessionPaths, activityObservedAt)
-        let recentThreadIDs = Set(state.recentThreads.map(\.id))
+        let recentThreadIDs = Set(state.visibleRecentThreads.map(\.id))
         let discoveredThreadIDs = ThreadActivityRefreshPlanner.discoveredThreadIDsNeedingRefresh(
             recentThreadIDs: recentThreadIDs,
             latestViewedAtByThreadID: update.latestViewedAtByThreadID,
@@ -222,7 +222,7 @@ final class MenubarController {
             effects.shouldRequestThreadRefresh = true
 
             let diagnostic = "desktop discovered new threads=\(debugThreadIDs(newlyDiscoveredThreadIDs)) "
-                + "recent=\(state.recentThreads.count) viewed=\(update.latestViewedAtByThreadID.count)"
+                + "recent=\(state.visibleRecentThreads.count) viewed=\(update.latestViewedAtByThreadID.count)"
             state.recordDiagnostic(diagnostic)
             effects.diagnostics.append(diagnostic)
         }
@@ -281,7 +281,7 @@ final class MenubarController {
                 overallStatus: state.overallStatus,
                 hasUnreadThreads: hasUnreadThreads,
                 projectSections: snapshotSections,
-                isWatchLatestThreadEnabled: !state.recentThreads.isEmpty
+                isWatchLatestThreadEnabled: !state.visibleRecentThreads.isEmpty
             ),
             didChangeReadMarkers: didChangeReadMarkers
         )
@@ -357,7 +357,7 @@ final class MenubarController {
     private func synchronizeThreadReadMarkers() -> Bool {
         var didChange = false
 
-        for thread in state.recentThreads {
+        for thread in state.visibleRecentThreads {
             if threadReadMarkers.seedIfNeeded(threadID: thread.id) {
                 didChange = true
             }
@@ -369,7 +369,7 @@ final class MenubarController {
     private func synchronizeThreadReadMarkers(from latestViewedAtByThreadID: [String: Date]) {
         guard !latestViewedAtByThreadID.isEmpty else { return }
 
-        for thread in state.recentThreads {
+        for thread in state.visibleRecentThreads {
             let viewedAt = latestViewedAtByThreadID[thread.id]
             _ = threadReadMarkers.markReadIfViewedAfterLastTerminalActivity(
                 threadID: thread.id,
@@ -383,9 +383,28 @@ final class MenubarController {
         now: Date,
         additionalTrackedThreadIDs: Set<String>
     ) -> Bool {
-        let trackedThreadIDs = Set(state.recentThreads.map(\.id)).union(additionalTrackedThreadIDs)
+        let trackedThreadIDs = Set(state.visibleRecentThreads.map(\.id)).union(additionalTrackedThreadIDs)
         let minimumTimestamp = now.addingTimeInterval(-configuration.threadReadMarkerRetentionSeconds).timeIntervalSince1970
         return threadReadMarkers.prune(keeping: trackedThreadIDs, minimumTimestamp: minimumTimestamp)
+    }
+
+    private func hydratedRecentThreads(limit: Int) async throws -> [CodexThread] {
+        let threads = try await loadRecentThreads(limit)
+        guard !threads.isEmpty else {
+            return []
+        }
+
+        let metadataByID = Dictionary(
+            uniqueKeysWithValues: (try? loadThreadsByID(Set(threads.map(\.id))))?.map { ($0.id, $0) } ?? []
+        )
+
+        return threads.map { thread in
+            guard let metadata = metadataByID[thread.id] else {
+                return thread
+            }
+
+            return thread.mergingMetadata(from: metadata)
+        }
     }
 
     private func debugThreadIDs<S: Sequence>(_ threadIDs: S) -> String where S.Element == String {

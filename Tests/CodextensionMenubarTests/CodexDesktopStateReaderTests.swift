@@ -166,6 +166,65 @@ final class CodexDesktopStateReaderTests: XCTestCase {
         XCTAssertTrue(snapshot.approvalThreadIDs.isEmpty)
     }
 
+    func testThreadsLoadSubagentMetadata() throws {
+        let tempDirectoryURL = FileManager.default.temporaryDirectory
+            .appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: tempDirectoryURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDirectoryURL) }
+
+        let databaseURL = tempDirectoryURL.appending(path: "state.sqlite")
+        try createStateDatabase(
+            at: databaseURL,
+            sql: """
+            CREATE TABLE threads (
+                id TEXT PRIMARY KEY,
+                first_user_message TEXT NOT NULL DEFAULT '',
+                title TEXT NOT NULL DEFAULT '',
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                cwd TEXT NOT NULL,
+                rollout_path TEXT,
+                source TEXT NOT NULL DEFAULT 'vscode',
+                agent_role TEXT,
+                agent_nickname TEXT,
+                archived INTEGER NOT NULL DEFAULT 0
+            );
+            INSERT INTO threads (
+                id,
+                first_user_message,
+                title,
+                created_at,
+                updated_at,
+                cwd,
+                rollout_path,
+                source,
+                agent_role,
+                agent_nickname,
+                archived
+            ) VALUES (
+                'thread-1',
+                'Preview',
+                'Thread 1',
+                150,
+                195,
+                '/tmp/project',
+                '/tmp/thread-1.jsonl',
+                '{"subagent":{"thread_spawn":{"parent_thread_id":"parent-1","depth":1,"agent_nickname":"Harvey","agent_role":"explorer"}}}',
+                'explorer',
+                'Harvey',
+                0
+            );
+            """
+        )
+
+        let reader = CodexDesktopStateReader(stateDatabaseURLOverride: databaseURL)
+        let threads = try reader.threads(threadIDs: ["thread-1"])
+
+        XCTAssertEqual(threads.first?.agentRole, "explorer")
+        XCTAssertEqual(threads.first?.agentNickname, "Harvey")
+        XCTAssertTrue(threads.first?.isSubagent ?? false)
+    }
+
     func testSnapshotDoesNotTreatPendingSessionTaskAsRunning() throws {
         let tempDirectoryURL = FileManager.default.temporaryDirectory
             .appending(path: UUID().uuidString)

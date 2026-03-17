@@ -79,6 +79,9 @@ struct CodexThread: Decodable, Equatable {
     let cwd: String
     let name: String?
     let path: String?
+    let source: String?
+    let agentRole: String?
+    let agentNickname: String?
 
     init(
         id: String,
@@ -88,7 +91,10 @@ struct CodexThread: Decodable, Equatable {
         status: CodexThreadStatus,
         cwd: String,
         name: String?,
-        path: String? = nil
+        path: String? = nil,
+        source: String? = nil,
+        agentRole: String? = nil,
+        agentNickname: String? = nil
     ) {
         self.id = id
         self.preview = preview
@@ -98,6 +104,9 @@ struct CodexThread: Decodable, Equatable {
         self.cwd = cwd
         self.name = name
         self.path = path
+        self.source = source
+        self.agentRole = agentRole
+        self.agentNickname = agentNickname
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -109,6 +118,9 @@ struct CodexThread: Decodable, Equatable {
         case cwd
         case name
         case path
+        case source
+        case agentRole
+        case agentNickname
     }
 
     init(from decoder: Decoder) throws {
@@ -122,6 +134,9 @@ struct CodexThread: Decodable, Equatable {
         cwd = try container.decode(String.self, forKey: .cwd)
         name = try container.decodeIfPresent(String.self, forKey: .name)
         path = try container.decodeIfPresent(String.self, forKey: .path)
+        source = try container.decodeIfPresent(String.self, forKey: .source)
+        agentRole = try container.decodeIfPresent(String.self, forKey: .agentRole)
+        agentNickname = try container.decodeIfPresent(String.self, forKey: .agentNickname)
     }
 }
 
@@ -239,6 +254,35 @@ struct ThreadClosedNotification: Decodable, Equatable {
 }
 
 extension CodexThread {
+    var isSubagent: Bool {
+        guard let source,
+              source.first == "{",
+              let data = source.data(using: .utf8),
+              let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let subagent = payload["subagent"] as? [String: Any]
+        else {
+            return false
+        }
+
+        return subagent["thread_spawn"] != nil
+    }
+
+    func mergingMetadata(from metadata: CodexThread) -> CodexThread {
+        CodexThread(
+            id: id,
+            preview: preview,
+            createdAt: createdAt,
+            updatedAt: updatedAt,
+            status: status,
+            cwd: cwd,
+            name: name ?? metadata.name,
+            path: path ?? metadata.path,
+            source: source ?? metadata.source,
+            agentRole: agentRole ?? metadata.agentRole,
+            agentNickname: agentNickname ?? metadata.agentNickname
+        )
+    }
+
     var updatedDate: Date {
         Date(timeIntervalSince1970: TimeInterval(updatedAt))
     }

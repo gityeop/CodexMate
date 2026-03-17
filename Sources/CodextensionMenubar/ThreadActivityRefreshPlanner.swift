@@ -8,20 +8,8 @@ struct ThreadActivityRefreshPlanner {
         now: Date = Date(),
         discoveryLookbackInterval: TimeInterval = 90
     ) -> Set<String> {
-        let cutoff = now.addingTimeInterval(-max(1, discoveryLookbackInterval))
         let stateDiscoveredThreadIDs = recentActivityThreadIDs.subtracting(recentThreadIDs)
-
-        let viewedDiscoveredThreadIDs = Set<String>(
-            latestViewedAtByThreadID.compactMap { threadID, viewedAt in
-                guard !recentThreadIDs.contains(threadID), viewedAt >= cutoff else {
-                    return nil
-                }
-
-                return threadID
-            }
-        )
-
-        return stateDiscoveredThreadIDs.union(viewedDiscoveredThreadIDs)
+        return stateDiscoveredThreadIDs
     }
 
     static func shouldRefreshThreads(

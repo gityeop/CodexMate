@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0"
+     xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle"
+     xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>CodextensionMenubar Updates</title>
+    <link>__RELEASES_URL__</link>
+    <description>CodextensionMenubar release feed</description>
+    <language>en</language>
+    <item>
+      <title>Version __APP_SHORT_VERSION__</title>
+      <sparkle:version>__APP_VERSION__</sparkle:version>
+      <sparkle:shortVersionString>__APP_SHORT_VERSION__</sparkle:shortVersionString>
+      <pubDate>__PUB_DATE__</pubDate>
+      <enclosure
+          url="__DOWNLOAD_URL__"
+          sparkle:edSignature="__ED_SIGNATURE__"
+          length="__DOWNLOAD_LENGTH__"
+          type="application/octet-stream" />
+      <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+      <description><![CDATA[
+        __RELEASE_NOTES_HTML__
+      ]]></description>
+    </item>
+  </channel>
+</rss>

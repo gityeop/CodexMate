@@ -18,6 +18,7 @@ final class MenubarControllerIntegrationTests: XCTestCase {
                 [thread(id: "thread-a", updatedAt: 100, cwd: "/tmp/A/work")]
             ],
             metadataResponses: [
+                .success([]),
                 .success([thread(id: "thread-b", updatedAt: 200, cwd: "/tmp/B/work")])
             ],
             projectCatalog: .success(
@@ -36,6 +37,42 @@ final class MenubarControllerIntegrationTests: XCTestCase {
         XCTAssertTrue(effects.shouldRequestDesktopActivityRefresh)
         XCTAssertEqual(snapshot.projectSections.map(\.section.displayName), ["B", "A"])
         XCTAssertEqual(snapshot.projectSections.first?.threads.map(\.id), ["thread-b"])
+    }
+
+    func testRefreshDesktopActivityDoesNotDiscoverUnknownProjectFromViewOnlyActivity() async throws {
+        let controller = makeController(
+            desktopUpdates: [
+                desktopUpdate(
+                    runtimeSnapshot: CodexDesktopRuntimeSnapshot(
+                        activeTurnCount: 0,
+                        runningThreadIDs: []
+                    ),
+                    latestViewed: [
+                        "thread-b": Date(timeIntervalSince1970: 200)
+                    ]
+                )
+            ],
+            recentThreadResponses: [
+                [thread(id: "thread-a", updatedAt: 100, cwd: "/tmp/A/work")]
+            ],
+            metadataResponses: [
+                .success([thread(id: "thread-b", updatedAt: 200, cwd: "/tmp/B/work")])
+            ],
+            projectCatalog: .success(
+                CodexDesktopProjectCatalog(workspaceRoots: [
+                    .init(path: "/tmp/A", displayName: "A"),
+                    .init(path: "/tmp/B", displayName: "B")
+                ])
+            )
+        )
+
+        try await controller.loadInitialThreads()
+        let effects = await controller.refreshDesktopActivity()
+        let snapshot = controller.prepareSnapshot().snapshot
+
+        XCTAssertFalse(effects.shouldRequestThreadRefresh)
+        XCTAssertFalse(effects.shouldRequestDesktopActivityRefresh)
+        XCTAssertEqual(snapshot.projectSections.map(\.section.displayName), ["A"])
     }
 
     func testRefreshDesktopActivityKeepsPendingDiscoveryWhenMetadataIsMissingUntilThreadRefreshResolvesIt() async throws {
@@ -57,6 +94,7 @@ final class MenubarControllerIntegrationTests: XCTestCase {
                 ]
             ],
             metadataResponses: [
+                .success([]),
                 .success([])
             ],
             projectCatalog: .success(
@@ -210,6 +248,7 @@ final class MenubarControllerIntegrationTests: XCTestCase {
                 [thread(id: "thread-a", updatedAt: 100, cwd: "/tmp/A/work")]
             ],
             metadataResponses: [
+                .success([]),
                 .success([thread(id: "thread-b", updatedAt: 200, cwd: "/tmp/B/work")])
             ],
             projectCatalog: .success(
@@ -237,6 +276,58 @@ final class MenubarControllerIntegrationTests: XCTestCase {
 
         snapshot = controller.prepareSnapshot().snapshot
         XCTAssertFalse(snapshot.projectSections.flatMap(\.threads).first(where: { $0.id == "thread-b" })?.hasUnreadContent ?? true)
+    }
+
+    func testLoadInitialThreadsHidesSubagentThreadsUsingMetadataEnrichment() async throws {
+        let controller = makeController(
+            recentThreadResponses: [
+                [
+                    thread(id: "main-thread", updatedAt: 100, cwd: "/tmp/A/work"),
+                    thread(id: "subagent-thread", updatedAt: 200, cwd: "/tmp/A/work")
+                ]
+            ],
+            metadataResponses: [
+                .success([
+                    thread(id: "main-thread", updatedAt: 100, cwd: "/tmp/A/work"),
+                    subagentThread(id: "subagent-thread", updatedAt: 200, cwd: "/tmp/A/work")
+                ])
+            ],
+            projectCatalog: .success(
+                CodexDesktopProjectCatalog(workspaceRoots: [
+                    .init(path: "/tmp/A", displayName: "A")
+                ])
+            )
+        )
+
+        try await controller.loadInitialThreads()
+        let snapshot = controller.prepareSnapshot().snapshot
+
+        XCTAssertEqual(controller.recentThreads.map(\.id), ["main-thread"])
+        XCTAssertEqual(snapshot.projectSections.first?.threads.map(\.id), ["main-thread"])
+        XCTAssertTrue(snapshot.isWatchLatestThreadEnabled)
+    }
+
+    func testThreadStartedNotificationDoesNotExposeSubagentThreadInSnapshot() async throws {
+        let controller = makeController(
+            recentThreadResponses: [
+                [thread(id: "main-thread", updatedAt: 100, cwd: "/tmp/A/work")]
+            ],
+            projectCatalog: .success(
+                CodexDesktopProjectCatalog(workspaceRoots: [
+                    .init(path: "/tmp/A", displayName: "A")
+                ])
+            )
+        )
+
+        try await controller.loadInitialThreads()
+        controller.apply(notification: .threadStarted(
+            ThreadStartedNotification(thread: subagentThread(id: "subagent-thread", updatedAt: 200, cwd: "/tmp/A/work"))
+        ))
+
+        let snapshot = controller.prepareSnapshot().snapshot
+
+        XCTAssertEqual(controller.recentThreads.map(\.id), ["main-thread"])
+        XCTAssertEqual(snapshot.projectSections.first?.threads.map(\.id), ["main-thread"])
     }
 
     private func makeController(
@@ -283,7 +374,10 @@ final class MenubarControllerIntegrationTests: XCTestCase {
         id: String,
         updatedAt: Int,
         cwd: String,
-        status: CodexThreadStatus = .idle
+        status: CodexThreadStatus = .idle,
+        source: String? = nil,
+        agentRole: String? = nil,
+        agentNickname: String? = nil
     ) -> CodexThread {
         CodexThread(
             id: id,
@@ -292,7 +386,21 @@ final class MenubarControllerIntegrationTests: XCTestCase {
             updatedAt: updatedAt,
             status: status,
             cwd: cwd,
-            name: nil
+            name: nil,
+            source: source,
+            agentRole: agentRole,
+            agentNickname: agentNickname
+        )
+    }
+
+    private func subagentThread(id: String, updatedAt: Int, cwd: String) -> CodexThread {
+        thread(
+            id: id,
+            updatedAt: updatedAt,
+            cwd: cwd,
+            source: #"{"subagent":{"thread_spawn":{"parent_thread_id":"parent-thread","depth":1,"agent_nickname":"Harvey","agent_role":"explorer"}}}"#,
+            agentRole: "explorer",
+            agentNickname: "Harvey"
         )
     }
 }

@@ -186,6 +186,7 @@ private final class ThreadHoverTooltipView: NSView {
 
     func apply(content: MenubarStatusPresentation.ThreadTooltipContent) {
         headerStack.isHidden = content.worktreeDisplayName == nil
+        headerLabel.stringValue = content.headerTitle ?? ""
         worktreeLabel.stringValue = content.worktreeDisplayName ?? ""
 
         titleLabel.isHidden = content.title == nil
@@ -206,7 +207,7 @@ private final class ThreadHoverTooltipView: NSView {
     }
 
     private static func makeHeaderLabel() -> NSTextField {
-        let label = NSTextField(labelWithString: "WORKTREE")
+        let label = NSTextField(labelWithString: "")
         label.font = .systemFont(ofSize: 10, weight: .semibold)
         label.textColor = .tertiaryLabelColor
         return label
@@ -254,7 +255,7 @@ private final class ThreadHoverTooltipDetailView: NSView {
         label.translatesAutoresizingMaskIntoConstraints = false
         label.font = .systemFont(ofSize: 11, weight: .medium)
         label.textColor = style.text
-        label.stringValue = detail.displayText
+        label.stringValue = detail.text
         label.maximumNumberOfLines = 3
 
         addSubview(label)
