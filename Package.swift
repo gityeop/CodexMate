@@ -4,15 +4,15 @@
 import PackageDescription
 
 let package = Package(
-    name: "CodextensionMenubar",
+    name: "CodexMate",
     defaultLocalization: "en",
     platforms: [
         .macOS(.v13),
     ],
     products: [
         .executable(
-            name: "CodextensionMenubar",
-            targets: ["CodextensionMenubar"]
+            name: "CodexMate",
+            targets: ["CodexMate"]
         ),
     ],
     dependencies: [
@@ -21,18 +21,20 @@ let package = Package(
     ],
     targets: [
         .executableTarget(
-            name: "CodextensionMenubar",
+            name: "CodexMate",
             dependencies: [
                 "KeyboardShortcuts",
                 "Sparkle",
             ],
+            path: "Sources/CodexMate",
             resources: [
                 .process("Resources"),
             ]
         ),
         .testTarget(
-            name: "CodextensionMenubarTests",
-            dependencies: ["CodextensionMenubar"]
+            name: "CodexMateTests",
+            dependencies: ["CodexMate"],
+            path: "Tests/CodexMateTests"
         ),
     ]
 )

@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-APP_PATH="${1:-$ROOT_DIR/dist/CodextensionMenubar.app}"
+APP_PATH="${1:-$ROOT_DIR/dist/CodexMate.app}"
 ZIP_PATH="${APP_PATH:r}.zip"
 
 if [[ ! -d "$APP_PATH" ]]; then

@@ -1,17 +1,17 @@
-# CodextensionMenubar
+# CodexMate
 
 Small macOS menu bar app that launches `codex app-server --listen stdio://`, lists recent threads, and reflects thread or turn state updates for watched threads.
 
 ## Run
 
 ```bash
-swift run CodextensionMenubar
+swift run CodexMate
 ```
 
 If the `codex` binary is not in the default app bundle path or `PATH`, set:
 
 ```bash
-CODEX_BINARY=/absolute/path/to/codex swift run CodextensionMenubar
+CODEX_BINARY=/absolute/path/to/codex swift run CodexMate
 ```
 
 ## Notes
@@ -46,7 +46,7 @@ Optional environment variables:
 ```bash
 APP_VERSION=42 \
 APP_SHORT_VERSION=0.4.2 \
-CODEXTENSION_BUNDLE_ID=com.example.codextension-menubar \
+CODEXMATE_BUNDLE_ID=com.example.codexmate \
 SPARKLE_FEED_URL=https://example.com/appcast.xml \
 SPARKLE_PUBLIC_KEY=... \
 APPLE_SIGN_IDENTITY="Developer ID Application: ..." \
@@ -56,11 +56,61 @@ APPLE_SIGN_IDENTITY="Developer ID Application: ..." \
 This creates:
 
 ```text
-dist/CodextensionMenubar.app
+dist/CodexMate.app
 ```
 
 To notarize a signed app:
 
 ```bash
 APPLE_NOTARY_PROFILE=your-notarytool-profile ./scripts/notarize_app.sh
+```
+
+## Release App
+
+Create a signed release archive and Sparkle appcast entry:
+
+```bash
+APP_VERSION=42 \
+APP_SHORT_VERSION=0.4.2 \
+APPLE_SIGN_IDENTITY="Developer ID Application: ..." \
+APPLE_NOTARY_PROFILE=your-notarytool-profile \
+SPARKLE_APPCAST_URL=https://downloads.example.com/appcast.xml \
+SPARKLE_PUBLIC_KEY=... \
+RELEASE_NOTES_FILE=/absolute/path/to/release-notes/0.4.2.html \
+./scripts/release_app.sh
+```
+
+The release script reuses the packaged `.app`, optionally notarizes and staples it, creates a final zip archive, and generates an updated Sparkle appcast in `dist/release`.
+
+Optional environment variables:
+
+```bash
+SPARKLE_DOWNLOAD_URL_PREFIX=https://downloads.example.com \
+SPARKLE_KEYCHAIN_ACCOUNT=ed25519 \
+SPARKLE_PRIVATE_KEY_FILE=/absolute/path/to/sparkle-private-key \
+RELEASE_LINK=https://github.com/your-org/your-repo/releases/tag/v0.4.2 \
+RELEASE_DIR=/absolute/path/to/output-dir \
+./scripts/release_app.sh
+```
+
+For a local dry run without Developer ID signing or notarization:
+
+```bash
+APP_VERSION=42 \
+APP_SHORT_VERSION=0.4.2 \
+ALLOW_ADHOC_SIGNING=1 \
+SKIP_NOTARIZATION=1 \
+SPARKLE_APPCAST_URL=https://downloads.example.com/appcast.xml \
+RELEASE_NOTES_FILE=/absolute/path/to/release-notes/0.4.2.html \
+./scripts/release_app.sh
+```
+
+If `SPARKLE_PUBLIC_KEY` is omitted, `release_app.sh` looks it up from the Sparkle keychain account named by `SPARKLE_KEYCHAIN_ACCOUNT`.
+
+Expected release outputs:
+
+```text
+dist/release/CodexMate-0.4.2.zip
+dist/release/CodexMate-0.4.2.html
+dist/release/appcast.xml
 ```

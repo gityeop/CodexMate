@@ -3,9 +3,9 @@
      xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle"
      xmlns:dc="http://purl.org/dc/elements/1.1/">
   <channel>
-    <title>CodextensionMenubar Updates</title>
+    <title>CodexMate Updates</title>
     <link>__RELEASES_URL__</link>
-    <description>CodextensionMenubar release feed</description>
+    <description>CodexMate release feed</description>
     <language>en</language>
     <item>
       <title>Version __APP_SHORT_VERSION__</title>

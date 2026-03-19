@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-APP_NAME="CodextensionMenubar"
+APP_NAME="CodexMate"
 CONFIGURATION="${CONFIGURATION:-release}"
 DIST_DIR="${DIST_DIR:-$ROOT_DIR/dist}"
 APP_DIR="$DIST_DIR/$APP_NAME.app"
@@ -10,13 +10,52 @@ CONTENTS_DIR="$APP_DIR/Contents"
 MACOS_DIR="$CONTENTS_DIR/MacOS"
 RESOURCES_DIR="$CONTENTS_DIR/Resources"
 FRAMEWORKS_DIR="$CONTENTS_DIR/Frameworks"
-PLIST_TEMPLATE="$ROOT_DIR/Packaging/CodextensionMenubar-Info.plist.template"
+PLIST_TEMPLATE="$ROOT_DIR/Packaging/CodexMate-Info.plist.template"
+APP_ICON_SOURCE="${APP_ICON_SOURCE:-$ROOT_DIR/Packaging/$APP_NAME.png}"
+APP_ICON_FILE="${APP_ICON_FILE:-$APP_NAME.icns}"
 
-BUNDLE_IDENTIFIER="${CODEXTENSION_BUNDLE_ID:-com.imsangyeob.codextension-menubar}"
+BUNDLE_IDENTIFIER="${CODEXMATE_BUNDLE_ID:-${CODEXTENSION_BUNDLE_ID:-com.imsangyeob.codexmate}}"
 APP_VERSION="${APP_VERSION:-$(git -C "$ROOT_DIR" rev-parse --short HEAD)}"
 APP_SHORT_VERSION="${APP_SHORT_VERSION:-$APP_VERSION}"
 SPARKLE_FEED_URL="${SPARKLE_FEED_URL:-https://example.com/appcast.xml}"
 SPARKLE_PUBLIC_KEY="${SPARKLE_PUBLIC_KEY:-}"
+
+sign_with_identity() {
+  local target="$1"
+  local identity="$2"
+  shift 2
+  codesign --force --sign "$identity" "$@" "$target"
+}
+
+create_app_icon() {
+  local source="$1"
+  local icon_file="$2"
+  local iconset_dir="$DIST_DIR/${APP_NAME}.iconset"
+  local icns_path="$RESOURCES_DIR/$icon_file"
+  local size doubled
+
+  if [[ ! -f "$source" ]]; then
+    echo "App icon source not found at $source" >&2
+    exit 1
+  fi
+
+  if ! command -v iconutil >/dev/null 2>&1; then
+    echo "iconutil is required to package the app icon." >&2
+    exit 1
+  fi
+
+  rm -rf "$iconset_dir"
+  mkdir -p "$iconset_dir"
+
+  for size in 16 32 128 256 512; do
+    doubled=$((size * 2))
+    sips -z "$size" "$size" "$source" --out "$iconset_dir/icon_${size}x${size}.png" >/dev/null
+    sips -z "$doubled" "$doubled" "$source" --out "$iconset_dir/icon_${size}x${size}@2x.png" >/dev/null
+  done
+
+  iconutil -c icns "$iconset_dir" -o "$icns_path"
+  rm -rf "$iconset_dir"
+}
 
 mkdir -p "$DIST_DIR"
 
@@ -41,6 +80,8 @@ if [[ -n "$RESOURCE_BUNDLE_PATH" ]]; then
   cp -R "$RESOURCE_BUNDLE_PATH" "$RESOURCES_DIR/"
 fi
 
+create_app_icon "$APP_ICON_SOURCE" "$APP_ICON_FILE"
+
 SPARKLE_FRAMEWORK_PATH="$(find "$ROOT_DIR/.build" -path '*Sparkle.framework' -type d -print -quit || true)"
 if [[ -n "$SPARKLE_FRAMEWORK_PATH" ]]; then
   cp -R "$SPARKLE_FRAMEWORK_PATH" "$FRAMEWORKS_DIR/"
@@ -53,22 +94,37 @@ sed \
   -e "s#__APP_VERSION__#$APP_VERSION#g" \
   -e "s#__SPARKLE_FEED_URL__#$SPARKLE_FEED_URL#g" \
   -e "s#__SPARKLE_PUBLIC_KEY__#$SPARKLE_PUBLIC_KEY#g" \
+  -e "s#__ICON_FILE__#$APP_ICON_FILE#g" \
   "$PLIST_TEMPLATE" > "$CONTENTS_DIR/Info.plist"
 
 SIGN_IDENTITY="${APPLE_SIGN_IDENTITY:--}"
 
-codesign --force --sign "$SIGN_IDENTITY" "$MACOS_DIR/$APP_NAME"
-
-if [[ -d "$FRAMEWORKS_DIR/Sparkle.framework" ]]; then
-  codesign --force --options runtime --sign "$SIGN_IDENTITY" "$FRAMEWORKS_DIR/Sparkle.framework"
-fi
-
 if [[ -n "${APPLE_SIGN_IDENTITY:-}" ]]; then
   if [[ -d "$FRAMEWORKS_DIR/Sparkle.framework" ]]; then
-    codesign --force --options runtime --sign "$APPLE_SIGN_IDENTITY" "$FRAMEWORKS_DIR/Sparkle.framework"
+    SPARKLE_CURRENT_DIR="$FRAMEWORKS_DIR/Sparkle.framework/Versions/Current"
+
+    if [[ -d "$SPARKLE_CURRENT_DIR/XPCServices/Downloader.xpc" ]]; then
+      sign_with_identity "$SPARKLE_CURRENT_DIR/XPCServices/Downloader.xpc" "$APPLE_SIGN_IDENTITY" --options runtime --timestamp
+    fi
+
+    if [[ -d "$SPARKLE_CURRENT_DIR/XPCServices/Installer.xpc" ]]; then
+      sign_with_identity "$SPARKLE_CURRENT_DIR/XPCServices/Installer.xpc" "$APPLE_SIGN_IDENTITY" --options runtime --timestamp
+    fi
+
+    if [[ -d "$SPARKLE_CURRENT_DIR/Updater.app" ]]; then
+      sign_with_identity "$SPARKLE_CURRENT_DIR/Updater.app" "$APPLE_SIGN_IDENTITY" --options runtime --timestamp
+    fi
+
+    if [[ -f "$SPARKLE_CURRENT_DIR/Autoupdate" ]]; then
+      sign_with_identity "$SPARKLE_CURRENT_DIR/Autoupdate" "$APPLE_SIGN_IDENTITY" --options runtime --timestamp
+    fi
+
+    sign_with_identity "$FRAMEWORKS_DIR/Sparkle.framework" "$APPLE_SIGN_IDENTITY" --options runtime --timestamp
   fi
-  codesign --force --options runtime --sign "$APPLE_SIGN_IDENTITY" "$APP_DIR"
+  sign_with_identity "$MACOS_DIR/$APP_NAME" "$APPLE_SIGN_IDENTITY" --options runtime --timestamp
+  sign_with_identity "$APP_DIR" "$APPLE_SIGN_IDENTITY" --options runtime --timestamp
 else
+  codesign --force --sign "$SIGN_IDENTITY" "$MACOS_DIR/$APP_NAME"
   codesign --force --deep --sign - "$APP_DIR"
 fi
 
