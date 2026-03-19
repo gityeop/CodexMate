@@ -399,7 +399,8 @@ struct AppStateStore {
     }
 
     mutating func markWatched(thread: CodexThread) {
-        var row = threadsByID[thread.id] ?? ThreadRow(thread: thread, isWatched: true)
+        let existingRow = threadsByID[thread.id]
+        var row = existingRow ?? ThreadRow(thread: thread, isWatched: true)
         let previousStatus = row.displayStatus
         let previousUpdatedAt = row.updatedAt
         let incomingUpdatedAt = thread.updatedDate
@@ -409,7 +410,9 @@ struct AppStateStore {
         row.sessionPath = thread.path
         row.isSubagent = thread.isSubagent
         let newStatus = ThreadStatus(threadStatus: thread.status)
-        row.updatedAt = max(row.updatedAt, incomingUpdatedAt)
+        if existingRow == nil {
+            row.updatedAt = incomingUpdatedAt
+        }
         row.statusUpdatedAt = max(row.statusUpdatedAt, incomingUpdatedAt)
         row.listedStatus = newStatus
         row.isWatched = true

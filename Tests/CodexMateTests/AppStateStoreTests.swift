@@ -841,7 +841,7 @@ final class AppStateStoreTests: XCTestCase {
         XCTAssertTrue(store.recentThreads.first?.isWatched ?? false)
     }
 
-    func testMarkWatchedPreservesNewerRuntimeStatusWhenResumePayloadIsStale() {
+    func testMarkWatchedPreservesNewerRuntimeStatusWithoutAdvancingUpdatedAt() {
         var store = AppStateStore()
         store.replaceRecentThreads(with: [thread(id: "thread-1", updatedAt: 100, status: .notLoaded)])
 
@@ -856,7 +856,7 @@ final class AppStateStoreTests: XCTestCase {
         store.markWatched(thread: thread(id: "thread-1", updatedAt: 150, status: .idle))
 
         XCTAssertEqual(store.recentThreads.first?.displayStatus, .running)
-        XCTAssertEqual(store.recentThreads.first?.updatedAt, Date(timeIntervalSince1970: 150))
+        XCTAssertEqual(store.recentThreads.first?.updatedAt, Date(timeIntervalSince1970: 100))
         XCTAssertEqual(store.recentThreads.first?.statusUpdatedAt, Date(timeIntervalSince1970: 200))
         XCTAssertNotNil(store.recentThreads.first?.activeTurnID)
     }
@@ -1248,6 +1248,18 @@ final class AppStateStoreTests: XCTestCase {
         store.markWatched(thread: thread(id: "thread-1", updatedAt: 120, status: .idle))
 
         XCTAssertEqual(store.recentThreads.first?.lastTerminalActivityAt, Date(timeIntervalSince1970: 120))
+    }
+
+    func testMarkWatchedDoesNotAdvanceExistingIdleThreadActivityFromResumePayload() {
+        var store = AppStateStore()
+        store.replaceRecentThreads(with: [thread(id: "thread-1", updatedAt: 100, status: .idle)])
+
+        store.markWatched(thread: thread(id: "thread-1", updatedAt: 300, status: .idle))
+
+        XCTAssertEqual(store.recentThreads.first?.updatedAt, Date(timeIntervalSince1970: 100))
+        XCTAssertEqual(store.recentThreads.first?.lastTerminalActivityAt, Date(timeIntervalSince1970: 100))
+        XCTAssertEqual(store.recentThreads.first?.activityUpdatedAt, Date(timeIntervalSince1970: 100))
+        XCTAssertTrue(store.recentThreads.first?.isWatched ?? false)
     }
 
     func testClearLiveRuntimeStateFallsBackToAuthoritativeCompletionTime() {
