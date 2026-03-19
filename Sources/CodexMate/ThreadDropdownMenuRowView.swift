@@ -9,6 +9,30 @@ final class ThreadDropdownMenuRowView: NSView {
         static let disclosureSpacing: CGFloat = 4
         static let iconSize: CGFloat = 12
         static let iconSpacing: CGFloat = 6
+        static let minimumWidth: CGFloat = 220
+    }
+
+    private static let titleFont = NSFont.systemFont(ofSize: 13)
+
+    static func preferredWidth(
+        title: String,
+        indentationLevel: Int,
+        isExpandable: Bool
+    ) -> CGFloat {
+        let titleWidth = ceil(
+            NSString(string: title).size(withAttributes: [.font: titleFont]).width
+        )
+        let disclosureWidth = isExpandable ? Layout.disclosureSize + Layout.disclosureSpacing : 0
+        let indentationWidth = CGFloat(max(0, indentationLevel)) * Layout.indentationWidth
+        let iconWidth = Layout.iconSize + Layout.iconSpacing
+        let contentWidth = Layout.horizontalPadding * 2
+            + indentationWidth
+            + disclosureWidth
+            + iconWidth
+            + titleWidth
+        let width = ceil(contentWidth)
+
+        return max(Layout.minimumWidth, width)
     }
 
     private let disclosureButton = NSButton(title: "▸", target: nil, action: nil)
@@ -31,18 +55,14 @@ final class ThreadDropdownMenuRowView: NSView {
     }
 
     override var intrinsicContentSize: NSSize {
-        let titleWidth = ceil(titleLabel.attributedStringValue.size().width)
-        let disclosureWidth = isExpandable ? Layout.disclosureSize + Layout.disclosureSpacing : 0
-        let iconWidth = iconView.image == nil ? 0 : Layout.iconSize + Layout.iconSpacing
-        let width = ceil(
-            Layout.horizontalPadding * 2
-                + CGFloat(indentationLevel) * Layout.indentationWidth
-                + disclosureWidth
-                + iconWidth
-                + titleWidth
+        NSSize(
+            width: Self.preferredWidth(
+                title: titleLabel.stringValue,
+                indentationLevel: indentationLevel,
+                isExpandable: isExpandable
+            ),
+            height: Layout.rowHeight
         )
-
-        return NSSize(width: max(220, width), height: Layout.rowHeight)
     }
 
     override var isOpaque: Bool {
@@ -67,8 +87,10 @@ final class ThreadDropdownMenuRowView: NSView {
         iconView.translatesAutoresizingMaskIntoConstraints = true
         addSubview(iconView)
 
-        titleLabel.font = NSFont.systemFont(ofSize: 13)
+        titleLabel.font = Self.titleFont
         titleLabel.cell?.lineBreakMode = .byTruncatingTail
+        titleLabel.cell?.usesSingleLineMode = true
+        titleLabel.maximumNumberOfLines = 1
         titleLabel.translatesAutoresizingMaskIntoConstraints = true
         addSubview(titleLabel)
     }
@@ -120,24 +142,22 @@ final class ThreadDropdownMenuRowView: NSView {
             disclosureButton.frame = .zero
         }
 
-        if iconView.image != nil {
-            iconView.frame = NSRect(
-                x: x,
-                y: centerY,
-                width: Layout.iconSize,
-                height: Layout.iconSize
-            )
-            x += Layout.iconSize + Layout.iconSpacing
-        } else {
-            iconView.frame = .zero
-        }
+        iconView.frame = NSRect(
+            x: x,
+            y: centerY,
+            width: Layout.iconSize,
+            height: Layout.iconSize
+        )
+        x += Layout.iconSize + Layout.iconSpacing
 
         let titleWidth = max(0, bounds.width - x - Layout.horizontalPadding)
+        let titleHeight = min(rowHeight, ceil(titleLabel.intrinsicContentSize.height))
+        let titleY = floor((rowHeight - titleHeight) / 2)
         titleLabel.frame = NSRect(
             x: x,
-            y: 0,
+            y: titleY,
             width: titleWidth,
-            height: rowHeight
+            height: titleHeight
         )
     }
 

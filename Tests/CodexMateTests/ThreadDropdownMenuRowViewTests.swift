@@ -73,4 +73,54 @@ final class ThreadDropdownMenuRowViewTests: XCTestCase {
         XCTAssertEqual(openCount, 0)
         XCTAssertEqual(toggleCount, 1)
     }
+
+    func testRowsReserveIconSlotEvenWithoutIndicatorImage() throws {
+        let plainView = ThreadDropdownMenuRowView(frame: NSRect(x: 0, y: 0, width: 280, height: 22))
+        plainView.configure(
+            title: "Thread title",
+            indicatorImage: nil,
+            indentationLevel: 0,
+            isExpandable: false,
+            isExpanded: false,
+            onOpen: {},
+            onToggle: nil
+        )
+        plainView.layoutSubtreeIfNeeded()
+
+        let imageView = ThreadDropdownMenuRowView(frame: NSRect(x: 0, y: 0, width: 280, height: 22))
+        imageView.configure(
+            title: "Thread title",
+            indicatorImage: NSImage(size: NSSize(width: 8, height: 8)),
+            indentationLevel: 0,
+            isExpandable: false,
+            isExpanded: false,
+            onOpen: {},
+            onToggle: nil
+        )
+        imageView.layoutSubtreeIfNeeded()
+
+        let plainTitleLabel = try XCTUnwrap(plainView.subviews.compactMap { $0 as? NSTextField }.first)
+        let imageTitleLabel = try XCTUnwrap(imageView.subviews.compactMap { $0 as? NSTextField }.first)
+
+        XCTAssertEqual(plainTitleLabel.frame.minX, imageTitleLabel.frame.minX)
+    }
+
+    func testIndicatorSlotAndTitleStayVerticallyCentered() throws {
+        let view = ThreadDropdownMenuRowView(frame: NSRect(x: 0, y: 0, width: 280, height: 22))
+        view.configure(
+            title: "Thread title",
+            indicatorImage: NSImage(size: NSSize(width: 8, height: 8)),
+            indentationLevel: 0,
+            isExpandable: false,
+            isExpanded: false,
+            onOpen: {},
+            onToggle: nil
+        )
+        view.layoutSubtreeIfNeeded()
+
+        let iconView = try XCTUnwrap(view.subviews.compactMap { $0 as? NSImageView }.first)
+        let titleLabel = try XCTUnwrap(view.subviews.compactMap { $0 as? NSTextField }.first)
+
+        XCTAssertEqual(iconView.frame.midY, titleLabel.frame.midY)
+    }
 }

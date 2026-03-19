@@ -6,6 +6,8 @@ APP_NAME="CodexMate"
 CONFIGURATION="${CONFIGURATION:-release}"
 DIST_DIR="${DIST_DIR:-$ROOT_DIR/dist}"
 APP_DIR="$DIST_DIR/$APP_NAME.app"
+SPARKLE_BIN_DIR="${SPARKLE_BIN_DIR:-$ROOT_DIR/.build/artifacts/sparkle/Sparkle/bin}"
+GENERATE_KEYS_BIN="$SPARKLE_BIN_DIR/generate_keys"
 CONTENTS_DIR="$APP_DIR/Contents"
 MACOS_DIR="$CONTENTS_DIR/MacOS"
 RESOURCES_DIR="$CONTENTS_DIR/Resources"
@@ -13,15 +15,15 @@ FRAMEWORKS_DIR="$CONTENTS_DIR/Frameworks"
 PLIST_TEMPLATE="$ROOT_DIR/Packaging/CodexMate-Info.plist.template"
 APP_ICON_SOURCE="${APP_ICON_SOURCE:-$ROOT_DIR/Packaging/$APP_NAME.png}"
 APP_ICON_FILE="${APP_ICON_FILE:-$APP_NAME.icns}"
-APPLE_KEYCHAIN_PATH="${APPLE_KEYCHAIN_PATH:-$(security login-keychain | tr -d '"')}"
+APPLE_KEYCHAIN_PATH="${APPLE_KEYCHAIN_PATH:-$(security login-keychain | tr -d '"' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')}"
 APPLE_KEYCHAIN_PASSWORD="${APPLE_KEYCHAIN_PASSWORD:-}"
 APPLE_KEYCHAIN_UNLOCK_TIMEOUT="${APPLE_KEYCHAIN_UNLOCK_TIMEOUT:-21600}"
 
 BUNDLE_IDENTIFIER="${CODEXMATE_BUNDLE_ID:-${CODEXTENSION_BUNDLE_ID:-com.imsangyeob.codexmate}}"
 APP_VERSION="${APP_VERSION:-$(git -C "$ROOT_DIR" rev-parse --short HEAD)}"
 APP_SHORT_VERSION="${APP_SHORT_VERSION:-$APP_VERSION}"
-SPARKLE_FEED_URL="${SPARKLE_FEED_URL:-https://example.com/appcast.xml}"
 SPARKLE_PUBLIC_KEY="${SPARKLE_PUBLIC_KEY:-}"
+SPARKLE_KEYCHAIN_ACCOUNT="${SPARKLE_KEYCHAIN_ACCOUNT:-ed25519}"
 
 typeset -a CODESIGN_KEYCHAIN_ARGS
 if [[ -n "$APPLE_KEYCHAIN_PATH" ]]; then
@@ -29,6 +31,32 @@ if [[ -n "$APPLE_KEYCHAIN_PATH" ]]; then
 else
   CODESIGN_KEYCHAIN_ARGS=()
 fi
+
+ensure_executable() {
+  local path="$1"
+  if [[ ! -x "$path" ]]; then
+    return 1
+  fi
+}
+
+default_sparkle_feed_url() {
+  local remote_url
+
+  remote_url="$(git -C "$ROOT_DIR" config --get remote.origin.url 2>/dev/null || true)"
+  remote_url="${remote_url%.git}"
+
+  case "$remote_url" in
+    https://github.com/*/*)
+      echo "${remote_url}/releases/latest/download/appcast.xml"
+      ;;
+    git@github.com:*)
+      echo "https://github.com/${remote_url#git@github.com:}/releases/latest/download/appcast.xml"
+      ;;
+    *)
+      echo "https://example.com/appcast.xml"
+      ;;
+  esac
+}
 
 sign_with_identity() {
   local target="$1"
@@ -38,7 +66,7 @@ sign_with_identity() {
 }
 
 prepare_signing_keychain() {
-  [[ -n "${APPLE_SIGN_IDENTITY:-}" ]] || return
+  [[ -n "${APPLE_SIGN_IDENTITY:-}" ]] || return 0
 
   if [[ -z "$APPLE_KEYCHAIN_PASSWORD" ]]; then
     echo "Signing without APPLE_KEYCHAIN_PASSWORD may trigger repeated Keychain prompts." >&2
@@ -83,6 +111,16 @@ create_app_icon() {
   iconutil -c icns "$iconset_dir" -o "$icns_path"
   rm -rf "$iconset_dir"
 }
+
+SPARKLE_FEED_URL="${SPARKLE_FEED_URL:-$(default_sparkle_feed_url)}"
+
+if [[ -z "$SPARKLE_PUBLIC_KEY" ]] && ensure_executable "$GENERATE_KEYS_BIN"; then
+  SPARKLE_PUBLIC_KEY="$("$GENERATE_KEYS_BIN" --account "$SPARKLE_KEYCHAIN_ACCOUNT" -p 2>/dev/null || true)"
+fi
+
+if [[ -z "$SPARKLE_PUBLIC_KEY" ]]; then
+  echo "Packaging without SUPublicEDKey. Automatic updates will stay unavailable until SPARKLE_PUBLIC_KEY is configured." >&2
+fi
 
 mkdir -p "$DIST_DIR"
 

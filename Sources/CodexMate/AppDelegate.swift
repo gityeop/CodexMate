@@ -322,7 +322,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func watchLatestThread() async {
-        guard let thread = controller.state.recentThreads.first else { return }
+        guard let thread = controller.recentThreads.first else { return }
 
         await resumeThreadSubscriptions([thread.id])
         renderMenu()
@@ -544,7 +544,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         RefreshSchedulingPolicy.current(
             isMenuOpen: isMenuOpen,
             overallStatus: controller.overallStatus,
-            hasRecentThreads: !controller.state.recentThreads.isEmpty
+            hasRecentThreads: !controller.recentThreads.isEmpty
         )
     }
 
@@ -581,7 +581,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let snapshot = preparedSnapshot.snapshot
         let menuSections = buildThreadMenuSections(
             snapshotSections: snapshot.projectSections,
-            recentThreads: controller.state.recentThreads,
+            recentThreads: controller.recentThreads,
             projectCatalog: controller.projectCatalog
         )
         let renderThreadIDs = Set(flattenedThreadIDs(from: menuSections.flatMap(\.threads)))
@@ -601,6 +601,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         var hoverTooltipContentsByThreadID: [String: MenubarStatusPresentation.ThreadTooltipContent] = [:]
+        var threadRowViews: [ThreadDropdownMenuRowView] = []
         menu.removeAllItems()
 
         if menuSections.isEmpty {
@@ -619,7 +620,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         thread,
                         level: 0,
                         worktreeDisplayName: section.displayName,
-                        hoverTooltipContentsByThreadID: &hoverTooltipContentsByThreadID
+                        hoverTooltipContentsByThreadID: &hoverTooltipContentsByThreadID,
+                        rowViews: &threadRowViews
                     )
                 }
             }
@@ -650,7 +652,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             title: strings.text("menu.watchLatestThread", language: preferences.language),
             action: #selector(watchLatestThreadAction)
         )
-        watchItem.isEnabled = !controller.state.recentThreads.isEmpty
+        watchItem.isEnabled = !controller.recentThreads.isEmpty
         menu.addItem(watchItem)
 
         menu.addItem(.separator())
@@ -667,6 +669,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 action: #selector(quit)
             )
         )
+        normalizeThreadRowWidths(threadRowViews)
         scheduleRefreshTimerIfNeeded()
     }
 
@@ -889,7 +892,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         _ thread: ThreadMenuThread,
         level: Int,
         worktreeDisplayName: String,
-        hoverTooltipContentsByThreadID: inout [String: MenubarStatusPresentation.ThreadTooltipContent]
+        hoverTooltipContentsByThreadID: inout [String: MenubarStatusPresentation.ThreadTooltipContent],
+        rowViews: inout [ThreadDropdownMenuRowView]
     ) {
         let hasUnreadContent = controller.threadReadMarkers.hasUnreadContent(
             threadID: thread.thread.id,
@@ -926,6 +930,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             highlightedMenuRowView = view
         }
         view.frame = NSRect(origin: .zero, size: view.intrinsicContentSize)
+        rowViews.append(view)
         item.view = view
         hoverTooltipContentsByThreadID[thread.thread.id] = tooltipContent
         menu.addItem(item)
@@ -939,7 +944,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 child,
                 level: level + 1,
                 worktreeDisplayName: worktreeDisplayName,
-                hoverTooltipContentsByThreadID: &hoverTooltipContentsByThreadID
+                hoverTooltipContentsByThreadID: &hoverTooltipContentsByThreadID,
+                rowViews: &rowViews
+            )
+        }
+    }
+
+    private func normalizeThreadRowWidths(_ rowViews: [ThreadDropdownMenuRowView]) {
+        guard !rowViews.isEmpty else {
+            return
+        }
+
+        let targetWidth = ceil(max(
+            menu.size.width,
+            rowViews.map { $0.intrinsicContentSize.width }.max() ?? 0
+        ))
+
+        for rowView in rowViews {
+            rowView.frame = NSRect(
+                x: rowView.frame.origin.x,
+                y: rowView.frame.origin.y,
+                width: targetWidth,
+                height: rowView.frame.height
             )
         }
     }
@@ -1194,7 +1220,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func reconcileLiveSubscriptions() async {
         let plan = ThreadSubscriptionPlanner.makePlan(
-            recentThreads: controller.state.recentThreads,
+            recentThreads: controller.recentThreads,
             liveThreadUpdatedAtByID: liveSubscribedThreadUpdatedAtByID,
             maxSubscribedThreads: ThreadListDisplay.maxTrackedThreads
         )
@@ -1219,7 +1245,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func initialWarmSubscriptionThreadIDs() -> [String] {
-        let candidates = controller.state.recentThreads.map(\.id)
+        let candidates = controller.recentThreads.map(\.id)
         var seenThreadIDs: Set<String> = Set(liveSubscribedThreadUpdatedAtByID.keys)
         var threadIDsToResume: [String] = []
 

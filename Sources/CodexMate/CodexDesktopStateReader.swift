@@ -199,7 +199,6 @@ struct CodexDesktopStateReader {
                 databaseURL: databaseURL
             )
         }
-
         var threads: [CodexThread] = []
 
         for line in output.split(separator: "\n") {

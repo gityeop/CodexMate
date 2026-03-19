@@ -47,12 +47,14 @@ Optional environment variables:
 APP_VERSION=42 \
 APP_SHORT_VERSION=0.4.2 \
 CODEXMATE_BUNDLE_ID=com.example.codexmate \
-SPARKLE_FEED_URL=https://example.com/appcast.xml \
+SPARKLE_FEED_URL=https://github.com/your-org/your-repo/releases/latest/download/appcast.xml \
 SPARKLE_PUBLIC_KEY=... \
 APPLE_SIGN_IDENTITY="Developer ID Application: ..." \
 APPLE_KEYCHAIN_PASSWORD='your-login-keychain-password' \
 ./scripts/package_app.sh
 ```
+
+If `SPARKLE_FEED_URL` is omitted, `package_app.sh` tries to derive `https://github.com/<owner>/<repo>/releases/latest/download/appcast.xml` from `origin` when the repository remote is GitHub. If `SPARKLE_PUBLIC_KEY` is omitted, `package_app.sh` tries to resolve it from the Sparkle keychain account named by `SPARKLE_KEYCHAIN_ACCOUNT`. If it still cannot resolve the key, the app is packaged but automatic updates stay unavailable in Settings until the bundle is rebuilt with Sparkle metadata.
 
 If `APPLE_KEYCHAIN_PASSWORD` is set, the packaging script unlocks the keychain and configures codesign access up front so macOS does not repeatedly prompt for the signing key during the nested Sparkle/framework signing steps. Set `APPLE_KEYCHAIN_PATH` as well if you do not use the default login keychain.
 
@@ -78,7 +80,7 @@ APP_SHORT_VERSION=0.4.2 \
 APPLE_SIGN_IDENTITY="Developer ID Application: ..." \
 APPLE_KEYCHAIN_PASSWORD='your-login-keychain-password' \
 APPLE_NOTARY_PROFILE=your-notarytool-profile \
-SPARKLE_APPCAST_URL=https://downloads.example.com/appcast.xml \
+SPARKLE_APPCAST_URL=https://github.com/your-org/your-repo/releases/latest/download/appcast.xml \
 SPARKLE_PUBLIC_KEY=... \
 RELEASE_NOTES_FILE=/absolute/path/to/release-notes/0.4.2.html \
 ./scripts/release_app.sh
@@ -89,7 +91,7 @@ The release script reuses the packaged `.app`, optionally notarizes and staples 
 Optional environment variables:
 
 ```bash
-SPARKLE_DOWNLOAD_URL_PREFIX=https://downloads.example.com \
+SPARKLE_DOWNLOAD_URL_PREFIX=https://github.com/your-org/your-repo/releases/latest/download \
 SPARKLE_KEYCHAIN_ACCOUNT=ed25519 \
 SPARKLE_PRIVATE_KEY_FILE=/absolute/path/to/sparkle-private-key \
 RELEASE_LINK=https://github.com/your-org/your-repo/releases/tag/v0.4.2 \
@@ -104,7 +106,7 @@ APP_VERSION=42 \
 APP_SHORT_VERSION=0.4.2 \
 ALLOW_ADHOC_SIGNING=1 \
 SKIP_NOTARIZATION=1 \
-SPARKLE_APPCAST_URL=https://downloads.example.com/appcast.xml \
+SPARKLE_APPCAST_URL=https://github.com/your-org/your-repo/releases/latest/download/appcast.xml \
 RELEASE_NOTES_FILE=/absolute/path/to/release-notes/0.4.2.html \
 ./scripts/release_app.sh
 ```

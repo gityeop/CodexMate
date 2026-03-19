@@ -35,12 +35,13 @@ final class UpdaterService: ObservableObject {
         bundle: Bundle = .main,
         controller: SPUStandardUpdaterController? = nil
     ) {
+        let unavailableSnapshot = UpdaterSnapshot(
+            status: .unavailable,
+            automaticallyChecksForUpdates: false,
+            canCheckForUpdates: false
+        )
+
         if bundle.bundleURL.pathExtension != "app" {
-            let unavailableSnapshot = UpdaterSnapshot(
-                status: .unavailable,
-                automaticallyChecksForUpdates: false,
-                canCheckForUpdates: false
-            )
             snapshot = unavailableSnapshot
             refreshHandler = { unavailableSnapshot }
             setAutomaticallyChecksHandler = { _ in unavailableSnapshot }
@@ -48,12 +49,24 @@ final class UpdaterService: ObservableObject {
             return
         }
 
-        guard let feedURL = bundle.object(forInfoDictionaryKey: "SUFeedURL") as? String,
-              !feedURL.isEmpty,
-              let publicKey = bundle.object(forInfoDictionaryKey: "SUPublicEDKey") as? String,
-              !publicKey.isEmpty else {
+        let feedURL = (bundle.object(forInfoDictionaryKey: "SUFeedURL") as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let publicKey = (bundle.object(forInfoDictionaryKey: "SUPublicEDKey") as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+
+        guard !feedURL.isEmpty, !publicKey.isEmpty else {
+            snapshot = unavailableSnapshot
+            refreshHandler = { unavailableSnapshot }
+            setAutomaticallyChecksHandler = { _ in unavailableSnapshot }
+            checkForUpdatesHandler = {}
+            return
+        }
+
+        let feedComponents = URLComponents(string: feedURL)
+        let feedScheme = feedComponents?.scheme?.lowercased()
+        guard let feedScheme, ["http", "https"].contains(feedScheme), feedComponents?.host != nil else {
             let invalidSnapshot = UpdaterSnapshot(
-                status: .configurationIssue(message: "Missing SUFeedURL or SUPublicEDKey."),
+                status: .configurationIssue(message: "Invalid SUFeedURL."),
                 automaticallyChecksForUpdates: false,
                 canCheckForUpdates: false
             )
