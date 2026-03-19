@@ -3,6 +3,17 @@ import Combine
 import KeyboardShortcuts
 import UserNotifications
 
+private struct ThreadMenuSection {
+    let displayName: String
+    let threadCount: Int
+    let threads: [ThreadMenuThread]
+}
+
+private struct ThreadMenuThread {
+    let thread: AppStateStore.ThreadRow
+    let children: [ThreadMenuThread]
+}
+
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private enum RetentionPolicy {
@@ -81,6 +92,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var hoverTooltipContentsByThreadID: [String: MenubarStatusPresentation.ThreadTooltipContent] = [:]
     private var hoverTooltipWorkItem: DispatchWorkItem?
     private var highlightedThreadID: String?
+    private weak var highlightedMenuRowView: ThreadDropdownMenuRowView?
+    private var expandedThreadIDs: Set<String> = []
     private var foregroundRefreshObserverTokens: [NSObjectProtocol] = []
     private var cancellables: Set<AnyCancellable> = []
     private var foregroundRefreshThrottle = ForegroundRefreshThrottle(
@@ -309,7 +322,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func watchLatestThread() async {
-        guard let thread = controller.recentThreads.first else { return }
+        guard let thread = controller.state.recentThreads.first else { return }
 
         await resumeThreadSubscriptions([thread.id])
         renderMenu()
@@ -531,7 +544,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         RefreshSchedulingPolicy.current(
             isMenuOpen: isMenuOpen,
             overallStatus: controller.overallStatus,
-            hasRecentThreads: !controller.recentThreads.isEmpty
+            hasRecentThreads: !controller.state.recentThreads.isEmpty
         )
     }
 
@@ -560,46 +573,54 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func renderMenu() {
         hoverTooltipWorkItem?.cancel()
         hoverTooltipWorkItem = nil
+        highlightedMenuRowView = nil
 
         let preparedSnapshot = controller.prepareSnapshot(
             additionalTrackedThreadIDs: Set(liveSubscribedThreadUpdatedAtByID.keys)
         )
-        if preparedSnapshot.didChangeReadMarkers {
+        let snapshot = preparedSnapshot.snapshot
+        let menuSections = buildThreadMenuSections(
+            snapshotSections: snapshot.projectSections,
+            recentThreads: controller.state.recentThreads,
+            projectCatalog: controller.projectCatalog
+        )
+        let renderThreadIDs = Set(flattenedThreadIDs(from: menuSections.flatMap(\.threads)))
+        let renderedExpandableThreadIDs = collectExpandableThreadIDs(from: menuSections.flatMap(\.threads))
+        expandedThreadIDs.formIntersection(renderedExpandableThreadIDs)
+        let hasUnreadThreads = menuSections.flatMap(\.threads).contains(where: hasUnreadContent(in:))
+        statusItem.button?.title = MenubarStatusPresentation.statusItemIcon(
+            overallStatus: snapshot.overallStatus,
+            hasUnreadThreads: hasUnreadThreads
+        )
+        var didChangeReadMarkers = preparedSnapshot.didChangeReadMarkers
+        if controller.seedThreadReadMarkers(for: renderThreadIDs) {
+            didChangeReadMarkers = true
+        }
+        if didChangeReadMarkers {
             persistThreadReadMarkers()
         }
 
-        let snapshot = preparedSnapshot.snapshot
-        statusItem.button?.title = MenubarStatusPresentation.statusItemIcon(
-            overallStatus: snapshot.overallStatus,
-            hasUnreadThreads: snapshot.hasUnreadThreads
-        )
         var hoverTooltipContentsByThreadID: [String: MenubarStatusPresentation.ThreadTooltipContent] = [:]
         menu.removeAllItems()
 
-        if snapshot.projectSections.isEmpty {
+        if menuSections.isEmpty {
             menu.addItem(makeStaticItem(title: strings.text("menu.noRecentThreads", language: preferences.language)))
         } else {
-            for (index, section) in snapshot.projectSections.enumerated() {
+            for (index, section) in menuSections.enumerated() {
                 if index > 0 {
                     menu.addItem(.separator())
                 }
 
-                let item = makeStaticItem(title: projectSectionTitle(for: section.section))
+                let item = makeStaticItem(title: projectSectionTitle(for: section))
                 menu.addItem(item)
 
                 for thread in section.threads {
-                    let tooltipContent = MenubarStatusPresentation.threadTooltipContent(
-                        worktreeDisplayName: section.section.displayName,
-                        thread: thread.thread,
-                        strings: strings,
-                        language: preferences.language
+                    addThreadMenuItems(
+                        thread,
+                        level: 0,
+                        worktreeDisplayName: section.displayName,
+                        hoverTooltipContentsByThreadID: &hoverTooltipContentsByThreadID
                     )
-                    let item = makeActionItem(title: menuTitle(for: thread.thread), action: #selector(openThread(_:)))
-                    item.representedObject = thread.id
-                    item.image = indicatorImage(for: thread)
-                    item.toolTip = nil
-                    hoverTooltipContentsByThreadID[thread.id] = tooltipContent
-                    menu.addItem(item)
                 }
             }
         }
@@ -629,7 +650,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             title: strings.text("menu.watchLatestThread", language: preferences.language),
             action: #selector(watchLatestThreadAction)
         )
-        watchItem.isEnabled = snapshot.isWatchLatestThreadEnabled
+        watchItem.isEnabled = !controller.state.recentThreads.isEmpty
         menu.addItem(watchItem)
 
         menu.addItem(.separator())
@@ -661,12 +682,296 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return item
     }
 
+    private func buildThreadMenuSections(
+        snapshotSections: [MenubarProjectSectionSnapshot],
+        recentThreads: [AppStateStore.ThreadRow],
+        projectCatalog: CodexDesktopProjectCatalog
+    ) -> [ThreadMenuSection] {
+        guard !recentThreads.isEmpty else {
+            return []
+        }
+
+        let threadByID = Dictionary(uniqueKeysWithValues: recentThreads.map { ($0.id, $0) })
+        let parentIDByThreadID: [String: String] = Dictionary(uniqueKeysWithValues: recentThreads.compactMap { thread in
+            guard let parentID = thread.parentThreadID else {
+                return nil
+            }
+
+            return (thread.id, parentID)
+        })
+
+        if snapshotSections.isEmpty {
+            let sectionsByProjectID = Dictionary(grouping: recentThreads) { thread in
+                projectCatalog.project(for: thread.cwd).id
+            }
+
+            return sectionsByProjectID.keys.sorted().compactMap { projectID -> ThreadMenuSection? in
+                guard let sectionThreads = sectionsByProjectID[projectID], !sectionThreads.isEmpty else {
+                    return nil
+                }
+
+                let displayName = projectCatalog.project(for: sectionThreads[0].cwd).displayName
+                let rootThreads = sectionRootThreads(
+                    allThreads: sectionThreads,
+                    visibleRootIDs: nil,
+                    parentIDByThreadID: parentIDByThreadID
+                )
+                let rootNodes = rootThreads.compactMap { thread in
+                    buildThreadMenuThread(
+                        thread: thread,
+                        threadByID: threadByID,
+                        parentIDByThreadID: parentIDByThreadID,
+                        visited: []
+                    )
+                }
+
+                return ThreadMenuSection(
+                    displayName: displayName,
+                    threadCount: flattenedThreadIDs(from: rootNodes).count,
+                    threads: rootNodes.sorted(by: Self.isNewerMenuThread)
+                )
+            }
+        }
+
+        return snapshotSections.compactMap { snapshotSection -> ThreadMenuSection? in
+            let sectionThreads = recentThreads.filter {
+                projectCatalog.project(for: $0.cwd).id == snapshotSection.section.id
+            }
+
+            guard !sectionThreads.isEmpty else {
+                return nil
+            }
+
+            let rootThreads = sectionRootThreads(
+                allThreads: sectionThreads,
+                visibleRootIDs: Set(snapshotSection.threads.map { $0.id }),
+                parentIDByThreadID: parentIDByThreadID
+            )
+            let rootNodes = rootThreads.compactMap { thread in
+                buildThreadMenuThread(
+                    thread: thread,
+                    threadByID: threadByID,
+                    parentIDByThreadID: parentIDByThreadID,
+                    visited: []
+                )
+            }
+
+            return ThreadMenuSection(
+                displayName: snapshotSection.section.displayName,
+                threadCount: flattenedThreadIDs(from: rootNodes).count,
+                threads: rootNodes.sorted(by: Self.isNewerMenuThread)
+            )
+        }
+    }
+
+    private func sectionRootThreads(
+        allThreads: [AppStateStore.ThreadRow],
+        visibleRootIDs: Set<String>?,
+        parentIDByThreadID: [String: String]
+    ) -> [AppStateStore.ThreadRow] {
+        let threadByID = Dictionary(uniqueKeysWithValues: allThreads.map { ($0.id, $0) })
+
+        if let visibleRootIDs, !visibleRootIDs.isEmpty {
+            var roots = allThreads.filter { visibleRootIDs.contains($0.id) }
+            let orphanThreads = allThreads.filter { thread in
+                thread.isSubagent && !threadHasAncestor(
+                    thread.id,
+                    in: visibleRootIDs,
+                    parentIDByThreadID: parentIDByThreadID
+                )
+            }
+            roots.append(contentsOf: orphanThreads.filter { !visibleRootIDs.contains($0.id) })
+            return roots.sorted(by: Self.isNewerThread)
+        }
+
+        return allThreads.filter { thread in
+            guard let parentID = parentIDByThreadID[thread.id] else {
+                return true
+            }
+
+            return threadByID[parentID] == nil
+        }
+        .sorted(by: Self.isNewerThread)
+    }
+
+    private func buildThreadMenuThread(
+        thread: AppStateStore.ThreadRow,
+        threadByID: [String: AppStateStore.ThreadRow],
+        parentIDByThreadID: [String: String],
+        visited: Set<String>
+    ) -> ThreadMenuThread? {
+        guard !visited.contains(thread.id) else {
+            return nil
+        }
+
+        let childIDs = parentIDByThreadID
+            .filter { $0.value == thread.id }
+            .map(\.key)
+            .sorted { lhs, rhs in
+                guard let lhsThread = threadByID[lhs], let rhsThread = threadByID[rhs] else {
+                    return lhs < rhs
+                }
+
+                return Self.isNewerThread(lhsThread, rhsThread)
+            }
+
+        let nextVisited = visited.union([thread.id])
+        let children: [ThreadMenuThread] = childIDs.compactMap { childID in
+            guard let childThread = threadByID[childID] else {
+                return nil
+            }
+
+            return buildThreadMenuThread(
+                thread: childThread,
+                threadByID: threadByID,
+                parentIDByThreadID: parentIDByThreadID,
+                visited: nextVisited
+            )
+        }
+
+        return ThreadMenuThread(thread: thread, children: children)
+    }
+
+    private func threadHasAncestor(
+        _ threadID: String,
+        in ancestorIDs: Set<String>,
+        parentIDByThreadID: [String: String]
+    ) -> Bool {
+        var currentThreadID = parentIDByThreadID[threadID]
+        var visited: Set<String> = [threadID]
+
+        while let parentThreadID = currentThreadID {
+            if !visited.insert(parentThreadID).inserted {
+                return false
+            }
+
+            if ancestorIDs.contains(parentThreadID) {
+                return true
+            }
+
+            currentThreadID = parentIDByThreadID[parentThreadID]
+        }
+
+        return false
+    }
+
+    private func flattenedThreadIDs(from threads: [ThreadMenuThread]) -> [String] {
+        threads.flatMap { thread in
+            [thread.thread.id] + flattenedThreadIDs(from: thread.children)
+        }
+    }
+
+    private func collectExpandableThreadIDs(from threads: [ThreadMenuThread]) -> Set<String> {
+        var threadIDs: Set<String> = []
+
+        for thread in threads {
+            if !thread.children.isEmpty {
+                threadIDs.insert(thread.thread.id)
+                threadIDs.formUnion(collectExpandableThreadIDs(from: thread.children))
+            }
+        }
+
+        return threadIDs
+    }
+
+    private func hasUnreadContent(in thread: ThreadMenuThread) -> Bool {
+        if controller.threadReadMarkers.hasUnreadContent(
+            threadID: thread.thread.id,
+            lastTerminalActivityAt: thread.thread.lastTerminalActivityAt
+        ) {
+            return true
+        }
+
+        return thread.children.contains(where: hasUnreadContent(in:))
+    }
+
+    private func addThreadMenuItems(
+        _ thread: ThreadMenuThread,
+        level: Int,
+        worktreeDisplayName: String,
+        hoverTooltipContentsByThreadID: inout [String: MenubarStatusPresentation.ThreadTooltipContent]
+    ) {
+        let hasUnreadContent = controller.threadReadMarkers.hasUnreadContent(
+            threadID: thread.thread.id,
+            lastTerminalActivityAt: thread.thread.lastTerminalActivityAt
+        )
+        let threadSnapshot = MenubarThreadSnapshot(thread: thread.thread, hasUnreadContent: hasUnreadContent)
+        let tooltipContent = MenubarStatusPresentation.threadTooltipContent(
+            worktreeDisplayName: worktreeDisplayName,
+            thread: thread.thread,
+            strings: strings,
+            language: preferences.language
+        )
+
+        let item = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+        item.representedObject = thread.thread.id
+        item.toolTip = nil
+
+        let view = ThreadDropdownMenuRowView(frame: .zero)
+        view.configure(
+            title: menuTitle(for: thread.thread),
+            indicatorImage: indicatorImage(for: threadSnapshot),
+            indentationLevel: level,
+            isExpandable: !thread.children.isEmpty,
+            isExpanded: expandedThreadIDs.contains(thread.thread.id),
+            onOpen: { [weak self] in
+                self?.openThread(threadID: thread.thread.id)
+            },
+            onToggle: thread.children.isEmpty ? nil : { [weak self] in
+                self?.toggleThreadExpansion(thread.thread.id)
+            }
+        )
+        if highlightedThreadID == thread.thread.id {
+            view.isHighlighted = true
+            highlightedMenuRowView = view
+        }
+        view.frame = NSRect(origin: .zero, size: view.intrinsicContentSize)
+        item.view = view
+        hoverTooltipContentsByThreadID[thread.thread.id] = tooltipContent
+        menu.addItem(item)
+
+        guard expandedThreadIDs.contains(thread.thread.id) else {
+            return
+        }
+
+        for child in thread.children {
+            addThreadMenuItems(
+                child,
+                level: level + 1,
+                worktreeDisplayName: worktreeDisplayName,
+                hoverTooltipContentsByThreadID: &hoverTooltipContentsByThreadID
+            )
+        }
+    }
+
+    private static func isNewerThread(_ lhs: AppStateStore.ThreadRow, _ rhs: AppStateStore.ThreadRow) -> Bool {
+        if lhs.activityUpdatedAt == rhs.activityUpdatedAt {
+            return lhs.displayTitle.localizedCaseInsensitiveCompare(rhs.displayTitle) == .orderedAscending
+        }
+
+        return lhs.activityUpdatedAt > rhs.activityUpdatedAt
+    }
+
+    private static func isNewerMenuThread(_ lhs: ThreadMenuThread, _ rhs: ThreadMenuThread) -> Bool {
+        isNewerThread(lhs.thread, rhs.thread)
+    }
+
     private func menuTitle(for thread: AppStateStore.ThreadRow) -> String {
         let relativeDate = relativeDateFormatter.localizedString(for: thread.activityUpdatedAt, relativeTo: Date())
         return MenubarStatusPresentation.threadTitle(
             for: thread,
             relativeDate: relativeDate,
             maxDisplayTitleLength: ThreadListDisplay.maxThreadDisplayTitleLength
+        )
+    }
+
+    private func projectSectionTitle(for section: ThreadMenuSection) -> String {
+        MenubarStatusPresentation.projectSectionTitle(
+            displayName: section.displayName,
+            threadCount: section.threadCount,
+            maxDisplayNameLength: ThreadListDisplay.maxProjectDisplayNameLength,
+            strings: strings,
+            language: preferences.language
         )
     }
 
@@ -685,17 +990,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    private func projectSectionTitle(for section: AppStateStore.ProjectSection) -> String {
-        MenubarStatusPresentation.projectSectionTitle(
-            displayName: section.displayName,
-            threadCount: section.threads.count,
-            maxDisplayNameLength: ThreadListDisplay.maxProjectDisplayNameLength,
-            strings: strings,
-            language: preferences.language
-        )
-    }
-
     private func updateHoverTooltip(for item: NSMenuItem?) {
+        let hoveredMenuRowView = item?.view as? ThreadDropdownMenuRowView
+        if highlightedMenuRowView !== hoveredMenuRowView {
+            highlightedMenuRowView?.isHighlighted = false
+            highlightedMenuRowView = hoveredMenuRowView
+        }
+        highlightedMenuRowView?.isHighlighted = item != nil
+
         guard let threadID = item?.representedObject as? String,
               let tooltipContent = hoverTooltipContentsByThreadID[threadID] else {
             hideHoverTooltip()
@@ -739,6 +1041,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hoverTooltipWorkItem?.cancel()
         hoverTooltipWorkItem = nil
         highlightedThreadID = nil
+        highlightedMenuRowView?.isHighlighted = false
+        highlightedMenuRowView = nil
         hoverTooltipController.hide()
     }
 
@@ -827,10 +1131,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return image
     }
 
-    private func visibleProjectSections() -> [AppStateStore.ProjectSection] {
-        controller.visibleProjectSections()
-    }
-
     private func requestThreadRefresh(force: Bool = true, now: Date = Date()) {
         if !force {
             let policy = refreshSchedulingPolicy()
@@ -894,7 +1194,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func reconcileLiveSubscriptions() async {
         let plan = ThreadSubscriptionPlanner.makePlan(
-            recentThreads: controller.recentThreads,
+            recentThreads: controller.state.recentThreads,
             liveThreadUpdatedAtByID: liveSubscribedThreadUpdatedAtByID,
             maxSubscribedThreads: ThreadListDisplay.maxTrackedThreads
         )
@@ -919,11 +1219,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func initialWarmSubscriptionThreadIDs() -> [String] {
-        let visibleThreadIDs = visibleProjectSections()
-            .flatMap(\.threads)
-            .map(\.id)
-
-        let candidates = visibleThreadIDs.isEmpty ? controller.recentThreads.map(\.id) : visibleThreadIDs
+        let candidates = controller.state.recentThreads.map(\.id)
         var seenThreadIDs: Set<String> = Set(liveSubscribedThreadUpdatedAtByID.keys)
         var threadIDsToResume: [String] = []
 
@@ -1098,11 +1394,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc
     private func openThread(_ sender: NSMenuItem) {
         guard let threadID = sender.representedObject as? String else { return }
+        openThread(threadID: threadID)
+    }
 
+    private func openThread(threadID: String) {
         if NSApp.currentEvent?.modifierFlags.contains(.option) == true {
             copyThreadID(threadID)
             return
         }
+
+        closeMenu()
 
         guard let deepLinkURL = CodexDeepLink.threadURL(threadID: threadID) else {
             controller.recordDiagnostic("Unable to build a Codex deeplink for thread \(threadID).")
@@ -1136,6 +1437,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             controller.recordDiagnostic("Failed to open Codex thread. Copied thread id instead: \(error.localizedDescription)")
             renderMenu()
         }
+    }
+
+    private func toggleThreadExpansion(_ threadID: String) {
+        if expandedThreadIDs.contains(threadID) {
+            expandedThreadIDs.remove(threadID)
+        } else {
+            expandedThreadIDs.insert(threadID)
+        }
+
+        renderMenu()
     }
 
     private func copyThreadID(_ threadID: String) {

@@ -135,6 +135,7 @@ struct AppStateStore {
         var cwd: String
         var sessionPath: String? = nil
         var isSubagent = false
+        var parentThreadID: String? = nil
         var status: ThreadStatus
         var listedStatus: ThreadStatus
         var updatedAt: Date
@@ -255,7 +256,7 @@ struct AppStateStore {
             break
         }
 
-        let threads = visibleRecentThreads
+        let threads = recentThreads
 
         if threads.contains(where: {
             $0.presentationStatus == .waitingForUser
@@ -296,35 +297,35 @@ struct AppStateStore {
     }
 
     var summaryText: String {
-        let watchedCount = visibleRecentThreads.filter(\.isWatched).count
-        let runningThreadCount = visibleRecentThreads.filter {
+        let watchedCount = recentThreads.filter(\.isWatched).count
+        let runningThreadCount = recentThreads.filter {
             $0.presentationStatus == .running
         }.count
         let runningCount = max(runningThreadCount, desktopActiveTurnCount)
-        let waitingCount = visibleRecentThreads.filter {
+        let waitingCount = recentThreads.filter {
             $0.presentationStatus == .waitingForUser
         }.count
 
-        return "Recent \(visibleRecentThreads.count) | Watching \(watchedCount) | Running \(runningCount) | Reply \(waitingCount) | Approval 0"
+        return "Recent \(recentThreads.count) | Watching \(watchedCount) | Running \(runningCount) | Reply \(waitingCount) | Approval 0"
     }
 
     var failedThreads: [ThreadRow] {
-        visibleRecentThreads.filter {
+        recentThreads.filter {
             if case .failed = $0.displayStatus { return true }
             return false
         }
     }
 
     var debugStatusSnapshot: String {
-        let waitingThreadIDs = visibleRecentThreads.compactMap { thread in
+        let waitingThreadIDs = recentThreads.compactMap { thread in
             if thread.presentationStatus == .waitingForUser { return shortThreadID(thread.id) }
             return nil
         }
-        let approvalThreadIDs = visibleRecentThreads.compactMap { thread in
+        let approvalThreadIDs = recentThreads.compactMap { thread in
             if thread.pendingRequestKind == .approval { return shortThreadID(thread.id) }
             return nil
         }
-        let runningThreadIDs = visibleRecentThreads.compactMap { thread in
+        let runningThreadIDs = recentThreads.compactMap { thread in
             if thread.presentationStatus == .running { return shortThreadID(thread.id) }
             return nil
         }
@@ -358,6 +359,7 @@ struct AppStateStore {
             row.cwd = thread.cwd
             row.sessionPath = thread.path
             row.isSubagent = thread.isSubagent
+            row.parentThreadID = thread.subagentParentThreadID
 
             let newStatus = ThreadStatus(threadStatus: thread.status)
             row.listedStatus = newStatus
@@ -409,6 +411,7 @@ struct AppStateStore {
         row.cwd = thread.cwd
         row.sessionPath = thread.path
         row.isSubagent = thread.isSubagent
+        row.parentThreadID = thread.subagentParentThreadID
         let newStatus = ThreadStatus(threadStatus: thread.status)
         if existingRow == nil {
             row.updatedAt = incomingUpdatedAt
@@ -444,6 +447,7 @@ struct AppStateStore {
         row.cwd = thread.cwd
         row.sessionPath = thread.path
         row.isSubagent = thread.isSubagent
+        row.parentThreadID = thread.subagentParentThreadID
 
         let newStatus = ThreadStatus(threadStatus: thread.status)
         row.listedStatus = newStatus
@@ -782,6 +786,7 @@ struct AppStateStore {
             row.cwd = notification.thread.cwd
             row.sessionPath = notification.thread.path
             row.isSubagent = notification.thread.isSubagent
+            row.parentThreadID = notification.thread.subagentParentThreadID
             row.updatedAt = max(row.updatedAt, observedAt)
             row.statusUpdatedAt = max(row.statusUpdatedAt, observedAt)
             let runtimeStatus = ThreadStatus(threadStatus: notification.thread.status)
@@ -928,6 +933,7 @@ struct AppStateStore {
             cwd: "",
             sessionPath: nil,
             isSubagent: false,
+            parentThreadID: nil,
             status: .notLoaded,
             listedStatus: .notLoaded,
             updatedAt: .distantPast,
@@ -1183,6 +1189,7 @@ private extension AppStateStore.ThreadRow {
         self.cwd = thread.cwd
         self.sessionPath = thread.path
         self.isSubagent = thread.isSubagent
+        self.parentThreadID = thread.subagentParentThreadID
         self.status = initialStatus
         self.listedStatus = initialStatus
         self.updatedAt = thread.updatedDate

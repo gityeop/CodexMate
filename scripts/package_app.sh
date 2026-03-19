@@ -13,6 +13,9 @@ FRAMEWORKS_DIR="$CONTENTS_DIR/Frameworks"
 PLIST_TEMPLATE="$ROOT_DIR/Packaging/CodexMate-Info.plist.template"
 APP_ICON_SOURCE="${APP_ICON_SOURCE:-$ROOT_DIR/Packaging/$APP_NAME.png}"
 APP_ICON_FILE="${APP_ICON_FILE:-$APP_NAME.icns}"
+APPLE_KEYCHAIN_PATH="${APPLE_KEYCHAIN_PATH:-$(security login-keychain | tr -d '"')}"
+APPLE_KEYCHAIN_PASSWORD="${APPLE_KEYCHAIN_PASSWORD:-}"
+APPLE_KEYCHAIN_UNLOCK_TIMEOUT="${APPLE_KEYCHAIN_UNLOCK_TIMEOUT:-21600}"
 
 BUNDLE_IDENTIFIER="${CODEXMATE_BUNDLE_ID:-${CODEXTENSION_BUNDLE_ID:-com.imsangyeob.codexmate}}"
 APP_VERSION="${APP_VERSION:-$(git -C "$ROOT_DIR" rev-parse --short HEAD)}"
@@ -20,11 +23,35 @@ APP_SHORT_VERSION="${APP_SHORT_VERSION:-$APP_VERSION}"
 SPARKLE_FEED_URL="${SPARKLE_FEED_URL:-https://example.com/appcast.xml}"
 SPARKLE_PUBLIC_KEY="${SPARKLE_PUBLIC_KEY:-}"
 
+typeset -a CODESIGN_KEYCHAIN_ARGS
+if [[ -n "$APPLE_KEYCHAIN_PATH" ]]; then
+  CODESIGN_KEYCHAIN_ARGS=(--keychain "$APPLE_KEYCHAIN_PATH")
+else
+  CODESIGN_KEYCHAIN_ARGS=()
+fi
+
 sign_with_identity() {
   local target="$1"
   local identity="$2"
   shift 2
-  codesign --force --sign "$identity" "$@" "$target"
+  codesign --force --sign "$identity" "${CODESIGN_KEYCHAIN_ARGS[@]}" "$@" "$target"
+}
+
+prepare_signing_keychain() {
+  [[ -n "${APPLE_SIGN_IDENTITY:-}" ]] || return
+
+  if [[ -z "$APPLE_KEYCHAIN_PASSWORD" ]]; then
+    echo "Signing without APPLE_KEYCHAIN_PASSWORD may trigger repeated Keychain prompts." >&2
+    return
+  fi
+
+  security unlock-keychain -p "$APPLE_KEYCHAIN_PASSWORD" "$APPLE_KEYCHAIN_PATH"
+  security set-keychain-settings -lut "$APPLE_KEYCHAIN_UNLOCK_TIMEOUT" "$APPLE_KEYCHAIN_PATH" >/dev/null 2>&1 || true
+  security set-key-partition-list \
+    -S apple-tool:,apple:,codesign: \
+    -s \
+    -k "$APPLE_KEYCHAIN_PASSWORD" \
+    "$APPLE_KEYCHAIN_PATH" >/dev/null
 }
 
 create_app_icon() {
@@ -99,6 +126,8 @@ sed \
 
 SIGN_IDENTITY="${APPLE_SIGN_IDENTITY:--}"
 
+prepare_signing_keychain
+
 if [[ -n "${APPLE_SIGN_IDENTITY:-}" ]]; then
   if [[ -d "$FRAMEWORKS_DIR/Sparkle.framework" ]]; then
     SPARKLE_CURRENT_DIR="$FRAMEWORKS_DIR/Sparkle.framework/Versions/Current"
@@ -124,8 +153,8 @@ if [[ -n "${APPLE_SIGN_IDENTITY:-}" ]]; then
   sign_with_identity "$MACOS_DIR/$APP_NAME" "$APPLE_SIGN_IDENTITY" --options runtime --timestamp
   sign_with_identity "$APP_DIR" "$APPLE_SIGN_IDENTITY" --options runtime --timestamp
 else
-  codesign --force --sign "$SIGN_IDENTITY" "$MACOS_DIR/$APP_NAME"
-  codesign --force --deep --sign - "$APP_DIR"
+  codesign --force --sign "$SIGN_IDENTITY" "${CODESIGN_KEYCHAIN_ARGS[@]}" "$MACOS_DIR/$APP_NAME"
+  codesign --force --deep --sign - "${CODESIGN_KEYCHAIN_ARGS[@]}" "$APP_DIR"
 fi
 
 echo "Packaged app: $APP_DIR"

@@ -278,7 +278,7 @@ final class MenubarControllerIntegrationTests: XCTestCase {
         XCTAssertFalse(snapshot.projectSections.flatMap(\.threads).first(where: { $0.id == "thread-b" })?.hasUnreadContent ?? true)
     }
 
-    func testLoadInitialThreadsHidesSubagentThreadsUsingMetadataEnrichment() async throws {
+    func testLoadInitialThreadsKeepsOrphanSubagentVisibleInSnapshot() async throws {
         let controller = makeController(
             recentThreadResponses: [
                 [
@@ -303,11 +303,47 @@ final class MenubarControllerIntegrationTests: XCTestCase {
         let snapshot = controller.prepareSnapshot().snapshot
 
         XCTAssertEqual(controller.recentThreads.map(\.id), ["main-thread"])
-        XCTAssertEqual(snapshot.projectSections.first?.threads.map(\.id), ["main-thread"])
+        XCTAssertEqual(snapshot.projectSections.first?.threads.map(\.id), ["subagent-thread", "main-thread"])
+        XCTAssertTrue(snapshot.projectSections.first?.threadGroups.isEmpty ?? false)
         XCTAssertTrue(snapshot.isWatchLatestThreadEnabled)
     }
 
-    func testThreadStartedNotificationDoesNotExposeSubagentThreadInSnapshot() async throws {
+    func testLoadInitialThreadsGroupsSubagentThreadUnderParentInSnapshot() async throws {
+        let controller = makeController(
+            recentThreadResponses: [
+                [
+                    thread(id: "parent-thread", updatedAt: 100, cwd: "/tmp/A/work"),
+                    thread(id: "child-thread", updatedAt: 200, cwd: "/tmp/A/work")
+                ]
+            ],
+            metadataResponses: [
+                .success([
+                    thread(id: "parent-thread", updatedAt: 100, cwd: "/tmp/A/work"),
+                    subagentThread(
+                        id: "child-thread",
+                        updatedAt: 200,
+                        cwd: "/tmp/A/work",
+                        parentThreadID: "parent-thread"
+                    )
+                ])
+            ],
+            projectCatalog: .success(
+                CodexDesktopProjectCatalog(workspaceRoots: [
+                    .init(path: "/tmp/A", displayName: "A")
+                ])
+            )
+        )
+
+        try await controller.loadInitialThreads()
+        let snapshot = controller.prepareSnapshot().snapshot
+
+        XCTAssertEqual(snapshot.projectSections.first?.threads.map(\.id), ["parent-thread"])
+        XCTAssertEqual(snapshot.projectSections.first?.threadGroups.count, 1)
+        XCTAssertEqual(snapshot.projectSections.first?.threadGroups.first?.id, "parent-thread")
+        XCTAssertEqual(snapshot.projectSections.first?.threadGroups.first?.childThreads.map(\.id), ["child-thread"])
+    }
+
+    func testThreadStartedNotificationKeepsOrphanSubagentVisibleInSnapshot() async throws {
         let controller = makeController(
             recentThreadResponses: [
                 [thread(id: "main-thread", updatedAt: 100, cwd: "/tmp/A/work")]
@@ -327,7 +363,8 @@ final class MenubarControllerIntegrationTests: XCTestCase {
         let snapshot = controller.prepareSnapshot().snapshot
 
         XCTAssertEqual(controller.recentThreads.map(\.id), ["main-thread"])
-        XCTAssertEqual(snapshot.projectSections.first?.threads.map(\.id), ["main-thread"])
+        XCTAssertEqual(snapshot.projectSections.first?.threads.map(\.id), ["subagent-thread", "main-thread"])
+        XCTAssertTrue(snapshot.projectSections.first?.threadGroups.isEmpty ?? false)
     }
 
     private func makeController(
@@ -393,12 +430,12 @@ final class MenubarControllerIntegrationTests: XCTestCase {
         )
     }
 
-    private func subagentThread(id: String, updatedAt: Int, cwd: String) -> CodexThread {
+    private func subagentThread(id: String, updatedAt: Int, cwd: String, parentThreadID: String = "parent-thread") -> CodexThread {
         thread(
             id: id,
             updatedAt: updatedAt,
             cwd: cwd,
-            source: #"{"subagent":{"thread_spawn":{"parent_thread_id":"parent-thread","depth":1,"agent_nickname":"Harvey","agent_role":"explorer"}}}"#,
+            source: #"{"subagent":{"thread_spawn":{"parent_thread_id":"\#(parentThreadID)","depth":1,"agent_nickname":"Harvey","agent_role":"explorer"}}}"#,
             agentRole: "explorer",
             agentNickname: "Harvey"
         )

@@ -50,8 +50,11 @@ CODEXMATE_BUNDLE_ID=com.example.codexmate \
 SPARKLE_FEED_URL=https://example.com/appcast.xml \
 SPARKLE_PUBLIC_KEY=... \
 APPLE_SIGN_IDENTITY="Developer ID Application: ..." \
+APPLE_KEYCHAIN_PASSWORD='your-login-keychain-password' \
 ./scripts/package_app.sh
 ```
+
+If `APPLE_KEYCHAIN_PASSWORD` is set, the packaging script unlocks the keychain and configures codesign access up front so macOS does not repeatedly prompt for the signing key during the nested Sparkle/framework signing steps. Set `APPLE_KEYCHAIN_PATH` as well if you do not use the default login keychain.
 
 This creates:
 
@@ -73,6 +76,7 @@ Create a signed release archive and Sparkle appcast entry:
 APP_VERSION=42 \
 APP_SHORT_VERSION=0.4.2 \
 APPLE_SIGN_IDENTITY="Developer ID Application: ..." \
+APPLE_KEYCHAIN_PASSWORD='your-login-keychain-password' \
 APPLE_NOTARY_PROFILE=your-notarytool-profile \
 SPARKLE_APPCAST_URL=https://downloads.example.com/appcast.xml \
 SPARKLE_PUBLIC_KEY=... \

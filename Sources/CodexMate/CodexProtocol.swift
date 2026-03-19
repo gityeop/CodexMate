@@ -267,6 +267,22 @@ extension CodexThread {
         return subagent["thread_spawn"] != nil
     }
 
+    var subagentParentThreadID: String? {
+        guard let source,
+              source.first == "{",
+              let data = source.data(using: .utf8),
+              let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let subagent = payload["subagent"] as? [String: Any],
+              let threadSpawn = subagent["thread_spawn"] as? [String: Any],
+              let parentThreadID = threadSpawn["parent_thread_id"] as? String,
+              !parentThreadID.isEmpty
+        else {
+            return nil
+        }
+
+        return parentThreadID
+    }
+
     func mergingMetadata(from metadata: CodexThread) -> CodexThread {
         CodexThread(
             id: id,

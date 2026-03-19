@@ -1328,12 +1328,42 @@ final class AppStateStoreTests: XCTestCase {
         XCTAssertEqual(store.failedThreads.map(\.id), ["failed-new", "failed-old"])
     }
 
+    func testReplaceRecentThreadsRecordsSubagentParentThreadID() {
+        var store = AppStateStore()
+        store.replaceRecentThreads(with: [
+            thread(
+                id: "child-thread",
+                updatedAt: 100,
+                status: .idle,
+                source: #"{"subagent":{"thread_spawn":{"parent_thread_id":"parent-thread","depth":1}}}"#
+            )
+        ])
+
+        XCTAssertEqual(store.recentThreads.first?.parentThreadID, "parent-thread")
+    }
+
+    func testSubagentThreadContributesToOverallStatusWhenParentExists() {
+        var store = AppStateStore()
+        store.replaceRecentThreads(with: [
+            thread(id: "parent-thread", updatedAt: 100, status: .idle),
+            thread(
+                id: "child-thread",
+                updatedAt: 110,
+                status: .active(flags: []),
+                source: #"{"subagent":{"thread_spawn":{"parent_thread_id":"parent-thread","depth":1}}}"#
+            )
+        ])
+
+        XCTAssertEqual(store.overallStatus, .running)
+    }
+
     private func thread(
         id: String,
         updatedAt: Int,
         status: CodexThreadStatus,
         cwd: String? = nil,
-        path: String? = nil
+        path: String? = nil,
+        source: String? = nil
     ) -> CodexThread {
         CodexThread(
             id: id,
@@ -1343,7 +1373,8 @@ final class AppStateStoreTests: XCTestCase {
             status: status,
             cwd: cwd ?? "/tmp/\(id)",
             name: nil,
-            path: path
+            path: path,
+            source: source
         )
     }
 }
