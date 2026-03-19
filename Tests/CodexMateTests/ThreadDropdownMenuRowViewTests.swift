@@ -4,6 +4,11 @@ import XCTest
 
 @MainActor
 final class ThreadDropdownMenuRowViewTests: XCTestCase {
+    override func setUpWithError() throws {
+        try super.setUpWithError()
+        try HeadlessAppKitTestSupport.skipIfNeeded()
+    }
+
     func testMouseUpOpensThreadWithoutTogglingDisclosure() throws {
         let view = ThreadDropdownMenuRowView(frame: NSRect(x: 0, y: 0, width: 280, height: 22))
         var openCount = 0
