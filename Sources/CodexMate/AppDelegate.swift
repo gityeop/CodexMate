@@ -206,6 +206,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self.renderMenu()
             }
             .store(in: &cancellables)
+
+        preferences.$threadsPerProjectLimit
+            .dropFirst()
+            .sink { [weak self] _ in
+                self?.renderMenu()
+            }
+            .store(in: &cancellables)
     }
 
     private func configureGlobalShortcut() {
@@ -577,7 +584,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hoverTooltipWorkItem = nil
 
         let preparedSnapshot = controller.prepareSnapshot(
-            additionalTrackedThreadIDs: Set(liveSubscribedThreadUpdatedAtByID.keys)
+            additionalTrackedThreadIDs: Set(liveSubscribedThreadUpdatedAtByID.keys),
+            visibleThreadLimit: preferences.threadsPerProjectLimit
         )
         let snapshot = preparedSnapshot.snapshot
         let menuSections = buildThreadMenuSections(

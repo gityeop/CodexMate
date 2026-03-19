@@ -16,7 +16,7 @@ final class SettingsWindowController: NSWindowController {
         let window = NSWindow(contentViewController: hostingController)
         window.styleMask = [.titled, .closable, .miniaturizable]
         window.titleVisibility = .visible
-        window.setContentSize(NSSize(width: 520, height: 420))
+        window.setContentSize(NSSize(width: 520, height: 460))
         window.isReleasedWhenClosed = false
         window.center()
 
@@ -59,6 +59,14 @@ private struct SettingsView: View {
                         Text(viewModel.label(for: language)).tag(language)
                     }
                 }
+
+                Stepper(
+                    value: threadsPerProjectBinding,
+                    in: viewModel.threadsPerProjectLimitRange
+                ) {
+                    Text(viewModel.threadsPerProjectLimitLabel)
+                }
+                helpText(viewModel.text("settings.threadsPerProjectHelp"))
 
                 Toggle(
                     viewModel.text("settings.launchAtLogin"),
@@ -116,7 +124,7 @@ private struct SettingsView: View {
         }
         .formStyle(.grouped)
         .padding(20)
-        .frame(minWidth: 520, minHeight: 420)
+        .frame(minWidth: 520, minHeight: 460)
     }
 
     private var languageBinding: Binding<AppLanguage> {
@@ -130,6 +138,13 @@ private struct SettingsView: View {
         Binding(
             get: { viewModel.launchAtLoginSnapshot.isEnabled },
             set: { viewModel.setLaunchAtLoginEnabled($0) }
+        )
+    }
+
+    private var threadsPerProjectBinding: Binding<Int> {
+        Binding(
+            get: { viewModel.preferences.threadsPerProjectLimit },
+            set: { viewModel.setThreadsPerProjectLimit($0) }
         )
     }
 

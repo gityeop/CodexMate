@@ -265,8 +265,13 @@ final class MenubarController {
         state.clearLiveRuntimeState()
     }
 
-    func prepareSnapshot(additionalTrackedThreadIDs: Set<String> = []) -> MenubarPreparedSnapshot {
-        let snapshotSections = projectSectionsWithSubagentThreads()
+    func prepareSnapshot(
+        additionalTrackedThreadIDs: Set<String> = [],
+        visibleThreadLimit: Int? = nil
+    ) -> MenubarPreparedSnapshot {
+        let snapshotSections = projectSectionsWithSubagentThreads(
+            visibleThreadLimit: visibleThreadLimit ?? configuration.visibleThreadLimit
+        )
         let displayedThreads = snapshotSections.flatMap { section in
             section.threads + section.threadGroups.flatMap(\.childThreads)
         }
@@ -438,7 +443,7 @@ final class MenubarController {
         return "[" + sample.joined(separator: ",") + suffix + "]"
     }
 
-    private func projectSectionsWithSubagentThreads() -> [MenubarProjectSectionSnapshot] {
+    private func projectSectionsWithSubagentThreads(visibleThreadLimit: Int) -> [MenubarProjectSectionSnapshot] {
         let allThreads = state.recentThreads
         guard !allThreads.isEmpty else { return [] }
 
@@ -522,11 +527,11 @@ final class MenubarController {
             )
         }
 
-        guard configuration.projectLimit != .max || configuration.visibleThreadLimit != .max else {
+        guard configuration.projectLimit != .max || visibleThreadLimit != .max else {
             return sections
         }
 
-        return limitProjectSections(sections)
+        return limitProjectSections(sections, visibleThreadLimit: visibleThreadLimit)
     }
 
     private static func isNewerThread(_ lhs: AppStateStore.ThreadRow, _ rhs: AppStateStore.ThreadRow) -> Bool {
@@ -537,11 +542,14 @@ final class MenubarController {
         return lhs.activityUpdatedAt > rhs.activityUpdatedAt
     }
 
-    private func limitProjectSections(_ sections: [MenubarProjectSectionSnapshot]) -> [MenubarProjectSectionSnapshot] {
+    private func limitProjectSections(
+        _ sections: [MenubarProjectSectionSnapshot],
+        visibleThreadLimit: Int
+    ) -> [MenubarProjectSectionSnapshot] {
         let limitedSections = Array(sections.prefix(max(0, configuration.projectLimit)))
 
         return limitedSections.map { section in
-            let limitedThreads = Array(section.threads.prefix(max(0, configuration.visibleThreadLimit)))
+            let limitedThreads = Array(section.threads.prefix(max(0, visibleThreadLimit)))
             let visibleThreadIDs = Set(limitedThreads.map(\.id))
             let limitedThreadGroups = section.threadGroups.filter { visibleThreadIDs.contains($0.id) }
 

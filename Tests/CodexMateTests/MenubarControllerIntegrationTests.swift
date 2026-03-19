@@ -367,6 +367,28 @@ final class MenubarControllerIntegrationTests: XCTestCase {
         XCTAssertTrue(snapshot.projectSections.first?.threadGroups.isEmpty ?? false)
     }
 
+    func testPrepareSnapshotAppliesVisibleThreadLimitOverridePerProject() async throws {
+        let controller = makeController(
+            recentThreadResponses: [
+                [
+                    thread(id: "thread-a", updatedAt: 100, cwd: "/tmp/A/work"),
+                    thread(id: "thread-b", updatedAt: 200, cwd: "/tmp/A/work"),
+                    thread(id: "thread-c", updatedAt: 300, cwd: "/tmp/A/work")
+                ]
+            ],
+            projectCatalog: .success(
+                CodexDesktopProjectCatalog(workspaceRoots: [
+                    .init(path: "/tmp/A", displayName: "A")
+                ])
+            )
+        )
+
+        try await controller.loadInitialThreads()
+        let snapshot = controller.prepareSnapshot(visibleThreadLimit: 2).snapshot
+
+        XCTAssertEqual(snapshot.projectSections.first?.threads.map(\.id), ["thread-c", "thread-b"])
+    }
+
     private func makeController(
         desktopUpdates: [DesktopActivityUpdate] = [],
         recentThreadResponses: [[CodexThread]],

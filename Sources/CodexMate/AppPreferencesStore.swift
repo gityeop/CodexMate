@@ -3,11 +3,15 @@ import Foundation
 
 @MainActor
 final class AppPreferencesStore: ObservableObject {
+    static let defaultThreadsPerProjectLimit = 8
+    static let threadsPerProjectLimitRange = 1...50
+
     private enum DefaultsKey {
         static let language = "appLanguage"
         static let attentionNotificationsEnabled = "attentionNotificationsEnabled"
         static let completionNotificationsEnabled = "completionNotificationsEnabled"
         static let failureNotificationsEnabled = "failureNotificationsEnabled"
+        static let threadsPerProjectLimit = "threadsPerProjectLimit"
     }
 
     @Published var language: AppLanguage {
@@ -34,6 +38,18 @@ final class AppPreferencesStore: ObservableObject {
         }
     }
 
+    @Published var threadsPerProjectLimit: Int {
+        didSet {
+            let clampedLimit = Self.clampedThreadsPerProjectLimit(threadsPerProjectLimit)
+            guard threadsPerProjectLimit == clampedLimit else {
+                threadsPerProjectLimit = clampedLimit
+                return
+            }
+
+            defaults.set(threadsPerProjectLimit, forKey: DefaultsKey.threadsPerProjectLimit)
+        }
+    }
+
     let defaults: UserDefaults
 
     init(defaults: UserDefaults = .standard) {
@@ -54,9 +70,20 @@ final class AppPreferencesStore: ObservableObject {
         } else {
             failureNotificationsEnabled = defaults.bool(forKey: DefaultsKey.failureNotificationsEnabled)
         }
+        if defaults.object(forKey: DefaultsKey.threadsPerProjectLimit) == nil {
+            threadsPerProjectLimit = Self.defaultThreadsPerProjectLimit
+        } else {
+            threadsPerProjectLimit = Self.clampedThreadsPerProjectLimit(
+                defaults.integer(forKey: DefaultsKey.threadsPerProjectLimit)
+            )
+        }
     }
 
     var locale: Locale {
         Locale(identifier: language.localeIdentifier)
+    }
+
+    private static func clampedThreadsPerProjectLimit(_ limit: Int) -> Int {
+        min(max(limit, threadsPerProjectLimitRange.lowerBound), threadsPerProjectLimitRange.upperBound)
     }
 }

@@ -11,6 +11,7 @@ final class AppPreferencesStoreTests: XCTestCase {
         XCTAssertTrue(store.attentionNotificationsEnabled)
         XCTAssertTrue(store.completionNotificationsEnabled)
         XCTAssertTrue(store.failureNotificationsEnabled)
+        XCTAssertEqual(store.threadsPerProjectLimit, AppPreferencesStore.defaultThreadsPerProjectLimit)
     }
 
     func testInvalidStoredLanguageFallsBackToSystem() {
@@ -30,12 +31,33 @@ final class AppPreferencesStoreTests: XCTestCase {
         store.attentionNotificationsEnabled = false
         store.completionNotificationsEnabled = false
         store.failureNotificationsEnabled = false
+        store.threadsPerProjectLimit = 12
 
         let reloaded = AppPreferencesStore(defaults: defaults)
         XCTAssertEqual(reloaded.language, .korean)
         XCTAssertFalse(reloaded.attentionNotificationsEnabled)
         XCTAssertFalse(reloaded.completionNotificationsEnabled)
         XCTAssertFalse(reloaded.failureNotificationsEnabled)
+        XCTAssertEqual(reloaded.threadsPerProjectLimit, 12)
+    }
+
+    func testThreadsPerProjectLimitClampsOutOfRangeValues() {
+        let defaults = makeDefaults()
+        defaults.set(0, forKey: "threadsPerProjectLimit")
+
+        let store = AppPreferencesStore(defaults: defaults)
+
+        XCTAssertEqual(
+            store.threadsPerProjectLimit,
+            AppPreferencesStore.threadsPerProjectLimitRange.lowerBound
+        )
+
+        store.threadsPerProjectLimit = 999
+
+        XCTAssertEqual(
+            store.threadsPerProjectLimit,
+            AppPreferencesStore.threadsPerProjectLimitRange.upperBound
+        )
     }
 
     private func makeDefaults() -> UserDefaults {

@@ -58,6 +58,18 @@ final class SettingsViewModel: ObservableObject {
         .toggleMenuBarDropdown
     }
 
+    var threadsPerProjectLimitRange: ClosedRange<Int> {
+        AppPreferencesStore.threadsPerProjectLimitRange
+    }
+
+    var threadsPerProjectLimitLabel: String {
+        strings.format(
+            "settings.threadsPerProjectLabel",
+            language: preferences.language,
+            Int64(preferences.threadsPerProjectLimit)
+        )
+    }
+
     func text(_ key: String) -> String {
         strings.text(key, language: preferences.language)
     }
@@ -75,6 +87,10 @@ final class SettingsViewModel: ObservableObject {
 
     func setLanguage(_ language: AppLanguage) {
         preferences.language = language
+    }
+
+    func setThreadsPerProjectLimit(_ limit: Int) {
+        preferences.threadsPerProjectLimit = limit
     }
 
     func setLaunchAtLoginEnabled(_ isEnabled: Bool) {
