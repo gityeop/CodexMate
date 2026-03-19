@@ -322,8 +322,9 @@ final class CodexDesktopConversationActivityReader {
                     }
                 }
 
-                if line.contains("[desktop-notifications] show turn-complete") ||
-                    (line.contains("maybe_resume_success") && line.contains("latestTurnStatus=completed")) {
+                // `maybe_resume_success` is emitted when reopening an already-completed thread,
+                // so only the explicit completion notification should advance terminal activity.
+                if line.contains("[desktop-notifications] show turn-complete") {
                     let currentLatestCompleted = latestTurnCompletedAtByThreadID[threadID] ?? .distantPast
                     if timestamp > currentLatestCompleted {
                         latestTurnCompletedAtByThreadID[threadID] = timestamp
