@@ -43,7 +43,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-    private let menu = NSMenu()
+    private let menu = ThreadMenu()
     private let relativeDateFormatter = RelativeDateTimeFormatter()
     private let preferences = AppPreferencesStore()
     private let strings = AppStrings.shared
@@ -92,8 +92,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var hoverTooltipContentsByThreadID: [String: MenubarStatusPresentation.ThreadTooltipContent] = [:]
     private var hoverTooltipWorkItem: DispatchWorkItem?
     private var highlightedThreadID: String?
-    private weak var highlightedMenuRowView: ThreadDropdownMenuRowView?
-    private var expandedThreadIDs: Set<String> = []
+    private var projectShortcutThreadIDs: [String] = []
     private var foregroundRefreshObserverTokens: [NSObjectProtocol] = []
     private var cancellables: Set<AnyCancellable> = []
     private var foregroundRefreshThrottle = ForegroundRefreshThrottle(
@@ -119,6 +118,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         menu.autoenablesItems = false
         menu.delegate = self
+        menu.onKeyboardShortcut = { [weak self] action in
+            self?.handleMenuKeyboardShortcut(action) ?? false
+        }
         configureMainMenu()
         configureStatusItemButton()
         configurePreferencesObservers()
@@ -573,7 +575,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func renderMenu() {
         hoverTooltipWorkItem?.cancel()
         hoverTooltipWorkItem = nil
-        highlightedMenuRowView = nil
 
         let preparedSnapshot = controller.prepareSnapshot(
             additionalTrackedThreadIDs: Set(liveSubscribedThreadUpdatedAtByID.keys)
@@ -584,9 +585,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             recentThreads: controller.recentThreads,
             projectCatalog: controller.projectCatalog
         )
+        projectShortcutThreadIDs = menuSections.compactMap { $0.threads.first?.thread.id }
         let renderThreadIDs = Set(flattenedThreadIDs(from: menuSections.flatMap(\.threads)))
-        let renderedExpandableThreadIDs = collectExpandableThreadIDs(from: menuSections.flatMap(\.threads))
-        expandedThreadIDs.formIntersection(renderedExpandableThreadIDs)
         let hasUnreadThreads = menuSections.flatMap(\.threads).contains(where: hasUnreadContent(in:))
         statusItem.button?.title = MenubarStatusPresentation.statusItemIcon(
             overallStatus: snapshot.overallStatus,
@@ -601,7 +601,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         var hoverTooltipContentsByThreadID: [String: MenubarStatusPresentation.ThreadTooltipContent] = [:]
-        var threadRowViews: [ThreadDropdownMenuRowView] = []
         menu.removeAllItems()
 
         if menuSections.isEmpty {
@@ -615,13 +614,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 let item = makeStaticItem(title: projectSectionTitle(for: section))
                 menu.addItem(item)
 
-                for thread in section.threads {
+                for (threadIndex, thread) in section.threads.enumerated() {
                     addThreadMenuItems(
                         thread,
                         level: 0,
                         worktreeDisplayName: section.displayName,
                         hoverTooltipContentsByThreadID: &hoverTooltipContentsByThreadID,
-                        rowViews: &threadRowViews
+                        keyEquivalent: index < 5 && threadIndex == 0 ? String(index + 1) : nil
                     )
                 }
             }
@@ -669,7 +668,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 action: #selector(quit)
             )
         )
-        normalizeThreadRowWidths(threadRowViews)
         scheduleRefreshTimerIfNeeded()
     }
 
@@ -864,19 +862,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    private func collectExpandableThreadIDs(from threads: [ThreadMenuThread]) -> Set<String> {
-        var threadIDs: Set<String> = []
-
-        for thread in threads {
-            if !thread.children.isEmpty {
-                threadIDs.insert(thread.thread.id)
-                threadIDs.formUnion(collectExpandableThreadIDs(from: thread.children))
-            }
-        }
-
-        return threadIDs
-    }
-
     private func hasUnreadContent(in thread: ThreadMenuThread) -> Bool {
         if controller.threadReadMarkers.hasUnreadContent(
             threadID: thread.thread.id,
@@ -893,13 +878,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         level: Int,
         worktreeDisplayName: String,
         hoverTooltipContentsByThreadID: inout [String: MenubarStatusPresentation.ThreadTooltipContent],
-        rowViews: inout [ThreadDropdownMenuRowView]
+        keyEquivalent: String? = nil
     ) {
         let hasUnreadContent = controller.threadReadMarkers.hasUnreadContent(
             threadID: thread.thread.id,
             lastTerminalActivityAt: thread.thread.lastTerminalActivityAt
         )
         let threadSnapshot = MenubarThreadSnapshot(thread: thread.thread, hasUnreadContent: hasUnreadContent)
+        let title = menuTitle(for: thread.thread)
         let tooltipContent = MenubarStatusPresentation.threadTooltipContent(
             worktreeDisplayName: worktreeDisplayName,
             thread: thread.thread,
@@ -907,37 +893,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             language: preferences.language
         )
 
-        let item = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+        let item = NSMenuItem(title: title, action: #selector(openThread(_:)), keyEquivalent: keyEquivalent ?? "")
+        item.target = self
         item.representedObject = thread.thread.id
         item.toolTip = nil
-
-        let view = ThreadDropdownMenuRowView(frame: .zero)
-        view.configure(
-            title: menuTitle(for: thread.thread),
-            indicatorImage: indicatorImage(for: threadSnapshot),
-            indentationLevel: level,
-            isExpandable: !thread.children.isEmpty,
-            isExpanded: expandedThreadIDs.contains(thread.thread.id),
-            onOpen: { [weak self] in
-                self?.openThread(threadID: thread.thread.id)
-            },
-            onToggle: thread.children.isEmpty ? nil : { [weak self] in
-                self?.toggleThreadExpansion(thread.thread.id)
-            }
-        )
-        if highlightedThreadID == thread.thread.id {
-            view.isHighlighted = true
-            highlightedMenuRowView = view
+        item.indentationLevel = level
+        item.image = indicatorImage(for: threadSnapshot)
+        if keyEquivalent != nil {
+            item.keyEquivalentModifierMask = NSEvent.ModifierFlags.command
         }
-        view.frame = NSRect(origin: .zero, size: view.intrinsicContentSize)
-        rowViews.append(view)
-        item.view = view
         hoverTooltipContentsByThreadID[thread.thread.id] = tooltipContent
         menu.addItem(item)
-
-        guard expandedThreadIDs.contains(thread.thread.id) else {
-            return
-        }
 
         for child in thread.children {
             addThreadMenuItems(
@@ -945,27 +911,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 level: level + 1,
                 worktreeDisplayName: worktreeDisplayName,
                 hoverTooltipContentsByThreadID: &hoverTooltipContentsByThreadID,
-                rowViews: &rowViews
-            )
-        }
-    }
-
-    private func normalizeThreadRowWidths(_ rowViews: [ThreadDropdownMenuRowView]) {
-        guard !rowViews.isEmpty else {
-            return
-        }
-
-        let targetWidth = ceil(max(
-            menu.size.width,
-            rowViews.map { $0.intrinsicContentSize.width }.max() ?? 0
-        ))
-
-        for rowView in rowViews {
-            rowView.frame = NSRect(
-                x: rowView.frame.origin.x,
-                y: rowView.frame.origin.y,
-                width: targetWidth,
-                height: rowView.frame.height
+                keyEquivalent: nil
             )
         }
     }
@@ -1017,13 +963,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func updateHoverTooltip(for item: NSMenuItem?) {
-        let hoveredMenuRowView = item?.view as? ThreadDropdownMenuRowView
-        if highlightedMenuRowView !== hoveredMenuRowView {
-            highlightedMenuRowView?.isHighlighted = false
-            highlightedMenuRowView = hoveredMenuRowView
-        }
-        highlightedMenuRowView?.isHighlighted = item != nil
-
         guard let threadID = item?.representedObject as? String,
               let tooltipContent = hoverTooltipContentsByThreadID[threadID] else {
             hideHoverTooltip()
@@ -1067,8 +1006,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hoverTooltipWorkItem?.cancel()
         hoverTooltipWorkItem = nil
         highlightedThreadID = nil
-        highlightedMenuRowView?.isHighlighted = false
-        highlightedMenuRowView = nil
         hoverTooltipController.hide()
     }
 
@@ -1397,6 +1334,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.menuShortcutEventMonitor = nil
     }
 
+    private func handleMenuKeyboardShortcut(_ action: ThreadMenuKeyboardShortcutAction) -> Bool {
+        switch action {
+        case .openHighlightedThread:
+            let threadID = highlightedThreadID ?? (menu.highlightedItem?.representedObject as? String)
+            guard let threadID else {
+                return false
+            }
+
+            openThread(threadID: threadID)
+            return true
+        case let .openProjectThread(index):
+            guard projectShortcutThreadIDs.indices.contains(index) else {
+                return false
+            }
+
+            openThread(threadID: projectShortcutThreadIDs[index])
+            return true
+        }
+    }
+
     @objc
     private func refreshThreadsAction() {
         requestDesktopActivityRefresh()
@@ -1465,16 +1422,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    private func toggleThreadExpansion(_ threadID: String) {
-        if expandedThreadIDs.contains(threadID) {
-            expandedThreadIDs.remove(threadID)
-        } else {
-            expandedThreadIDs.insert(threadID)
-        }
-
-        renderMenu()
-    }
-
     private func copyThreadID(_ threadID: String) {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(threadID, forType: .string)
@@ -1487,6 +1434,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 }
 
 extension AppDelegate: NSMenuDelegate {
+    func menuHasKeyEquivalent(
+        _ menu: NSMenu,
+        for event: NSEvent,
+        target: AutoreleasingUnsafeMutablePointer<AnyObject?>,
+        action: UnsafeMutablePointer<Selector?>
+    ) -> Bool {
+        guard menu == self.menu,
+              let shortcutAction = ThreadMenu.shortcutAction(for: event) else {
+            return false
+        }
+
+        return handleMenuKeyboardShortcut(shortcutAction)
+    }
+
     func menuWillOpen(_ menu: NSMenu) {
         guard menu == self.menu else { return }
 
