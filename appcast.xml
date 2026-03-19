@@ -3,21 +3,19 @@
     <channel>
         <title>CodexMate</title>
         <item>
-            <title>0.0.2</title>
-            <pubDate>Fri, 20 Mar 2026 05:08:41 +0900</pubDate>
-            <link>https://github.com/gityeop/CodexMate/releases/tag/v0.0.2</link>
-            <sparkle:version>2</sparkle:version>
-            <sparkle:shortVersionString>0.0.2</sparkle:shortVersionString>
+            <title>0.0.3</title>
+            <pubDate>Fri, 20 Mar 2026 06:52:19 +0900</pubDate>
+            <link>https://github.com/gityeop/CodexMate/releases/tag/v0.0.3</link>
+            <sparkle:version>3</sparkle:version>
+            <sparkle:shortVersionString>0.0.3</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description sparkle:format="markdown"><![CDATA[# CodexMate 0.0.2
+            <description sparkle:format="markdown"><![CDATA[# CodexMate 0.0.3
 
-- Improved recent thread menu row sizing so titles align consistently, reserve icon space, and stay vertically centered.
-- Hardened updater availability checks so builds without Sparkle metadata stay unavailable and invalid feed URLs surface a configuration issue.
-- Updated packaging defaults to derive the GitHub Releases appcast URL from `origin` and load the Sparkle public key from the configured keychain account when available.
-- Added regression coverage for thread row layout and updater configuration handling.
+- Added a setting to choose how many recent threads each project shows in the menu.
+- Improved thread interactions by using native menu items for project shortcuts and hover handling.
 ]]></description>
-            <enclosure url="https://github.com/gityeop/CodexMate/releases/latest/download/CodexMate-0.0.2.zip" length="3814940" type="application/octet-stream" sparkle:edSignature="JX/E8rFq2DJPlFupxUg+7Eh7XN3HJIMY7X4HTldK5NXvOwBzyp1/qcHKktsUD+q7Mqp7H4wwk0uqJeOQvP4SCw=="/>
+            <enclosure url="https://github.com/gityeop/CodexMate/releases/latest/download/CodexMate-0.0.3.zip" length="3819458" type="application/octet-stream" sparkle:edSignature="Uop1kfBpF2Zlx+cew7je53f9vnn7pwDGv+FlL/GXkf8o0CJ4LPHU0Vml0vfhrtYtOOrNNlWqtByBdgGQtuWnDw=="/>
         </item>
     </channel>
 </rss>
