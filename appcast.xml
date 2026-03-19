@@ -4,7 +4,7 @@
         <title>CodexMate</title>
         <item>
             <title>0.0.1</title>
-            <pubDate>Thu, 19 Mar 2026 22:33:18 +0900</pubDate>
+            <pubDate>Thu, 19 Mar 2026 22:57:33 +0900</pubDate>
             <link>https://github.com/gityeop/CodexMate/releases/tag/v0.0.1</link>
             <sparkle:version>1</sparkle:version>
             <sparkle:shortVersionString>0.0.1</sparkle:shortVersionString>
@@ -18,7 +18,7 @@
 - Added packaged `.app` builds with Sparkle update support.
 - Added release packaging, notarization, and Sparkle appcast generation scripts.
 ]]></description>
-            <enclosure url="https://github.com/gityeop/CodexMate/releases/download/v0.0.1/CodexMate-0.0.1.zip" length="3849506" type="application/octet-stream" sparkle:edSignature="/VeGHgCdESQcSMDHGKgxAb6OrLOLmz0ZLBUxGwUU3gNJvS06Yzxr8lMz8+AlsgsI4SLuAp07i87FDjSb97ntAA=="/>
+            <enclosure url="https://github.com/gityeop/CodexMate/releases/download/v0.0.1/CodexMate-0.0.1.zip" length="3849559" type="application/octet-stream" sparkle:edSignature="olnwTmncBu0FCHUDt+RCZLYB3sSQ9AlsPG53miUBtATZt3RkvZdGEwNVUa55N4wGlx810q69UfSjUBHONNGpDw=="/>
         </item>
     </channel>
 </rss>
