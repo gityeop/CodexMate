@@ -148,11 +148,11 @@ final class MenubarStatusPresentationTests: XCTestCase {
                 status: .idle,
                 displayTitle: "Fix hover copy",
                 preview: "Tighten thread tooltip text",
-                cwd: "/Users/tester/codextension"
+                cwd: "/Users/tester/workspaces/codexmate"
             )
         )
 
-        XCTAssertFalse(tooltip.contains("/Users/tester/codextension"))
+        XCTAssertFalse(tooltip.contains("/Users/tester/workspaces/codexmate"))
     }
 
     func testThreadIndicatorUsesUnreadDotForUnreadIdleThread() {

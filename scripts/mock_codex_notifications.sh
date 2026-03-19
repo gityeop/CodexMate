@@ -1,7 +1,7 @@
 #!/bin/zsh
 set -euo pipefail
 
-thread_payload='{"id":"thread-qa","preview":"Notification QA thread","createdAt":1742389200,"updatedAt":1742389200,"status":{"type":"idle"},"cwd":"/Users/tester/codextension","name":"Notification QA Thread"}'
+thread_payload='{"id":"thread-qa","preview":"Notification QA thread","createdAt":1742389200,"updatedAt":1742389200,"status":{"type":"idle"},"cwd":"/Users/tester/workspaces/codexmate","name":"Notification QA Thread"}'
 did_emit_events=0
 
 extract_request_id() {

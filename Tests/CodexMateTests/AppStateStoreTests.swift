@@ -41,14 +41,14 @@ final class AppStateStoreTests: XCTestCase {
     func testProjectSectionsGroupThreadsBySavedWorkspaceRoot() {
         var store = AppStateStore()
         store.replaceRecentThreads(with: [
-            thread(id: "thread-1", updatedAt: 100, status: .idle, cwd: "/Users/tester/notion-blog/posts"),
-            thread(id: "thread-2", updatedAt: 200, status: .active(flags: []), cwd: "/Users/tester/Maccy/Sources"),
-            thread(id: "thread-3", updatedAt: 150, status: .idle, cwd: "/Users/tester/notion-blog/scripts")
+            thread(id: "thread-1", updatedAt: 100, status: .idle, cwd: "/Users/tester/workspaces/notion-blog/posts"),
+            thread(id: "thread-2", updatedAt: 200, status: .active(flags: []), cwd: "/Users/tester/workspaces/Maccy/Sources"),
+            thread(id: "thread-3", updatedAt: 150, status: .idle, cwd: "/Users/tester/workspaces/notion-blog/scripts")
         ])
 
         let catalog = CodexDesktopProjectCatalog(workspaceRoots: [
-            .init(path: "/Users/tester/notion-blog", displayName: "notion-blog"),
-            .init(path: "/Users/tester/Maccy", displayName: "Maccy")
+            .init(path: "/Users/tester/workspaces/notion-blog", displayName: "notion-blog"),
+            .init(path: "/Users/tester/workspaces/Maccy", displayName: "Maccy")
         ])
 
         let sections = store.projectSections(using: catalog)
@@ -233,13 +233,13 @@ final class AppStateStoreTests: XCTestCase {
 
     func testProjectCatalogLongestPrefixMatchUsesDeepestRoot() {
         let catalog = CodexDesktopProjectCatalog(workspaceRoots: [
-            .init(path: "/Users/tester/notion-blog", displayName: "notion-blog"),
-            .init(path: "/Users/tester/notion-blog/apps/web", displayName: "web")
+            .init(path: "/Users/tester/workspaces/notion-blog", displayName: "notion-blog"),
+            .init(path: "/Users/tester/workspaces/notion-blog/apps/web", displayName: "web")
         ])
 
-        let project = catalog.project(for: "/Users/tester/notion-blog/apps/web/pages")
+        let project = catalog.project(for: "/Users/tester/workspaces/notion-blog/apps/web/pages")
 
-        XCTAssertEqual(project.id, "/Users/tester/notion-blog/apps/web")
+        XCTAssertEqual(project.id, "/Users/tester/workspaces/notion-blog/apps/web")
         XCTAssertEqual(project.displayName, "web")
     }
 
