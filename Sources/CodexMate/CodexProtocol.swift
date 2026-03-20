@@ -304,26 +304,56 @@ extension CodexThread {
     }
 
     var displayTitle: String {
-        if let name, !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return name
+        let normalizedName = Self.normalizedDisplayCandidate(name)
+        if !normalizedName.isEmpty {
+            return Self.truncatedDisplayTitle(normalizedName)
         }
 
-        let trimmed = previewLine
-        if trimmed.isEmpty {
+        let normalizedPreview = Self.normalizedDisplayCandidate(preview)
+        if normalizedPreview.isEmpty {
             return id
         }
 
-        if trimmed.count > 48 {
-            let prefix = trimmed.prefix(45)
-            return "\(prefix)..."
-        }
-
-        return trimmed
+        return Self.truncatedDisplayTitle(normalizedPreview)
     }
 
     var previewLine: String {
         preview
             .replacingOccurrences(of: "\n", with: " ")
             .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func normalizedDisplayCandidate(_ value: String?) -> String {
+        guard let value else { return "" }
+
+        let trimmedLines = value
+            .split(whereSeparator: \.isNewline)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+
+        guard let firstLine = trimmedLines.first else {
+            return value.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        let candidate: String
+        if firstLine.count < 12, trimmedLines.count > 1 {
+            candidate = firstLine + " " + trimmedLines[1]
+        } else {
+            candidate = firstLine
+        }
+
+        return candidate.replacingOccurrences(
+            of: #"\s+"#,
+            with: " ",
+            options: .regularExpression
+        )
+    }
+
+    private static func truncatedDisplayTitle(_ value: String) -> String {
+        if value.count > 48 {
+            return "\(value.prefix(45))..."
+        }
+
+        return value
     }
 }
