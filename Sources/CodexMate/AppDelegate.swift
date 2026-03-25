@@ -64,9 +64,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let waitingForUserIndicatorImage = AppDelegate.makeTextIndicatorImage("💬")
     private let failedIndicatorImage = AppDelegate.makeTextIndicatorImage("⚠️")
     private let hoverTooltipController = ThreadHoverTooltipController()
-    private lazy var recentThreadListing = AppServerRecentThreadListing(
+    private lazy var appServerRecentThreadListing = AppServerRecentThreadListing(
         client: client,
         fetchPageLimit: ThreadListDisplay.fetchPageLimit
+    )
+    private lazy var recentThreadListing = FallbackRecentThreadListing(
+        primary: appServerRecentThreadListing,
+        fallback: desktopStateReader
     )
     private lazy var controller = MenubarController(
         desktopActivityLoader: desktopActivityService,

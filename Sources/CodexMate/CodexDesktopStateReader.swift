@@ -233,6 +233,35 @@ struct CodexDesktopStateReader {
         return threads
     }
 
+    func recentThreads(limit: Int) throws -> [CodexThread] {
+        guard limit > 0 else {
+            return []
+        }
+
+        let output = try withStateDatabase { databaseURL in
+            try runSQLite(
+                sql: """
+                SELECT id
+                FROM threads
+                WHERE archived = 0
+                ORDER BY updated_at DESC
+                LIMIT \(limit);
+                """,
+                databaseURL: databaseURL
+            )
+        }
+        let recentThreadIDs = parseSQLiteLines(output.split(separator: "\n").map(String.init))
+        guard !recentThreadIDs.isEmpty else {
+            return []
+        }
+
+        let threadsByID = Dictionary(
+            uniqueKeysWithValues: try threads(threadIDs: Set(recentThreadIDs)).map { ($0.id, $0) }
+        )
+
+        return recentThreadIDs.compactMap { threadsByID[$0] }
+    }
+
     private func withStateDatabase<Result>(_ operation: (URL) throws -> Result) throws -> Result {
         if let stateDatabaseURLOverride {
             return try operation(stateDatabaseURLOverride)

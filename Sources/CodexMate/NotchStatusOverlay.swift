@@ -1173,12 +1173,7 @@ private final class NotchStatusOverlayView: NSView {
     }
 
     private var bobOffsets: [CGFloat] {
-        switch statusSprite {
-        case .idle:
-            [0, 0, 0, 0, 0, 0]
-        default:
-            usesCompactLayout ? [0, 1, 0, -1, 0, 1] : [0, 1, 0, -1, 0, 1]
-        }
+        [0]
     }
 
     private func notchShapePath(

@@ -57,6 +57,35 @@ actor AppServerRecentThreadListing: RecentThreadListing {
     }
 }
 
+@MainActor
+final class FallbackRecentThreadListing: RecentThreadListing, @unchecked Sendable {
+    private let primary: AppServerRecentThreadListing
+    private let fallback: CodexDesktopStateReader
+
+    init(primary: AppServerRecentThreadListing, fallback: CodexDesktopStateReader) {
+        self.primary = primary
+        self.fallback = fallback
+    }
+
+    func recentThreads(limit: Int) async throws -> [CodexThread] {
+        do {
+            let primaryThreads = try await primary.recentThreads(limit: limit)
+            if !primaryThreads.isEmpty {
+                return primaryThreads
+            }
+
+            return try fallback.recentThreads(limit: limit)
+        } catch {
+            let fallbackThreads = try fallback.recentThreads(limit: limit)
+            if !fallbackThreads.isEmpty {
+                return fallbackThreads
+            }
+
+            throw error
+        }
+    }
+}
+
 struct MenubarControllerConfiguration {
     let initialFetchLimit: Int
     let maxTrackedThreads: Int

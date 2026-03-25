@@ -225,6 +225,55 @@ final class CodexDesktopStateReaderTests: XCTestCase {
         XCTAssertTrue(threads.first?.isSubagent ?? false)
     }
 
+    func testRecentThreadsReturnsNewestNonArchivedThreads() throws {
+        let tempDirectoryURL = FileManager.default.temporaryDirectory
+            .appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: tempDirectoryURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDirectoryURL) }
+
+        let databaseURL = tempDirectoryURL.appending(path: "state.sqlite")
+        try createStateDatabase(
+            at: databaseURL,
+            sql: """
+            CREATE TABLE threads (
+                id TEXT PRIMARY KEY,
+                first_user_message TEXT NOT NULL DEFAULT '',
+                title TEXT NOT NULL DEFAULT '',
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                cwd TEXT NOT NULL,
+                rollout_path TEXT,
+                source TEXT NOT NULL DEFAULT 'vscode',
+                agent_role TEXT,
+                agent_nickname TEXT,
+                archived INTEGER NOT NULL DEFAULT 0
+            );
+            INSERT INTO threads (
+                id,
+                first_user_message,
+                title,
+                created_at,
+                updated_at,
+                cwd,
+                rollout_path,
+                source,
+                agent_role,
+                agent_nickname,
+                archived
+            ) VALUES
+                ('thread-1', 'Preview 1', 'Thread 1', 100, 100, '/tmp/project-1', '/tmp/thread-1.jsonl', 'vscode', NULL, NULL, 0),
+                ('thread-2', 'Preview 2', 'Thread 2', 110, 300, '/tmp/project-2', '/tmp/thread-2.jsonl', 'vscode', NULL, NULL, 0),
+                ('thread-3', 'Preview 3', 'Thread 3', 120, 200, '/tmp/project-3', '/tmp/thread-3.jsonl', 'vscode', NULL, NULL, 0),
+                ('thread-archived', 'Archived', 'Archived Thread', 130, 400, '/tmp/project-4', '/tmp/thread-4.jsonl', 'vscode', NULL, NULL, 1);
+            """
+        )
+
+        let reader = CodexDesktopStateReader(stateDatabaseURLOverride: databaseURL)
+        let threads = try reader.recentThreads(limit: 2)
+
+        XCTAssertEqual(threads.map(\.id), ["thread-2", "thread-3"])
+    }
+
     func testSnapshotDoesNotTreatPendingSessionTaskAsRunning() throws {
         let tempDirectoryURL = FileManager.default.temporaryDirectory
             .appending(path: UUID().uuidString)
