@@ -1,3 +1,4 @@
+import AppKit
 import Combine
 import Foundation
 import KeyboardShortcuts
@@ -44,6 +45,12 @@ final class SettingsViewModel: ObservableObject {
                 self?.updaterSnapshot = snapshot
             }
             .store(in: &cancellables)
+
+        NotificationCenter.default.publisher(for: NSApplication.didChangeScreenParametersNotification)
+            .sink { [weak self] _ in
+                self?.objectWillChange.send()
+            }
+            .store(in: &cancellables)
     }
 
     var language: AppLanguage {
@@ -52,6 +59,10 @@ final class SettingsViewModel: ObservableObject {
 
     var languageOptions: [AppLanguage] {
         AppLanguage.allCases
+    }
+
+    var displayModeOptions: [AppDisplayMode] {
+        AppDisplayMode.allCases
     }
 
     var shortcutName: KeyboardShortcuts.Name {
@@ -85,8 +96,21 @@ final class SettingsViewModel: ObservableObject {
         }
     }
 
+    func label(for displayMode: AppDisplayMode) -> String {
+        switch displayMode {
+        case .menuBar:
+            return text("settings.displayMode.menuBar")
+        case .notch:
+            return text("settings.displayMode.notch")
+        }
+    }
+
     func setLanguage(_ language: AppLanguage) {
         preferences.language = language
+    }
+
+    func setDisplayMode(_ displayMode: AppDisplayMode) {
+        preferences.displayMode = displayMode
     }
 
     func setThreadsPerProjectLimit(_ limit: Int) {
@@ -127,5 +151,13 @@ final class SettingsViewModel: ObservableObject {
         case .ready:
             return nil
         }
+    }
+
+    var displayModeMessage: String? {
+        guard preferences.displayMode == .notch, !NSScreen.screens.contains(where: \.hasCameraHousing) else {
+            return nil
+        }
+
+        return text("settings.displayMode.notchFallbackHelp")
     }
 }

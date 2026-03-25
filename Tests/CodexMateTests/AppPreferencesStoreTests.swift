@@ -8,6 +8,7 @@ final class AppPreferencesStoreTests: XCTestCase {
         let store = AppPreferencesStore(defaults: defaults)
 
         XCTAssertEqual(store.language, .system)
+        XCTAssertEqual(store.displayMode, .notch)
         XCTAssertTrue(store.attentionNotificationsEnabled)
         XCTAssertTrue(store.completionNotificationsEnabled)
         XCTAssertTrue(store.failureNotificationsEnabled)
@@ -28,6 +29,7 @@ final class AppPreferencesStoreTests: XCTestCase {
         let store = AppPreferencesStore(defaults: defaults)
 
         store.language = .korean
+        store.displayMode = .menuBar
         store.attentionNotificationsEnabled = false
         store.completionNotificationsEnabled = false
         store.failureNotificationsEnabled = false
@@ -35,10 +37,20 @@ final class AppPreferencesStoreTests: XCTestCase {
 
         let reloaded = AppPreferencesStore(defaults: defaults)
         XCTAssertEqual(reloaded.language, .korean)
+        XCTAssertEqual(reloaded.displayMode, .menuBar)
         XCTAssertFalse(reloaded.attentionNotificationsEnabled)
         XCTAssertFalse(reloaded.completionNotificationsEnabled)
         XCTAssertFalse(reloaded.failureNotificationsEnabled)
         XCTAssertEqual(reloaded.threadsPerProjectLimit, 12)
+    }
+
+    func testInvalidStoredDisplayModeFallsBackToNotch() {
+        let defaults = makeDefaults()
+        defaults.set("invalid-mode", forKey: "displayMode")
+
+        let store = AppPreferencesStore(defaults: defaults)
+
+        XCTAssertEqual(store.displayMode, .notch)
     }
 
     func testThreadsPerProjectLimitClampsOutOfRangeValues() {

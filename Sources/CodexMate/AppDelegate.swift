@@ -46,7 +46,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         static let threadReadMarkers = "threadLastReadTerminalMarkers"
     }
 
-    private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+    private var statusItem: NSStatusItem?
     private let menu = ThreadMenu()
     private let notchStatusOverlay = NotchStatusOverlayController()
     private let relativeDateFormatter = RelativeDateTimeFormatter()
@@ -93,6 +93,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var currentStatusDisplayName = AppStateStore.OverallStatus.connecting.displayName
     private var currentStatusFallbackIcon = AppStateStore.OverallStatus.connecting.icon
     private var statusAnimationFrameIndex = 0
+    private var currentEffectiveDisplayMode: AppDisplayMode?
     private var isMenuOpen = false
     private var lastDesktopActivityRefreshRequestAt: Date?
     private var lastThreadRefreshRequestAt: Date?
@@ -136,11 +137,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.handleMenuKeyboardShortcut(action) ?? false
         }
         configureMainMenu()
-        configureStatusItemButton()
         configureNotchStatusPanel()
         configurePreferencesObservers()
         configureGlobalShortcut()
         relativeDateFormatter.locale = preferences.locale
+        applyPresentationMode(force: true)
 
         configureClientCallbacks()
         configureForegroundRefreshObservers()
@@ -175,15 +176,92 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return .terminateNow
     }
 
-    private func configureStatusItemButton() {
+    private func applyPresentationMode(force: Bool = false) {
+        let nextMode = preferences.displayMode.resolved(hasHardwareNotch: preferredNotchScreen() != nil)
+        let previousMode = currentEffectiveDisplayMode
+
+        debugLog(
+            "applyPresentationMode force=\(force) requested=\(preferences.displayMode.rawValue) previous=\(previousMode?.rawValue ?? "nil") next=\(nextMode.rawValue)"
+        )
+
+        if !force, previousMode == nextMode {
+            if nextMode == .notch {
+                updateNotchStatusPanel()
+            } else {
+                notchStatusOverlay.hide()
+            }
+            applyStatusPresentation()
+            return
+        }
+
+        if isMenuOpen {
+            closeMenu()
+        }
+
+        tearDownPresentation(for: previousMode)
+        currentEffectiveDisplayMode = nextMode
+        setUpPresentation(for: nextMode)
+        applyStatusPresentation()
+    }
+
+    private func tearDownPresentation(for displayMode: AppDisplayMode?) {
+        switch displayMode {
+        case .menuBar:
+            removeStatusItem()
+        case .notch:
+            invalidateStatusAnimationTimer()
+            notchStatusOverlay.hideMenu()
+            notchStatusOverlay.hide()
+            removeMenuDismissEventMonitors()
+        case nil:
+            break
+        }
+    }
+
+    private func setUpPresentation(for displayMode: AppDisplayMode) {
+        switch displayMode {
+        case .menuBar:
+            configureStatusItemForMenuBarMode()
+            invalidateStatusAnimationTimer()
+            notchStatusOverlay.hide()
+        case .notch:
+            removeStatusItem()
+            scheduleStatusAnimationTimerIfNeeded()
+            updateNotchStatusPanel()
+        }
+    }
+
+    @discardableResult
+    private func ensureStatusItem() -> NSStatusItem {
+        if let statusItem {
+            return statusItem
+        }
+
+        let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        self.statusItem = statusItem
+        return statusItem
+    }
+
+    private func removeStatusItem() {
+        guard let statusItem else {
+            return
+        }
+
         statusItem.menu = nil
-        statusItem.button?.target = self
-        statusItem.button?.action = #selector(toggleStatusPanelAction)
-        statusItem.button?.sendAction(on: [.leftMouseUp])
-        statusItem.button?.imagePosition = .imageOnly
+        statusItem.button?.target = nil
+        statusItem.button?.action = nil
+        statusItem.button?.image = nil
+        NSStatusBar.system.removeStatusItem(statusItem)
+        self.statusItem = nil
+    }
+
+    private func configureStatusItemForMenuBarMode() {
+        let statusItem = ensureStatusItem()
+        statusItem.menu = menu
+        statusItem.button?.target = nil
+        statusItem.button?.action = nil
         statusItem.button?.imageScaling = .scaleProportionallyDown
-        renderStatusItem(overallStatus: controller.overallStatus, hasUnreadThreads: false)
-        scheduleStatusAnimationTimerIfNeeded()
+        statusItem.button?.toolTip = currentStatusDisplayName
     }
 
     private func configureNotchStatusPanel() {
@@ -205,10 +283,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc
     private func handleScreenParametersChanged() {
-        updateNotchStatusPanel()
+        applyPresentationMode()
     }
 
     private func updateNotchStatusPanel() {
+        guard currentEffectiveDisplayMode == .notch else {
+            notchStatusOverlay.hide()
+            return
+        }
+
         guard let screen = preferredNotchScreen() else {
             notchStatusOverlay.hide()
             return
@@ -223,8 +306,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func preferredNotchScreen() -> NSScreen? {
         NSScreen.screens.first(where: \.hasCameraHousing)
-            ?? NSScreen.screens.first(where: \.isBuiltInDisplay)
-            ?? NSScreen.main
     }
 
     private func configureMainMenu() {
@@ -283,6 +364,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .dropFirst()
             .sink { [weak self] _ in
                 self?.renderMenu()
+            }
+            .store(in: &cancellables)
+
+        NotificationCenter.default.publisher(for: .appDisplayModeDidChange, object: preferences)
+            .sink { [weak self] _ in
+                guard let self else { return }
+                self.debugLog(
+                    "displayModeChanged requested=\(self.preferences.displayMode.rawValue) effective=\(self.preferences.displayMode.resolved(hasHardwareNotch: self.preferredNotchScreen() != nil).rawValue)"
+                )
+                self.applyPresentationMode()
+                self.renderMenu()
             }
             .store(in: &cancellables)
     }
@@ -622,6 +714,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func scheduleStatusAnimationTimerIfNeeded() {
+        guard currentEffectiveDisplayMode == .notch else {
+            return
+        }
+
         guard statusAnimationTimer == nil else {
             return
         }
@@ -680,7 +776,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         statusAnimationFrameIndex = (statusAnimationFrameIndex + 1) % frameCount
-        applyStatusItemFrame()
+        applyStatusPresentation()
     }
 
     private func renderStatusItem(overallStatus: AppStateStore.OverallStatus, hasUnreadThreads: Bool) {
@@ -703,58 +799,53 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             overallStatus: overallStatus,
             hasUnreadThreads: hasUnreadThreads
         )
-        applyStatusItemFrame()
+        applyStatusPresentation()
     }
 
-    private func applyStatusItemFrame() {
+    private func applyStatusPresentation() {
+        switch currentEffectiveDisplayMode {
+        case .menuBar:
+            applyMenuBarStatusItem()
+        case .notch:
+            applyNotchStatusOverlay()
+        case nil:
+            break
+        }
+    }
+
+    private func applyMenuBarStatusItem() {
+        let statusItem = ensureStatusItem()
+        statusItem.menu = menu
         guard let button = statusItem.button else {
             return
         }
 
-        let tintColor = statusItemTintColor(for: button)
-        if let image = statusSpriteCatalog.frame(
-            for: currentStatusSprite,
-            index: statusAnimationFrameIndex,
-            tintColor: tintColor
-        ) {
-            button.title = ""
-            button.image = image
-            button.imagePosition = .imageOnly
-        } else {
-            button.image = nil
-            button.title = currentStatusFallbackIcon
-            button.imagePosition = .noImage
-        }
-
-        if let overlayScreen = preferredNotchScreen() {
-            notchStatusOverlay.update(
-                spriteImage: statusSpriteCatalog.notchFrame(
-                    for: currentStatusSprite,
-                    index: statusAnimationFrameIndex,
-                    renderedPixelSize: 128,
-                    renderedPointSize: NotchStatusOverlayController.Metrics.spritePointSize
-                ),
-                statusSprite: currentStatusSprite,
-                statusText: currentStatusDisplayName,
-                frameIndex: statusAnimationFrameIndex,
-                hasNotch: overlayScreen.hasCameraHousing
-            )
-            if !notchStatusOverlay.isVisible {
-                notchStatusOverlay.show(on: overlayScreen)
-            }
-        } else {
-            notchStatusOverlay.hide()
-        }
+        button.image = nil
+        button.title = currentStatusFallbackIcon
+        button.imagePosition = .noImage
         button.toolTip = currentStatusDisplayName
     }
 
-    private func statusItemTintColor(for button: NSStatusBarButton) -> NSColor {
-        let bestMatch = button.effectiveAppearance.bestMatch(from: [.darkAqua, .vibrantDark, .aqua, .vibrantLight])
-        switch bestMatch {
-        case .darkAqua?, .vibrantDark?:
-            return .white
-        default:
-            return .black
+    private func applyNotchStatusOverlay() {
+        guard let overlayScreen = preferredNotchScreen() else {
+            notchStatusOverlay.hide()
+            return
+        }
+
+        notchStatusOverlay.update(
+            spriteImage: statusSpriteCatalog.notchFrame(
+                for: currentStatusSprite,
+                index: statusAnimationFrameIndex,
+                renderedPixelSize: 128,
+                renderedPointSize: NotchStatusOverlayController.Metrics.spritePointSize
+            ),
+            statusSprite: currentStatusSprite,
+            statusText: currentStatusDisplayName,
+            frameIndex: statusAnimationFrameIndex,
+            hasNotch: overlayScreen.hasCameraHousing
+        )
+        if !notchStatusOverlay.isVisible {
+            notchStatusOverlay.show(on: overlayScreen)
         }
     }
 
@@ -852,7 +943,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 action: #selector(quit)
             )
         )
-        notchStatusOverlay.setMenuItems(overlayMenuEntries(from: menu.items))
+        if currentEffectiveDisplayMode == .notch {
+            notchStatusOverlay.setMenuItems(overlayMenuEntries(from: menu.items))
+        }
         scheduleRefreshTimerIfNeeded()
     }
 
@@ -1577,34 +1670,56 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func openMenu() {
-        guard let screen = preferredNotchScreen() else {
-            return
-        }
+        switch currentEffectiveDisplayMode {
+        case .menuBar:
+            debugLog("openMenu mode=menuBar")
+            hideHoverTooltip()
+            renderMenu()
+            requestDesktopActivityRefresh()
+            requestThreadRefresh()
+            configureStatusItemForMenuBarMode()
+            statusItem?.button?.performClick(nil)
+        case .notch:
+            guard let screen = preferredNotchScreen() else {
+                applyPresentationMode()
+                return
+            }
 
-        debugLog("openMenu screen=\(screen.localizedName)")
-        hideHoverTooltip()
-        renderMenu()
-        isMenuOpen = true
-        KeyboardShortcuts.disable(.toggleMenuBarDropdown)
-        installMenuShortcutEventMonitor()
-        installMenuDismissEventMonitors()
-        menuToggleController.menuWillOpen()
-        scheduleRefreshTimerIfNeeded()
-        requestDesktopActivityRefresh()
-        requestThreadRefresh()
-        notchStatusOverlay.showMenu(on: screen)
+            debugLog("openMenu mode=notch screen=\(screen.localizedName)")
+            hideHoverTooltip()
+            renderMenu()
+            isMenuOpen = true
+            KeyboardShortcuts.disable(.toggleMenuBarDropdown)
+            installMenuShortcutEventMonitor()
+            installMenuDismissEventMonitors()
+            menuToggleController.menuWillOpen()
+            scheduleRefreshTimerIfNeeded()
+            requestDesktopActivityRefresh()
+            requestThreadRefresh()
+            notchStatusOverlay.showMenu(on: screen)
+        case nil:
+            applyPresentationMode(force: true)
+            openMenu()
+        }
     }
 
     private func closeMenu() {
         debugLog("closeMenu event=\(debugEventSummary(NSApp.currentEvent))")
-        hideHoverTooltip()
-        isMenuOpen = false
-        removeMenuDismissEventMonitors()
-        removeMenuShortcutEventMonitor()
-        KeyboardShortcuts.enable(.toggleMenuBarDropdown)
-        menuToggleController.menuDidClose()
-        notchStatusOverlay.hideMenu()
-        scheduleRefreshTimerIfNeeded()
+        switch currentEffectiveDisplayMode {
+        case .menuBar:
+            menu.cancelTracking()
+        case .notch:
+            hideHoverTooltip()
+            isMenuOpen = false
+            removeMenuDismissEventMonitors()
+            removeMenuShortcutEventMonitor()
+            KeyboardShortcuts.enable(.toggleMenuBarDropdown)
+            menuToggleController.menuDidClose()
+            notchStatusOverlay.hideMenu()
+            scheduleRefreshTimerIfNeeded()
+        case nil:
+            break
+        }
     }
 
     private func installMenuShortcutEventMonitor() {
@@ -1731,7 +1846,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func statusItemButtonFrame() -> CGRect? {
-        guard let button = statusItem.button,
+        guard let button = statusItem?.button,
               let window = button.window else {
             return nil
         }
@@ -1854,8 +1969,10 @@ extension AppDelegate: NSMenuDelegate {
     func menuWillOpen(_ menu: NSMenu) {
         guard menu == self.menu else { return }
 
+        debugLog("menuWillOpen")
         hideHoverTooltip()
         isMenuOpen = true
+        renderMenu()
         KeyboardShortcuts.disable(.toggleMenuBarDropdown)
         installMenuShortcutEventMonitor()
         menuToggleController.menuWillOpen()
@@ -1873,6 +1990,7 @@ extension AppDelegate: NSMenuDelegate {
     func menuDidClose(_ menu: NSMenu) {
         guard menu == self.menu else { return }
 
+        debugLog("menuDidClose")
         hideHoverTooltip()
         isMenuOpen = false
         removeMenuShortcutEventMonitor()

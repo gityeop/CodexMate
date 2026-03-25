@@ -16,7 +16,7 @@ final class SettingsWindowController: NSWindowController {
         let window = NSWindow(contentViewController: hostingController)
         window.styleMask = [.titled, .closable, .miniaturizable]
         window.titleVisibility = .visible
-        window.setContentSize(NSSize(width: 520, height: 460))
+        window.setContentSize(NSSize(width: 520, height: 500))
         window.isReleasedWhenClosed = false
         window.center()
 
@@ -58,6 +58,16 @@ private struct SettingsView: View {
                     ForEach(viewModel.languageOptions) { language in
                         Text(viewModel.label(for: language)).tag(language)
                     }
+                }
+
+                Picker(viewModel.text("settings.displayModeLabel"), selection: displayModeBinding) {
+                    ForEach(viewModel.displayModeOptions) { displayMode in
+                        Text(viewModel.label(for: displayMode)).tag(displayMode)
+                    }
+                }
+
+                if let message = viewModel.displayModeMessage {
+                    helpText(message)
                 }
 
                 Stepper(
@@ -124,7 +134,7 @@ private struct SettingsView: View {
         }
         .formStyle(.grouped)
         .padding(20)
-        .frame(minWidth: 520, minHeight: 460)
+        .frame(minWidth: 520, minHeight: 500)
     }
 
     private var languageBinding: Binding<AppLanguage> {
@@ -138,6 +148,13 @@ private struct SettingsView: View {
         Binding(
             get: { viewModel.launchAtLoginSnapshot.isEnabled },
             set: { viewModel.setLaunchAtLoginEnabled($0) }
+        )
+    }
+
+    private var displayModeBinding: Binding<AppDisplayMode> {
+        Binding(
+            get: { viewModel.preferences.displayMode },
+            set: { viewModel.setDisplayMode($0) }
         )
     }
 

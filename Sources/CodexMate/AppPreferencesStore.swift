@@ -1,6 +1,10 @@
 import Combine
 import Foundation
 
+extension Notification.Name {
+    static let appDisplayModeDidChange = Notification.Name("AppPreferencesStore.displayModeDidChange")
+}
+
 @MainActor
 final class AppPreferencesStore: ObservableObject {
     static let defaultThreadsPerProjectLimit = 8
@@ -8,6 +12,7 @@ final class AppPreferencesStore: ObservableObject {
 
     private enum DefaultsKey {
         static let language = "appLanguage"
+        static let displayMode = "displayMode"
         static let attentionNotificationsEnabled = "attentionNotificationsEnabled"
         static let completionNotificationsEnabled = "completionNotificationsEnabled"
         static let failureNotificationsEnabled = "failureNotificationsEnabled"
@@ -17,6 +22,13 @@ final class AppPreferencesStore: ObservableObject {
     @Published var language: AppLanguage {
         didSet {
             defaults.set(language.rawValue, forKey: DefaultsKey.language)
+        }
+    }
+
+    @Published var displayMode: AppDisplayMode {
+        didSet {
+            defaults.set(displayMode.rawValue, forKey: DefaultsKey.displayMode)
+            NotificationCenter.default.post(name: .appDisplayModeDidChange, object: self)
         }
     }
 
@@ -55,6 +67,7 @@ final class AppPreferencesStore: ObservableObject {
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         language = AppLanguage.fromStoredValue(defaults.string(forKey: DefaultsKey.language))
+        displayMode = AppDisplayMode.fromStoredValue(defaults.string(forKey: DefaultsKey.displayMode))
         if defaults.object(forKey: DefaultsKey.attentionNotificationsEnabled) == nil {
             attentionNotificationsEnabled = true
         } else {
