@@ -9,18 +9,25 @@ final class ThreadDropdownMenuRowView: NSView {
         static let disclosureSpacing: CGFloat = 4
         static let iconSize: CGFloat = 12
         static let iconSpacing: CGFloat = 6
+        static let metadataSpacing: CGFloat = 8
         static let minimumWidth: CGFloat = 220
     }
 
     private static let titleFont = NSFont.systemFont(ofSize: 13)
+    private static let hoverFillColor = NSColor(calibratedWhite: 1, alpha: 0.08)
+    private static let selectedFillColor = NSColor(calibratedRed: 0.18, green: 0.45, blue: 0.88, alpha: 0.28)
 
     static func preferredWidth(
         title: String,
+        secondaryText: String? = nil,
         indentationLevel: Int,
         isExpandable: Bool
     ) -> CGFloat {
         let titleWidth = ceil(
             NSString(string: title).size(withAttributes: [.font: titleFont]).width
+        )
+        let secondaryWidth = ceil(
+            NSString(string: secondaryText ?? "").size(withAttributes: [.font: titleFont]).width
         )
         let disclosureWidth = isExpandable ? Layout.disclosureSize + Layout.disclosureSpacing : 0
         let indentationWidth = CGFloat(max(0, indentationLevel)) * Layout.indentationWidth
@@ -30,6 +37,7 @@ final class ThreadDropdownMenuRowView: NSView {
             + disclosureWidth
             + iconWidth
             + titleWidth
+            + (secondaryText == nil ? 0 : Layout.metadataSpacing + secondaryWidth)
         let width = ceil(contentWidth)
 
         return max(Layout.minimumWidth, width)
@@ -38,8 +46,12 @@ final class ThreadDropdownMenuRowView: NSView {
     private let disclosureButton = NSButton(title: "▸", target: nil, action: nil)
     private let iconView = NSImageView(frame: .zero)
     private let titleLabel = NSTextField(labelWithString: "")
+    private let secondaryLabel = NSTextField(labelWithString: "")
+    private var trackingAreaRef: NSTrackingArea?
     private var indentationLevel: Int = 0
     private var isExpandable = false
+    private var isHovered = false
+    private var debugIdentifier = ""
     private var onOpen: (() -> Void)?
     private var onToggle: (() -> Void)?
 
@@ -58,6 +70,7 @@ final class ThreadDropdownMenuRowView: NSView {
         NSSize(
             width: Self.preferredWidth(
                 title: titleLabel.stringValue,
+                secondaryText: secondaryLabel.isHidden ? nil : secondaryLabel.stringValue,
                 indentationLevel: indentationLevel,
                 isExpandable: isExpandable
             ),
@@ -67,6 +80,10 @@ final class ThreadDropdownMenuRowView: NSView {
 
     override var isOpaque: Bool {
         false
+    }
+
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
+        true
     }
 
     override init(frame frameRect: NSRect) {
@@ -93,6 +110,16 @@ final class ThreadDropdownMenuRowView: NSView {
         titleLabel.maximumNumberOfLines = 1
         titleLabel.translatesAutoresizingMaskIntoConstraints = true
         addSubview(titleLabel)
+
+        secondaryLabel.font = Self.titleFont
+        secondaryLabel.textColor = .secondaryLabelColor
+        secondaryLabel.cell?.lineBreakMode = .byClipping
+        secondaryLabel.cell?.usesSingleLineMode = true
+        secondaryLabel.maximumNumberOfLines = 1
+        secondaryLabel.alignment = .right
+        secondaryLabel.isHidden = true
+        secondaryLabel.translatesAutoresizingMaskIntoConstraints = true
+        addSubview(secondaryLabel)
     }
 
     required init?(coder: NSCoder) {
@@ -101,6 +128,7 @@ final class ThreadDropdownMenuRowView: NSView {
 
     func configure(
         title: String,
+        secondaryText: String? = nil,
         indicatorImage: NSImage?,
         indentationLevel: Int,
         isExpandable: Bool,
@@ -113,7 +141,10 @@ final class ThreadDropdownMenuRowView: NSView {
         self.onOpen = onOpen
         self.onToggle = onToggle
 
+        debugIdentifier = secondaryText.map { "\(title) | \($0)" } ?? title
         titleLabel.stringValue = title
+        secondaryLabel.stringValue = secondaryText ?? ""
+        secondaryLabel.isHidden = (secondaryText?.isEmpty ?? true)
         iconView.image = indicatorImage
         disclosureButton.isHidden = !isExpandable
         disclosureButton.title = isExpanded ? "▾" : "▸"
@@ -121,6 +152,23 @@ final class ThreadDropdownMenuRowView: NSView {
         invalidateIntrinsicContentSize()
         needsLayout = true
         updateAppearance()
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+
+        if let trackingAreaRef {
+            removeTrackingArea(trackingAreaRef)
+        }
+
+        let trackingArea = NSTrackingArea(
+            rect: bounds,
+            options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(trackingArea)
+        trackingAreaRef = trackingArea
     }
 
     override func layout() {
@@ -150,7 +198,18 @@ final class ThreadDropdownMenuRowView: NSView {
         )
         x += Layout.iconSize + Layout.iconSpacing
 
-        let titleWidth = max(0, bounds.width - x - Layout.horizontalPadding)
+        let secondaryWidth = secondaryLabel.isHidden
+            ? CGFloat.zero
+            : ceil(secondaryLabel.intrinsicContentSize.width)
+        let secondaryHeight = secondaryLabel.isHidden
+            ? CGFloat.zero
+            : min(rowHeight, ceil(secondaryLabel.intrinsicContentSize.height))
+        let trailingPadding = Layout.horizontalPadding
+        let secondaryX = bounds.width - trailingPadding - secondaryWidth
+        let titleWidth = max(
+            0,
+            secondaryX - x - (secondaryLabel.isHidden ? 0 : Layout.metadataSpacing)
+        )
         let titleHeight = min(rowHeight, ceil(titleLabel.intrinsicContentSize.height))
         let titleY = floor((rowHeight - titleHeight) / 2)
         titleLabel.frame = NSRect(
@@ -159,12 +218,23 @@ final class ThreadDropdownMenuRowView: NSView {
             width: titleWidth,
             height: titleHeight
         )
+
+        let secondaryY = floor((rowHeight - secondaryHeight) / 2)
+        secondaryLabel.frame = NSRect(
+            x: secondaryX,
+            y: secondaryY,
+            width: secondaryWidth,
+            height: secondaryHeight
+        )
     }
 
     override func draw(_ dirtyRect: NSRect) {
-        let path = NSBezierPath(rect: bounds)
+        let path = NSBezierPath(roundedRect: bounds, xRadius: 6, yRadius: 6)
         if isHighlighted {
-            NSColor.selectedMenuItemColor.setFill()
+            Self.selectedFillColor.setFill()
+            path.fill()
+        } else if isHovered {
+            Self.hoverFillColor.setFill()
             path.fill()
         } else {
             NSColor.clear.setFill()
@@ -173,6 +243,10 @@ final class ThreadDropdownMenuRowView: NSView {
     }
 
     override func hitTest(_ point: NSPoint) -> NSView? {
+        guard bounds.contains(point) else {
+            return nil
+        }
+
         if !disclosureButton.isHidden, disclosureButton.frame.contains(point) {
             return disclosureButton
         }
@@ -181,17 +255,57 @@ final class ThreadDropdownMenuRowView: NSView {
     }
 
     override func mouseUp(with event: NSEvent) {
+        DebugTraceLogger.log("overlay row mouseUp title=\(debugIdentifier) frame=\(debugScreenFrame())")
         onOpen?()
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        DebugTraceLogger.log("overlay row mouseDown title=\(debugIdentifier) frame=\(debugScreenFrame())")
+        super.mouseDown(with: event)
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        super.mouseEntered(with: event)
+        guard !isHovered else { return }
+        isHovered = true
+        needsDisplay = true
+        updateAppearance()
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        super.mouseExited(with: event)
+        guard isHovered else { return }
+        isHovered = false
+        needsDisplay = true
+        updateAppearance()
     }
 
     @objc
     private func toggleDisclosure() {
+        DebugTraceLogger.log("overlay row disclosure toggle title=\(debugIdentifier)")
         onToggle?()
     }
 
     private func updateAppearance() {
-        let textColor: NSColor = isHighlighted ? .selectedMenuItemTextColor : .labelColor
+        let textColor: NSColor = (isHighlighted || isHovered)
+            ? NSColor(calibratedWhite: 1, alpha: 0.98)
+            : .labelColor
         titleLabel.textColor = textColor
-        disclosureButton.contentTintColor = isHighlighted ? .selectedMenuItemTextColor : .secondaryLabelColor
+        secondaryLabel.textColor = (isHighlighted || isHovered)
+            ? NSColor(calibratedWhite: 1, alpha: 0.72)
+            : .secondaryLabelColor
+        disclosureButton.contentTintColor = (isHighlighted || isHovered)
+            ? NSColor(calibratedWhite: 1, alpha: 0.92)
+            : .secondaryLabelColor
+    }
+
+    private func debugScreenFrame() -> String {
+        guard let window else {
+            return "window=nil local=\(NSStringFromRect(frame))"
+        }
+
+        let frameInWindow = convert(bounds, to: nil)
+        let frameOnScreen = window.convertToScreen(frameInWindow)
+        return NSStringFromRect(frameOnScreen)
     }
 }

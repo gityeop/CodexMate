@@ -79,6 +79,23 @@ final class ThreadDropdownMenuRowViewTests: XCTestCase {
         XCTAssertEqual(toggleCount, 1)
     }
 
+    func testHitTestReturnsNilOutsideBounds() {
+        let view = ThreadDropdownMenuRowView(frame: NSRect(x: 0, y: 0, width: 280, height: 22))
+        view.configure(
+            title: "Thread title",
+            indicatorImage: nil,
+            indentationLevel: 0,
+            isExpandable: false,
+            isExpanded: false,
+            onOpen: {},
+            onToggle: nil
+        )
+
+        XCTAssertNil(view.hitTest(NSPoint(x: -4, y: 11)))
+        XCTAssertNil(view.hitTest(NSPoint(x: 281, y: 11)))
+        XCTAssertNil(view.hitTest(NSPoint(x: 10, y: 24)))
+    }
+
     func testRowsReserveIconSlotEvenWithoutIndicatorImage() throws {
         let plainView = ThreadDropdownMenuRowView(frame: NSRect(x: 0, y: 0, width: 280, height: 22))
         plainView.configure(
@@ -127,5 +144,27 @@ final class ThreadDropdownMenuRowViewTests: XCTestCase {
         let titleLabel = try XCTUnwrap(view.subviews.compactMap { $0 as? NSTextField }.first)
 
         XCTAssertEqual(iconView.frame.midY, titleLabel.frame.midY)
+    }
+
+    func testSecondaryTextPinsToTrailingEdgeWithoutOverlappingTitle() throws {
+        let view = ThreadDropdownMenuRowView(frame: NSRect(x: 0, y: 0, width: 320, height: 22))
+        view.configure(
+            title: "A very long thread title that should truncate first",
+            secondaryText: "2일 전",
+            indicatorImage: NSImage(size: NSSize(width: 8, height: 8)),
+            indentationLevel: 0,
+            isExpandable: false,
+            isExpanded: false,
+            onOpen: {},
+            onToggle: nil
+        )
+        view.layoutSubtreeIfNeeded()
+
+        let labels = view.subviews.compactMap { $0 as? NSTextField }
+        let titleLabel = try XCTUnwrap(labels.first(where: { $0.stringValue.hasPrefix("A very long") }))
+        let secondaryLabel = try XCTUnwrap(labels.first(where: { $0.stringValue == "2일 전" }))
+
+        XCTAssertLessThan(titleLabel.frame.maxX, secondaryLabel.frame.minX)
+        XCTAssertEqual(secondaryLabel.frame.maxX, view.bounds.maxX - 8, accuracy: 0.5)
     }
 }

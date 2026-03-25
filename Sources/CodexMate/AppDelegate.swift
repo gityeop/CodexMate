@@ -26,6 +26,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         static let minimumInterval: TimeInterval = 1
     }
 
+    private enum StatusAnimation {
+        static let frameInterval: TimeInterval = 0.12
+    }
+
     private enum ThreadListDisplay {
         static let initialFetchLimit = 32
         static let fetchPageLimit = 64
@@ -44,6 +48,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private let menu = ThreadMenu()
+    private let notchStatusOverlay = NotchStatusOverlayController()
     private let relativeDateFormatter = RelativeDateTimeFormatter()
     private let preferences = AppPreferencesStore()
     private let strings = AppStrings.shared
@@ -53,6 +58,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let projectCatalogReader = CodexDesktopProjectCatalogReader()
     private let launchAtLoginService = LaunchAtLoginService()
     private let updaterService = UpdaterService()
+    private let statusSpriteCatalog = MenubarStatusSpriteCatalog()
     private let unreadIndicatorImage = AppDelegate.makeUnreadIndicatorImage()
     private let runningIndicatorImage = AppDelegate.makeTextIndicatorImage("⏳")
     private let waitingForUserIndicatorImage = AppDelegate.makeTextIndicatorImage("💬")
@@ -82,6 +88,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var connectedBinaryPath: String?
     private var refreshTimer: Timer?
     private var refreshTimerInterval: TimeInterval?
+    private var statusAnimationTimer: Timer?
+    private var currentStatusSprite: MenubarStatusPresentation.StatusSprite = .connecting
+    private var currentStatusDisplayName = AppStateStore.OverallStatus.connecting.displayName
+    private var currentStatusFallbackIcon = AppStateStore.OverallStatus.connecting.icon
+    private var statusAnimationFrameIndex = 0
     private var isMenuOpen = false
     private var lastDesktopActivityRefreshRequestAt: Date?
     private var lastThreadRefreshRequestAt: Date?
@@ -99,6 +110,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         minimumInterval: ForegroundRefreshPolicy.minimumInterval
     )
     private var menuShortcutEventMonitor: Any?
+    private var menuDismissLocalEventMonitor: Any?
+    private var menuDismissGlobalEventMonitor: Any?
     private lazy var settingsViewModel = SettingsViewModel(
         preferences: preferences,
         strings: strings,
@@ -116,6 +129,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     )
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        debugLog("applicationDidFinishLaunching log=\(DebugTraceLogger.logFileURL.path)")
         menu.autoenablesItems = false
         menu.delegate = self
         menu.onKeyboardShortcut = { [weak self] action in
@@ -123,6 +137,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         configureMainMenu()
         configureStatusItemButton()
+        configureNotchStatusPanel()
         configurePreferencesObservers()
         configureGlobalShortcut()
         relativeDateFormatter.locale = preferences.locale
@@ -138,8 +153,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        debugLog("applicationWillTerminate event=\(debugEventSummary(NSApp.currentEvent))")
         removeForegroundRefreshObservers()
         invalidateTimers()
+        invalidateStatusAnimationTimer()
+        removeMenuShortcutEventMonitor()
+        removeMenuDismissEventMonitors()
+        notchStatusOverlay.hide()
 
         Task {
             await client.stop()
@@ -150,9 +170,61 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         false
     }
 
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        debugLog("applicationShouldTerminate event=\(debugEventSummary(NSApp.currentEvent))")
+        return .terminateNow
+    }
+
     private func configureStatusItemButton() {
-        statusItem.menu = menu
-        statusItem.button?.title = controller.overallStatus.icon
+        statusItem.menu = nil
+        statusItem.button?.target = self
+        statusItem.button?.action = #selector(toggleStatusPanelAction)
+        statusItem.button?.sendAction(on: [.leftMouseUp])
+        statusItem.button?.imagePosition = .imageOnly
+        statusItem.button?.imageScaling = .scaleProportionallyDown
+        renderStatusItem(overallStatus: controller.overallStatus, hasUnreadThreads: false)
+        scheduleStatusAnimationTimerIfNeeded()
+    }
+
+    private func configureNotchStatusPanel() {
+        notchStatusOverlay.onActivate = { [weak self] in
+            self?.menuToggleController.toggleMenu()
+        }
+        notchStatusOverlay.onKeyDown = { [weak self] event in
+            self?.handleOverlayShortcutEvent(event) ?? false
+        }
+        updateNotchStatusPanel()
+
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleScreenParametersChanged),
+            name: NSApplication.didChangeScreenParametersNotification,
+            object: nil
+        )
+    }
+
+    @objc
+    private func handleScreenParametersChanged() {
+        updateNotchStatusPanel()
+    }
+
+    private func updateNotchStatusPanel() {
+        guard let screen = preferredNotchScreen() else {
+            notchStatusOverlay.hide()
+            return
+        }
+
+        if notchStatusOverlay.isMenuExpanded {
+            notchStatusOverlay.showMenu(on: screen)
+        } else {
+            notchStatusOverlay.show(on: screen)
+        }
+    }
+
+    private func preferredNotchScreen() -> NSScreen? {
+        NSScreen.screens.first(where: \.hasCameraHousing)
+            ?? NSScreen.screens.first(where: \.isBuiltInDisplay)
+            ?? NSScreen.main
     }
 
     private func configureMainMenu() {
@@ -549,6 +621,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    private func scheduleStatusAnimationTimerIfNeeded() {
+        guard statusAnimationTimer == nil else {
+            return
+        }
+
+        let timer = Timer(
+            timeInterval: StatusAnimation.frameInterval,
+            repeats: true
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.handleStatusAnimationTick()
+            }
+        }
+        statusAnimationTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
+    }
+
     private func refreshSchedulingPolicy() -> RefreshSchedulingPolicy {
         RefreshSchedulingPolicy.current(
             isMenuOpen: isMenuOpen,
@@ -568,6 +657,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         refreshTimerInterval = nil
     }
 
+    private func invalidateStatusAnimationTimer() {
+        statusAnimationTimer?.invalidate()
+        statusAnimationTimer = nil
+    }
+
     private func refreshDesktopActivity() async {
         let effects = await controller.refreshDesktopActivity()
         applyControllerEffects(effects)
@@ -577,6 +671,91 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func markConnectionHealthy() {
         guard let connectedBinaryPath else { return }
         controller.setConnection(.connected(binaryPath: connectedBinaryPath))
+    }
+
+    private func handleStatusAnimationTick() {
+        let frameCount = statusSpriteCatalog.frameCount(for: currentStatusSprite)
+        guard frameCount > 1 else {
+            return
+        }
+
+        statusAnimationFrameIndex = (statusAnimationFrameIndex + 1) % frameCount
+        applyStatusItemFrame()
+    }
+
+    private func renderStatusItem(overallStatus: AppStateStore.OverallStatus, hasUnreadThreads: Bool) {
+        let sprite = MenubarStatusPresentation.statusItemSprite(
+            overallStatus: overallStatus,
+            hasUnreadThreads: hasUnreadThreads
+        )
+        if sprite != currentStatusSprite {
+            currentStatusSprite = sprite
+            statusAnimationFrameIndex = 0
+        }
+
+        currentStatusDisplayName = MenubarStatusPresentation.statusDisplayName(
+            overallStatus: overallStatus,
+            hasUnreadThreads: hasUnreadThreads,
+            strings: strings,
+            language: preferences.language
+        )
+        currentStatusFallbackIcon = MenubarStatusPresentation.statusItemIcon(
+            overallStatus: overallStatus,
+            hasUnreadThreads: hasUnreadThreads
+        )
+        applyStatusItemFrame()
+    }
+
+    private func applyStatusItemFrame() {
+        guard let button = statusItem.button else {
+            return
+        }
+
+        let tintColor = statusItemTintColor(for: button)
+        if let image = statusSpriteCatalog.frame(
+            for: currentStatusSprite,
+            index: statusAnimationFrameIndex,
+            tintColor: tintColor
+        ) {
+            button.title = ""
+            button.image = image
+            button.imagePosition = .imageOnly
+        } else {
+            button.image = nil
+            button.title = currentStatusFallbackIcon
+            button.imagePosition = .noImage
+        }
+
+        if let overlayScreen = preferredNotchScreen() {
+            notchStatusOverlay.update(
+                spriteImage: statusSpriteCatalog.notchFrame(
+                    for: currentStatusSprite,
+                    index: statusAnimationFrameIndex,
+                    renderedPixelSize: 128,
+                    renderedPointSize: NotchStatusOverlayController.Metrics.spritePointSize
+                ),
+                statusSprite: currentStatusSprite,
+                statusText: currentStatusDisplayName,
+                frameIndex: statusAnimationFrameIndex,
+                hasNotch: overlayScreen.hasCameraHousing
+            )
+            if !notchStatusOverlay.isVisible {
+                notchStatusOverlay.show(on: overlayScreen)
+            }
+        } else {
+            notchStatusOverlay.hide()
+        }
+        button.toolTip = currentStatusDisplayName
+    }
+
+    private func statusItemTintColor(for button: NSStatusBarButton) -> NSColor {
+        let bestMatch = button.effectiveAppearance.bestMatch(from: [.darkAqua, .vibrantDark, .aqua, .vibrantLight])
+        switch bestMatch {
+        case .darkAqua?, .vibrantDark?:
+            return .white
+        default:
+            return .black
+        }
     }
 
     private func renderMenu() {
@@ -596,10 +775,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         projectShortcutThreadIDs = menuSections.compactMap { $0.threads.first?.thread.id }
         let renderThreadIDs = Set(flattenedThreadIDs(from: menuSections.flatMap(\.threads)))
         let hasUnreadThreads = menuSections.flatMap(\.threads).contains(where: hasUnreadContent(in:))
-        statusItem.button?.title = MenubarStatusPresentation.statusItemIcon(
-            overallStatus: snapshot.overallStatus,
-            hasUnreadThreads: hasUnreadThreads
-        )
+        renderStatusItem(overallStatus: snapshot.overallStatus, hasUnreadThreads: hasUnreadThreads)
         var didChangeReadMarkers = preparedSnapshot.didChangeReadMarkers
         if controller.seedThreadReadMarkers(for: renderThreadIDs) {
             didChangeReadMarkers = true
@@ -676,7 +852,85 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 action: #selector(quit)
             )
         )
+        notchStatusOverlay.setMenuItems(overlayMenuEntries(from: menu.items))
         scheduleRefreshTimerIfNeeded()
+    }
+
+    private func overlayMenuEntries(from menuItems: [NSMenuItem]) -> [NotchStatusOverlayMenuEntry] {
+        menuItems.compactMap(overlayMenuEntry(for:))
+    }
+
+    private func overlayMenuEntry(for item: NSMenuItem) -> NotchStatusOverlayMenuEntry? {
+        if item.isSeparatorItem {
+            return .separator()
+        }
+
+        if !item.isEnabled && item.action == nil {
+            return .header(item.title)
+        }
+
+        let splitTitle = splitOverlayMenuTitle(item.title)
+        let action = item.action
+        let target = item.target
+        let indicatorImage = item.image
+        let indentationLevel = item.indentationLevel
+        let isEnabled = item.isEnabled
+        let representedThreadID = item.representedObject as? String
+
+        let onSelect: (() -> Void)? = { [weak self] in
+            guard let self else { return }
+            guard let action else { return }
+
+            self.debugLog(
+                "overlay entry selection title=\(item.title) action=\(NSStringFromSelector(action)) represented=\(String(describing: item.representedObject)) event=\(self.debugEventSummary(NSApp.currentEvent))"
+            )
+
+            switch action {
+            case #selector(openThread(_:)):
+                guard let representedThreadID else { return }
+                self.debugLog("overlay entry openThread thread=\(representedThreadID)")
+                self.openThread(threadID: representedThreadID)
+            case #selector(refreshThreadsAction):
+                self.debugLog("overlay entry refreshThreads")
+                self.closeMenu()
+                self.refreshThreadsAction()
+            case #selector(watchLatestThreadAction):
+                self.debugLog("overlay entry watchLatestThread")
+                self.closeMenu()
+                self.watchLatestThreadAction()
+            case #selector(openSettingsAction):
+                self.debugLog("overlay entry openSettings")
+                self.closeMenu()
+                self.openSettingsAction()
+            case #selector(quit):
+                self.debugLog("overlay entry quit")
+                self.quit()
+            default:
+                self.debugLog("overlay entry fallback action=\(NSStringFromSelector(action))")
+                self.closeMenu()
+                _ = NSApp.sendAction(action, to: target, from: nil)
+            }
+        }
+
+        return .item(
+            primaryText: splitTitle.primary,
+            secondaryText: splitTitle.secondary,
+            identifier: representedThreadID,
+            indicatorImage: indicatorImage,
+            indentationLevel: indentationLevel,
+            isEnabled: isEnabled,
+            onSelect: onSelect
+        )
+    }
+
+    private func splitOverlayMenuTitle(_ title: String) -> (primary: String, secondary: String?) {
+        guard let separatorRange = title.range(of: " | ", options: .backwards) else {
+            return (title, nil)
+        }
+
+        let primary = String(title[..<separatorRange.lowerBound])
+        let secondary = String(title[separatorRange.upperBound...])
+        return (primary, secondary.isEmpty ? nil : secondary)
     }
 
     private func makeStaticItem(title: String) -> NSMenuItem {
@@ -1032,7 +1286,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let data = line.data(using: .utf8) {
             try? FileHandle.standardError.write(contentsOf: data)
         }
+        DebugTraceLogger.log(message)
         controller.recordDiagnostic(message)
+    }
+
+    private func debugScreenPoint(_ point: NSPoint) -> String {
+        "\(Int(point.x)),\(Int(point.y))"
+    }
+
+    private func debugEventSummary(_ event: NSEvent?) -> String {
+        guard let event else {
+            return "nil"
+        }
+
+        let point = event.window.map {
+            debugScreenPoint($0.convertToScreen(CGRect(origin: event.locationInWindow, size: .zero)).origin)
+        } ?? debugScreenPoint(event.locationInWindow)
+        return "type=\(event.type) point=\(point) window=\(event.window?.windowNumber ?? 0) modifiers=\(event.modifierFlags.rawValue)"
     }
 
     private func applyControllerEffects(_ effects: MenubarControllerEffects) {
@@ -1307,11 +1577,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func openMenu() {
-        statusItem.button?.performClick(nil)
+        guard let screen = preferredNotchScreen() else {
+            return
+        }
+
+        debugLog("openMenu screen=\(screen.localizedName)")
+        hideHoverTooltip()
+        renderMenu()
+        isMenuOpen = true
+        KeyboardShortcuts.disable(.toggleMenuBarDropdown)
+        installMenuShortcutEventMonitor()
+        installMenuDismissEventMonitors()
+        menuToggleController.menuWillOpen()
+        scheduleRefreshTimerIfNeeded()
+        requestDesktopActivityRefresh()
+        requestThreadRefresh()
+        notchStatusOverlay.showMenu(on: screen)
     }
 
     private func closeMenu() {
-        menu.cancelTracking()
+        debugLog("closeMenu event=\(debugEventSummary(NSApp.currentEvent))")
+        hideHoverTooltip()
+        isMenuOpen = false
+        removeMenuDismissEventMonitors()
+        removeMenuShortcutEventMonitor()
+        KeyboardShortcuts.enable(.toggleMenuBarDropdown)
+        menuToggleController.menuDidClose()
+        notchStatusOverlay.hideMenu()
+        scheduleRefreshTimerIfNeeded()
     }
 
     private func installMenuShortcutEventMonitor() {
@@ -1320,16 +1613,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         menuShortcutEventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown]) { [weak self] event in
-            guard
-                let self,
-                let shortcut = KeyboardShortcuts.Shortcut(name: .toggleMenuBarDropdown),
-                KeyboardShortcuts.Shortcut(event: event) == shortcut
-            else {
+            guard let self else {
                 return event
             }
 
-            self.menuToggleController.toggleMenu()
-            return nil
+            return self.handleOverlayShortcutEvent(event) ? nil : event
         }
     }
 
@@ -1357,19 +1645,117 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 return false
             }
 
-            openThread(threadID: projectShortcutThreadIDs[index])
+            let threadID = projectShortcutThreadIDs[index]
+            notchStatusOverlay.flashMenuItem(identifier: threadID)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { [weak self] in
+                self?.openThread(threadID: threadID)
+            }
             return true
         }
     }
 
+    private func handleOverlayShortcutEvent(_ event: NSEvent) -> Bool {
+        if let shortcut = KeyboardShortcuts.Shortcut(name: .toggleMenuBarDropdown),
+           KeyboardShortcuts.Shortcut(event: event) == shortcut {
+            debugLog("overlay shortcut toggle event=\(debugEventSummary(event))")
+            menuToggleController.toggleMenu()
+            return true
+        }
+
+        guard isMenuOpen else {
+            return false
+        }
+
+        if event.keyCode == 53 {
+            debugLog("overlay shortcut escape")
+            closeMenu()
+            return true
+        }
+
+        guard let action = ThreadMenu.shortcutAction(for: event) else {
+            return false
+        }
+
+        debugLog("overlay shortcut action=\(action)")
+        return handleMenuKeyboardShortcut(action)
+    }
+
+    private func installMenuDismissEventMonitors() {
+        guard menuDismissLocalEventMonitor == nil, menuDismissGlobalEventMonitor == nil else {
+            return
+        }
+
+        menuDismissLocalEventMonitor = NSEvent.addLocalMonitorForEvents(
+            matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]
+        ) { [weak self] event in
+            self?.dismissExpandedMenuIfNeeded(screenPoint: NSEvent.mouseLocation)
+            return event
+        }
+
+        menuDismissGlobalEventMonitor = NSEvent.addGlobalMonitorForEvents(
+            matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]
+        ) { [weak self] _ in
+            self?.dismissExpandedMenuIfNeeded(screenPoint: NSEvent.mouseLocation)
+        }
+    }
+
+    private func removeMenuDismissEventMonitors() {
+        if let menuDismissLocalEventMonitor {
+            NSEvent.removeMonitor(menuDismissLocalEventMonitor)
+            self.menuDismissLocalEventMonitor = nil
+        }
+
+        if let menuDismissGlobalEventMonitor {
+            NSEvent.removeMonitor(menuDismissGlobalEventMonitor)
+            self.menuDismissGlobalEventMonitor = nil
+        }
+    }
+
+    private func dismissExpandedMenuIfNeeded(screenPoint: NSPoint) {
+        guard isMenuOpen else {
+            return
+        }
+
+        if notchStatusOverlay.containsExpandedMenu(screenPoint: screenPoint) {
+            debugLog("dismissExpandedMenuIfNeeded insideOverlay point=\(debugScreenPoint(screenPoint))")
+            return
+        }
+
+        if let buttonFrame = statusItemButtonFrame(), buttonFrame.contains(screenPoint) {
+            debugLog("dismissExpandedMenuIfNeeded insideStatusButton point=\(debugScreenPoint(screenPoint))")
+            return
+        }
+
+        debugLog("dismissExpandedMenuIfNeeded closing point=\(debugScreenPoint(screenPoint))")
+        closeMenu()
+    }
+
+    private func statusItemButtonFrame() -> CGRect? {
+        guard let button = statusItem.button,
+              let window = button.window else {
+            return nil
+        }
+
+        let buttonFrameInWindow = button.convert(button.bounds, to: nil)
+        return window.convertToScreen(buttonFrameInWindow)
+    }
+
+    @objc
+    private func toggleStatusPanelAction() {
+        debugLog("toggleStatusPanelAction event=\(debugEventSummary(NSApp.currentEvent))")
+        menuToggleController.toggleMenu()
+    }
+
     @objc
     private func refreshThreadsAction() {
+        debugLog("refreshThreadsAction")
         requestDesktopActivityRefresh()
         requestThreadRefresh()
     }
 
     @objc
     private func watchLatestThreadAction() {
+        debugLog("watchLatestThreadAction")
         Task {
             await watchLatestThread()
         }
@@ -1377,6 +1763,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc
     private func openSettingsAction() {
+        debugLog("openSettingsAction")
         launchAtLoginService.refresh()
         updaterService.refresh()
         settingsWindowController.showWindow(nil)
@@ -1389,7 +1776,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func openThread(threadID: String) {
+        debugLog("openThread thread=\(threadID) event=\(debugEventSummary(NSApp.currentEvent))")
         if NSApp.currentEvent?.modifierFlags.contains(.option) == true {
+            debugLog("openThread copyingThreadID thread=\(threadID)")
             copyThreadID(threadID)
             return
         }
@@ -1397,18 +1786,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         closeMenu()
 
         guard let deepLinkURL = CodexDeepLink.threadURL(threadID: threadID) else {
+            debugLog("openThread failedToBuildDeeplink thread=\(threadID)")
             controller.recordDiagnostic("Unable to build a Codex deeplink for thread \(threadID).")
             renderMenu()
             return
         }
 
         if NSWorkspace.shared.open(deepLinkURL) {
+            debugLog("openThread openedViaWorkspace thread=\(threadID)")
             markThreadRead(threadID)
             renderMenu()
             return
         }
 
         guard let appURL = CodexApplicationLocator.locate() else {
+            debugLog("openThread missingAppURL thread=\(threadID)")
             copyThreadID(threadID)
             controller.recordDiagnostic("Unable to open Codex deeplink. Copied thread id instead.")
             renderMenu()
@@ -1421,9 +1813,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         do {
             try task.run()
+            debugLog("openThread launchedViaOpenCommand thread=\(threadID)")
             markThreadRead(threadID)
             renderMenu()
         } catch {
+            debugLog("openThread openCommandFailed thread=\(threadID) error=\(error.localizedDescription)")
             copyThreadID(threadID)
             controller.recordDiagnostic("Failed to open Codex thread. Copied thread id instead: \(error.localizedDescription)")
             renderMenu()
@@ -1437,6 +1831,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc
     private func quit() {
+        debugLog("quit invoked event=\(debugEventSummary(NSApp.currentEvent))")
         NSApp.terminate(nil)
     }
 }

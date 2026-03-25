@@ -17,6 +17,75 @@ final class MenubarStatusPresentationTests: XCTestCase {
         )
     }
 
+    func testStatusItemSpriteUsesUnreadSpriteForUnreadIdleState() {
+        XCTAssertEqual(
+            MenubarStatusPresentation.statusItemSprite(overallStatus: .idle, hasUnreadThreads: true),
+            .unread
+        )
+        XCTAssertEqual(
+            MenubarStatusPresentation.statusItemSprite(overallStatus: .running, hasUnreadThreads: true),
+            .running
+        )
+        XCTAssertEqual(
+            MenubarStatusPresentation.statusItemSprite(overallStatus: .failed, hasUnreadThreads: true),
+            .unread
+        )
+    }
+
+    @MainActor
+    func testStatusSpriteCatalogLoadsFramesFromProcessedResources() {
+        let catalog = MenubarStatusSpriteCatalog()
+
+        XCTAssertEqual(catalog.frameCount(for: .idle), 9)
+        XCTAssertEqual(catalog.frameCount(for: .running), 9)
+        XCTAssertEqual(catalog.frameCount(for: .unread), 9)
+        XCTAssertNotNil(
+            catalog.frame(
+                for: .idle,
+                index: 8,
+                tintColor: .white
+            )
+        )
+        XCTAssertNotNil(
+            catalog.frame(
+                for: .running,
+                index: 8,
+                tintColor: .white
+            )
+        )
+        XCTAssertNotNil(
+            catalog.frame(
+                for: .unread,
+                index: 8,
+                tintColor: .white
+            )
+        )
+        XCTAssertNotNil(
+            catalog.notchFrame(
+                for: .idle,
+                index: 8,
+                renderedPixelSize: 128,
+                renderedPointSize: NotchStatusOverlayController.Metrics.spritePointSize
+            )
+        )
+        XCTAssertNotNil(
+            catalog.notchFrame(
+                for: .running,
+                index: 8,
+                renderedPixelSize: 128,
+                renderedPointSize: NotchStatusOverlayController.Metrics.spritePointSize
+            )
+        )
+        XCTAssertNotNil(
+            catalog.notchFrame(
+                for: .unread,
+                index: 8,
+                renderedPixelSize: 128,
+                renderedPointSize: NotchStatusOverlayController.Metrics.spritePointSize
+            )
+        )
+    }
+
     func testThreadTitleOmitsIdleSymbol() {
         let title = MenubarStatusPresentation.threadTitle(
             for: threadRow(status: .idle),

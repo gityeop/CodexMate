@@ -3,6 +3,19 @@ import Foundation
 struct MenubarStatusPresentation {
     private static let truncationMarker = "…"
 
+    enum StatusSprite: String, Equatable {
+        case connecting = "status_connecting"
+        case idle = "status_idle"
+        case waitingForUser = "status_waiting_for_user"
+        case running = "status_running"
+        case failed = "status_failed"
+        case unread = "status_unread"
+
+        var assetName: String {
+            rawValue
+        }
+    }
+
     enum ThreadIndicator: Equatable {
         case unread
         case running
@@ -55,6 +68,25 @@ struct MenubarStatusPresentation {
         }
 
         return overallStatus.icon
+    }
+
+    static func statusItemSprite(overallStatus: AppStateStore.OverallStatus, hasUnreadThreads: Bool) -> StatusSprite {
+        if hasUnreadThreads && overallStatus != .connecting && overallStatus != .running && overallStatus != .waitingForUser {
+            return .unread
+        }
+
+        switch overallStatus {
+        case .connecting:
+            return .connecting
+        case .idle:
+            return .idle
+        case .waitingForUser:
+            return .waitingForUser
+        case .running:
+            return .running
+        case .failed:
+            return .failed
+        }
     }
 
     static func statusDisplayName(
