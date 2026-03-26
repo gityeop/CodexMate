@@ -24,7 +24,7 @@ final class ThreadMenu: NSMenu {
 
         let modifierFlags = event.modifierFlags
             .intersection(.deviceIndependentFlagsMask)
-            .subtracting([.numericPad])
+            .subtracting([.numericPad, .function])
 
         if modifierFlags.isEmpty && (event.keyCode == 36 || event.keyCode == 76) {
             return .openHighlightedThread

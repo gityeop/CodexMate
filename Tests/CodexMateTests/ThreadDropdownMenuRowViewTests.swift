@@ -79,6 +79,54 @@ final class ThreadDropdownMenuRowViewTests: XCTestCase {
         XCTAssertEqual(toggleCount, 1)
     }
 
+    func testScrollWheelClearsHoverImmediately() throws {
+        let view = ThreadDropdownMenuRowView(frame: NSRect(x: 0, y: 0, width: 280, height: 22))
+        view.configure(
+            title: "Thread title",
+            indicatorImage: nil,
+            indentationLevel: 0,
+            isExpandable: false,
+            isExpanded: false,
+            onOpen: {},
+            onToggle: nil
+        )
+
+        let titleLabel = try XCTUnwrap(view.subviews.compactMap { $0 as? NSTextField }.first)
+        let initialTextColor = try XCTUnwrap(titleLabel.textColor)
+
+        let enterEvent = try XCTUnwrap(
+            NSEvent.mouseEvent(
+                with: .mouseMoved,
+                location: NSPoint(x: 80, y: 11),
+                modifierFlags: [],
+                timestamp: 0,
+                windowNumber: 0,
+                context: nil,
+                eventNumber: 0,
+                clickCount: 1,
+                pressure: 1
+            )
+        )
+        view.mouseEntered(with: enterEvent)
+
+        XCTAssertNotEqual(titleLabel.textColor, initialTextColor)
+
+        let cgScrollEvent = try XCTUnwrap(
+            CGEvent(
+                scrollWheelEvent2Source: nil,
+                units: .pixel,
+                wheelCount: 1,
+                wheel1: 10,
+                wheel2: 0,
+                wheel3: 0
+            )
+        )
+        let scrollEvent = try XCTUnwrap(NSEvent(cgEvent: cgScrollEvent))
+        view.scrollWheel(with: scrollEvent)
+
+        XCTAssertEqual(titleLabel.textColor, initialTextColor)
+    }
+
     func testHitTestReturnsNilOutsideBounds() {
         let view = ThreadDropdownMenuRowView(frame: NSRect(x: 0, y: 0, width: 280, height: 22))
         view.configure(

@@ -266,18 +266,17 @@ final class ThreadDropdownMenuRowView: NSView {
 
     override func mouseEntered(with event: NSEvent) {
         super.mouseEntered(with: event)
-        guard !isHovered else { return }
-        isHovered = true
-        needsDisplay = true
-        updateAppearance()
+        setHovered(true)
     }
 
     override func mouseExited(with event: NSEvent) {
         super.mouseExited(with: event)
-        guard isHovered else { return }
-        isHovered = false
-        needsDisplay = true
-        updateAppearance()
+        setHovered(false)
+    }
+
+    override func scrollWheel(with event: NSEvent) {
+        setHovered(false)
+        super.scrollWheel(with: event)
     }
 
     @objc
@@ -297,6 +296,13 @@ final class ThreadDropdownMenuRowView: NSView {
         disclosureButton.contentTintColor = (isHighlighted || isHovered)
             ? NSColor(calibratedWhite: 1, alpha: 0.92)
             : .secondaryLabelColor
+    }
+
+    private func setHovered(_ hovered: Bool) {
+        guard isHovered != hovered else { return }
+        isHovered = hovered
+        needsDisplay = true
+        updateAppearance()
     }
 
     private func debugScreenFrame() -> String {

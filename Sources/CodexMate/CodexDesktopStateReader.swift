@@ -631,8 +631,12 @@ struct CodexDesktopStateReader {
                     // A thread only executes one turn at a time; a newer task start
                     // supersedes any orphaned active turn that never emitted completion.
                     activeTaskIDs = [turnID]
+                    unresolvedRequestUserInputCallIDs.removeAll()
+                    unresolvedApprovalCallIDs.removeAll()
                 } else if payloadType == "task_complete" || payloadType == "turn_aborted" {
                     activeTaskIDs.remove(turnID)
+                    unresolvedRequestUserInputCallIDs.removeAll()
+                    unresolvedApprovalCallIDs.removeAll()
                 }
             case "response_item":
                 switch payloadType {

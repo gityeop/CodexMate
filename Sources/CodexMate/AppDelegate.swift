@@ -1744,6 +1744,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 return event
             }
 
+            if self.handleNotchMenuKeyboardEvent(event) {
+                return nil
+            }
+
             return self.handleOverlayShortcutEvent(event) ? nil : event
         }
     }
@@ -1799,12 +1803,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return true
         }
 
+        if currentEffectiveDisplayMode == .notch,
+           notchStatusOverlay.handleExpandedMenuKeyEvent(event) {
+            debugLog("overlay shortcut handledByNotchMenu keyCode=\(event.keyCode)")
+            return true
+        }
+
         guard let action = ThreadMenu.shortcutAction(for: event) else {
             return false
         }
 
         debugLog("overlay shortcut action=\(action)")
         return handleMenuKeyboardShortcut(action)
+    }
+
+    private func handleNotchMenuKeyboardEvent(_ event: NSEvent) -> Bool {
+        guard currentEffectiveDisplayMode == .notch, isMenuOpen else {
+            return false
+        }
+
+        return notchStatusOverlay.handleExpandedMenuKeyEvent(event)
     }
 
     private func installMenuDismissEventMonitors() {

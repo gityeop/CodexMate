@@ -70,6 +70,41 @@ final class CodexDesktopStateReaderTests: XCTestCase {
         XCTAssertEqual(state, .init(waitingForInput: false, needsApproval: false))
     }
 
+    func testParseSessionPendingStateDropsStaleRequestUserInputWhenNewTurnStarts() {
+        let contents = """
+        {"timestamp":"2026-03-10T19:39:10.465Z","type":"response_item","payload":{"type":"function_call","name":"request_user_input","arguments":"{}","call_id":"call_old"}}
+        {"timestamp":"2026-03-11T12:16:48.559Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-2"}}
+        """
+
+        let state = CodexDesktopStateReader.parseSessionPendingState(from: contents)
+
+        XCTAssertEqual(state, .init(waitingForInput: false, needsApproval: false, hasActiveTask: true))
+    }
+
+    func testParseSessionPendingStateKeepsCurrentRequestUserInputAfterNewTurnStarts() {
+        let contents = """
+        {"timestamp":"2026-03-10T19:39:10.465Z","type":"response_item","payload":{"type":"function_call","name":"request_user_input","arguments":"{}","call_id":"call_old"}}
+        {"timestamp":"2026-03-11T12:16:48.559Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-2"}}
+        {"timestamp":"2026-03-11T12:16:49.559Z","type":"response_item","payload":{"type":"function_call","name":"request_user_input","arguments":"{}","call_id":"call_current"}}
+        """
+
+        let state = CodexDesktopStateReader.parseSessionPendingState(from: contents)
+
+        XCTAssertEqual(state, .init(waitingForInput: true, needsApproval: false, hasActiveTask: true))
+    }
+
+    func testParseSessionPendingStateClearsRequestUserInputWhenTurnCompletesWithoutOutput() {
+        let contents = """
+        {"timestamp":"2026-03-11T12:16:48.559Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-2"}}
+        {"timestamp":"2026-03-11T12:16:49.559Z","type":"response_item","payload":{"type":"function_call","name":"request_user_input","arguments":"{}","call_id":"call_current"}}
+        {"timestamp":"2026-03-11T12:16:57.725Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-2"}}
+        """
+
+        let state = CodexDesktopStateReader.parseSessionPendingState(from: contents)
+
+        XCTAssertEqual(state, .init(waitingForInput: false, needsApproval: false, hasActiveTask: false))
+    }
+
     func testParseSessionPendingStateTracksIncompleteTaskLifecycle() {
         let runningContents = """
         {"timestamp":"2026-03-11T12:25:24.936Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-1"}}

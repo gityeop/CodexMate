@@ -264,8 +264,20 @@ final class NotchStatusOverlayController {
         overlayView.setMenuItems(menuItems)
     }
 
+    func handleKeyboardEvent(_ event: NSEvent) -> Bool {
+        overlayView.handleKeyboardEvent(event)
+    }
+
     func flashMenuItem(identifier: String) {
         overlayView.flashMenuItem(identifier: identifier)
+    }
+
+    func handleExpandedMenuKeyEvent(_ event: NSEvent) -> Bool {
+        guard isMenuExpanded else {
+            return false
+        }
+
+        return overlayView.handleMenuNavigationKeyDown(event)
     }
 
     func showMenu(on screen: NSScreen) {
@@ -509,7 +521,7 @@ private final class LockedHorizontalClipView: NSClipView {
     }
 }
 
-private final class NotchStatusOverlayView: NSView {
+final class NotchStatusOverlayView: NSView {
     private enum Layout {
         static let notchSpriteOffsetFromHardwareNotch: CGFloat = 12
         static let notchSpriteTrailingInset: CGFloat = 18
@@ -547,9 +559,10 @@ private final class NotchStatusOverlayView: NSView {
     private let menuDocumentView = NotchMenuDocumentView()
     private let surfaceMaskLayer = CAShapeLayer()
     private var menuRows: [MenuRowRecord] = []
-    private var highlightedMenuIdentifier: String?
+    private var selectedMenuRowIndex: Int?
+    private var flashedMenuIdentifier: String?
     private var highlightResetWorkItem: DispatchWorkItem?
-    var geometry: NotchStatusOverlayGeometry?
+    fileprivate var geometry: NotchStatusOverlayGeometry?
     var onKeyDown: ((NSEvent) -> Bool)?
 
     private enum MenuRowKind {
@@ -562,6 +575,7 @@ private final class NotchStatusOverlayView: NSView {
         let view: NSView
         let kind: MenuRowKind
         let identifier: String?
+        let isEnabled: Bool
     }
 
     var spriteImage: NSImage? {
@@ -675,8 +689,16 @@ private final class NotchStatusOverlayView: NSView {
         true
     }
 
-    override func keyDown(with event: NSEvent) {
+    func handleKeyboardEvent(_ event: NSEvent) -> Bool {
         if onKeyDown?(event) == true {
+            return true
+        }
+
+        return handleMenuNavigationKeyDown(event)
+    }
+
+    override func keyDown(with event: NSEvent) {
+        if handleKeyboardEvent(event) {
             return
         }
 
@@ -701,23 +723,23 @@ private final class NotchStatusOverlayView: NSView {
         }
 
         highlightResetWorkItem?.cancel()
-        highlightedMenuIdentifier = identifier
-        rowView.isHighlighted = true
-        menuDocumentView.scrollToVisible(rowView.frame.insetBy(dx: 0, dy: -6))
-        menuScrollView.reflectScrolledClipView(menuScrollView.contentView)
+        flashedMenuIdentifier = identifier
+        applyRowHighlights()
+        scrollRowIntoView(rowView)
 
-        let workItem = DispatchWorkItem { [weak self, weak rowView] in
+        let workItem = DispatchWorkItem { [weak self] in
             guard let self else { return }
-            rowView?.isHighlighted = false
-            if self.highlightedMenuIdentifier == identifier {
-                self.highlightedMenuIdentifier = nil
+            if self.flashedMenuIdentifier == identifier {
+                self.flashedMenuIdentifier = nil
             }
+            self.applyRowHighlights()
         }
         highlightResetWorkItem = workItem
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.18, execute: workItem)
     }
 
     func prepareForMenuOpen() {
+        setSelectedMenuRowIndex(nextSelectableMenuRowIndex(from: nil, delta: 1))
         menuScrollView.contentView.scroll(to: .zero)
         menuScrollView.reflectScrolledClipView(menuScrollView.contentView)
         DebugTraceLogger.log(
@@ -796,9 +818,11 @@ private final class NotchStatusOverlayView: NSView {
         }.joined(separator: ", ")
         DebugTraceLogger.log("overlay rebuildMenuRows count=\(menuItems.count) entries=[\(summary)]")
 
+        let previouslySelectedIdentifier = selectedMenuIdentifier
         menuRows.forEach { $0.view.removeFromSuperview() }
         menuRows.removeAll()
-        highlightedMenuIdentifier = nil
+        selectedMenuRowIndex = nil
+        flashedMenuIdentifier = nil
         highlightResetWorkItem?.cancel()
         highlightResetWorkItem = nil
 
@@ -807,7 +831,7 @@ private final class NotchStatusOverlayView: NSView {
             case .separator:
                 let separatorView = NotchMenuSeparatorView(frame: .zero)
                 menuDocumentView.addSubview(separatorView)
-                menuRows.append(MenuRowRecord(view: separatorView, kind: .separator, identifier: nil))
+                menuRows.append(MenuRowRecord(view: separatorView, kind: .separator, identifier: nil, isEnabled: false))
             case .header:
                 let label = NSTextField(labelWithString: item.primaryText)
                 label.font = NSFont.systemFont(ofSize: 11, weight: .semibold)
@@ -815,7 +839,7 @@ private final class NotchStatusOverlayView: NSView {
                 label.lineBreakMode = .byTruncatingTail
                 label.maximumNumberOfLines = 1
                 menuDocumentView.addSubview(label)
-                menuRows.append(MenuRowRecord(view: label, kind: .header, identifier: nil))
+                menuRows.append(MenuRowRecord(view: label, kind: .header, identifier: nil, isEnabled: false))
             case .item:
                 let rowView = ThreadDropdownMenuRowView(frame: .zero)
                 rowView.configure(
@@ -839,10 +863,12 @@ private final class NotchStatusOverlayView: NSView {
                 )
                 rowView.alphaValue = item.isEnabled ? 1 : 0.45
                 menuDocumentView.addSubview(rowView)
-                menuRows.append(MenuRowRecord(view: rowView, kind: .item, identifier: item.identifier))
+                menuRows.append(MenuRowRecord(view: rowView, kind: .item, identifier: item.identifier, isEnabled: item.isEnabled))
             }
         }
 
+        restoreSelectedMenuRow(identifier: previouslySelectedIdentifier)
+        applyRowHighlights()
         needsLayout = true
     }
 
@@ -891,6 +917,9 @@ private final class NotchStatusOverlayView: NSView {
             width: width,
             height: max(1, y)
         )
+        if selectedMenuRowIndex != nil {
+            scrollSelectedMenuRowIntoView()
+        }
     }
 
     private func debugPoint(_ point: CGPoint) -> String {
@@ -908,6 +937,163 @@ private final class NotchStatusOverlayView: NSView {
         }
 
         return nil
+    }
+
+    func handleMenuNavigationKeyDown(_ event: NSEvent) -> Bool {
+        let modifierFlags = event.modifierFlags
+            .intersection(.deviceIndependentFlagsMask)
+            .subtracting([.numericPad, .function])
+        guard modifierFlags.isEmpty else {
+            return false
+        }
+
+        switch event.keyCode {
+        case 125:
+            return moveKeyboardSelection(by: 1)
+        case 126:
+            return moveKeyboardSelection(by: -1)
+        case 36, 76:
+            return activateSelectedMenuRow()
+        default:
+            return false
+        }
+    }
+
+    private func moveKeyboardSelection(by delta: Int) -> Bool {
+        guard let nextIndex = nextSelectableMenuRowIndex(from: selectedMenuRowIndex, delta: delta) else {
+            return false
+        }
+
+        setSelectedMenuRowIndex(nextIndex)
+        return true
+    }
+
+    private func activateSelectedMenuRow() -> Bool {
+        guard let selectedMenuRowIndex,
+              menuRows.indices.contains(selectedMenuRowIndex),
+              let rowView = menuRows[selectedMenuRowIndex].view as? ThreadDropdownMenuRowView else {
+            return false
+        }
+
+        guard let event = NSEvent.mouseEvent(
+            with: .leftMouseUp,
+            location: NSPoint(x: rowView.bounds.midX, y: rowView.bounds.midY),
+            modifierFlags: [],
+            timestamp: ProcessInfo.processInfo.systemUptime,
+            windowNumber: rowView.window?.windowNumber ?? 0,
+            context: nil,
+            eventNumber: 0,
+            clickCount: 1,
+            pressure: 1
+        ) else {
+            return false
+        }
+
+        rowView.mouseUp(with: event)
+        return true
+    }
+
+    private func nextSelectableMenuRowIndex(from currentIndex: Int?, delta: Int) -> Int? {
+        let selectableIndices = menuRows.indices.filter { menuRows[$0].kind == .item && menuRows[$0].isEnabled }
+        guard !selectableIndices.isEmpty else {
+            return nil
+        }
+
+        if let currentIndex, let currentPosition = selectableIndices.firstIndex(of: currentIndex) {
+            let nextPosition = (currentPosition + delta + selectableIndices.count) % selectableIndices.count
+            return selectableIndices[nextPosition]
+        }
+
+        return delta > 0 ? selectableIndices.first : selectableIndices.last
+    }
+
+    private func setSelectedMenuRowIndex(_ index: Int?) {
+        selectedMenuRowIndex = index
+        applyRowHighlights()
+        scrollSelectedMenuRowIntoView()
+    }
+
+    private var selectedMenuIdentifier: String? {
+        guard let selectedMenuRowIndex,
+              menuRows.indices.contains(selectedMenuRowIndex) else {
+            return nil
+        }
+
+        return menuRows[selectedMenuRowIndex].identifier
+    }
+
+    private func restoreSelectedMenuRow(identifier: String?) {
+        guard let identifier,
+              let nextIndex = menuRows.firstIndex(where: {
+                  $0.kind == .item && $0.isEnabled && $0.identifier == identifier
+              }) else {
+            return
+        }
+
+        selectedMenuRowIndex = nextIndex
+    }
+
+    private func scrollSelectedMenuRowIntoView() {
+        guard let selectedMenuRowIndex,
+              menuRows.indices.contains(selectedMenuRowIndex),
+              let rowView = menuRows[selectedMenuRowIndex].view as? ThreadDropdownMenuRowView else {
+            return
+        }
+
+        scrollMenuRectIntoView(targetScrollRectForSelectedMenuRow(at: selectedMenuRowIndex, rowView: rowView))
+    }
+
+    private func scrollRowIntoView(_ rowView: NSView) {
+        scrollMenuRectIntoView(rowView.frame.insetBy(dx: 0, dy: -6))
+    }
+
+    private func targetScrollRectForSelectedMenuRow(at index: Int, rowView: NSView) -> CGRect {
+        let rowRect = rowView.frame.insetBy(dx: 0, dy: -6)
+        guard let headerView = sectionHeaderViewForFirstItem(at: index) else {
+            return rowRect
+        }
+
+        return rowRect.union(headerView.frame.insetBy(dx: 0, dy: -4))
+    }
+
+    private func sectionHeaderViewForFirstItem(at index: Int) -> NSView? {
+        guard let previousMenuRowIndex = previousNonSeparatorMenuRowIndex(before: index),
+              menuRows[previousMenuRowIndex].kind == .header else {
+            return nil
+        }
+
+        return menuRows[previousMenuRowIndex].view
+    }
+
+    private func previousNonSeparatorMenuRowIndex(before index: Int) -> Int? {
+        guard index > 0 else {
+            return nil
+        }
+
+        for candidateIndex in stride(from: index - 1, through: 0, by: -1) {
+            if menuRows[candidateIndex].kind != .separator {
+                return candidateIndex
+            }
+        }
+
+        return nil
+    }
+
+    private func scrollMenuRectIntoView(_ rect: CGRect) {
+        menuDocumentView.scrollToVisible(rect)
+        menuScrollView.reflectScrolledClipView(menuScrollView.contentView)
+    }
+
+    private func applyRowHighlights() {
+        for (index, row) in menuRows.enumerated() {
+            guard let rowView = row.view as? ThreadDropdownMenuRowView else {
+                continue
+            }
+
+            let isSelected = selectedMenuRowIndex == index
+            let isFlashed = flashedMenuIdentifier != nil && row.identifier == flashedMenuIdentifier
+            rowView.isHighlighted = isSelected || isFlashed
+        }
     }
 
     private func updateSurfaceMask() {
