@@ -598,6 +598,7 @@ final class NotchStatusOverlayView: NSView {
         let view: NSView
         let kind: MenuRowKind
         let identifier: String?
+        let selectionKey: String?
         let projectIndex: Int?
         let isEnabled: Bool
     }
@@ -851,7 +852,7 @@ final class NotchStatusOverlayView: NSView {
         }.joined(separator: ", ")
         DebugTraceLogger.log("overlay rebuildMenuRows count=\(menuItems.count) entries=[\(summary)]")
 
-        let previouslySelectedIdentifier = selectedMenuIdentifier
+        let previouslySelectedSelectionKey = selectedMenuSelectionKey
         menuRows.forEach { $0.view.removeFromSuperview() }
         menuRows.removeAll()
         selectedMenuRowIndex = nil
@@ -871,6 +872,7 @@ final class NotchStatusOverlayView: NSView {
                         view: separatorView,
                         kind: .separator,
                         identifier: nil,
+                        selectionKey: nil,
                         projectIndex: nil,
                         isEnabled: false
                     )
@@ -887,6 +889,7 @@ final class NotchStatusOverlayView: NSView {
                         view: label,
                         kind: .header,
                         identifier: nil,
+                        selectionKey: nil,
                         projectIndex: nil,
                         isEnabled: false
                     )
@@ -922,6 +925,7 @@ final class NotchStatusOverlayView: NSView {
                         view: rowView,
                         kind: .item,
                         identifier: item.identifier,
+                        selectionKey: item.identifier.map { "id:\($0)" } ?? "title:\(item.primaryText)",
                         projectIndex: item.projectIndex,
                         isEnabled: item.isEnabled
                     )
@@ -929,7 +933,7 @@ final class NotchStatusOverlayView: NSView {
             }
         }
 
-        restoreSelectedMenuRow(identifier: previouslySelectedIdentifier)
+        restoreSelectedMenuRow(selectionKey: previouslySelectedSelectionKey)
         applyRowHighlights()
         needsLayout = true
     }
@@ -1192,19 +1196,19 @@ final class NotchStatusOverlayView: NSView {
         applyRowHighlights()
     }
 
-    private var selectedMenuIdentifier: String? {
+    private var selectedMenuSelectionKey: String? {
         guard let selectedMenuRowIndex,
               menuRows.indices.contains(selectedMenuRowIndex) else {
             return nil
         }
 
-        return menuRows[selectedMenuRowIndex].identifier
+        return menuRows[selectedMenuRowIndex].selectionKey
     }
 
-    private func restoreSelectedMenuRow(identifier: String?) {
-        guard let identifier,
+    private func restoreSelectedMenuRow(selectionKey: String?) {
+        guard let selectionKey,
               let nextIndex = menuRows.firstIndex(where: {
-                  $0.kind == .item && $0.isEnabled && $0.identifier == identifier
+                  $0.kind == .item && $0.isEnabled && $0.selectionKey == selectionKey
               }) else {
             return
         }

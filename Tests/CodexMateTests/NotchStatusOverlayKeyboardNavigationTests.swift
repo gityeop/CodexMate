@@ -140,6 +140,28 @@ final class NotchStatusOverlayKeyboardNavigationTests: XCTestCase {
         XCTAssertEqual(try selectedRowTitle(in: view), "Settings")
     }
 
+    func testBottomActionSelectionSurvivesMenuRebuildWithoutExplicitIdentifier() throws {
+        let view = NotchStatusOverlayView(frame: NSRect(x: 0, y: 0, width: 520, height: 220))
+        view.setMenuItems(makeBottomActionMenuItems())
+        view.menuExpansionProgress = 1
+        view.prepareForMenuOpen()
+        view.layoutSubtreeIfNeeded()
+
+        for _ in 0..<7 {
+            try sendKeyEvent(to: view, keyCode: 125, characters: "↓")
+        }
+
+        XCTAssertEqual(try selectedRowTitle(in: view), "Settings")
+
+        view.setMenuItems(makeBottomActionMenuItems())
+        view.layoutSubtreeIfNeeded()
+
+        XCTAssertEqual(try selectedRowTitle(in: view), "Settings")
+
+        try sendKeyEvent(to: view, keyCode: 126, characters: "↑")
+        XCTAssertEqual(try selectedRowTitle(in: view), "Watch Latest Thread")
+    }
+
     func testMenuRowWidthsStayStableWhileExpansionProgressChanges() throws {
         let view = NotchStatusOverlayView(frame: NSRect(x: 0, y: 0, width: 520, height: 220))
         view.setMenuItems(makeScrollableMenuItems())
@@ -305,6 +327,8 @@ final class NotchStatusOverlayKeyboardNavigationTests: XCTestCase {
             .item(primaryText: "Thread 4", onSelect: {}),
             .item(primaryText: "Thread 5", onSelect: {}),
             .separator(),
+            .item(primaryText: "Refresh Threads", onSelect: {}),
+            .item(primaryText: "Watch Latest Thread", onSelect: {}),
             .item(primaryText: "Settings", onSelect: {}),
             .item(primaryText: "Quit", onSelect: {}),
         ]
