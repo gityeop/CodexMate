@@ -4,9 +4,11 @@ import SwiftUI
 import KeyboardShortcuts
 
 @MainActor
-final class SettingsWindowController: NSWindowController {
+final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private let viewModel: SettingsViewModel
     private var cancellables: Set<AnyCancellable> = []
+    var onVisibilityChanged: ((Bool) -> Void)?
+    var isWindowVisible: Bool { window?.isVisible == true }
 
     init(viewModel: SettingsViewModel) {
         self.viewModel = viewModel
@@ -21,6 +23,7 @@ final class SettingsWindowController: NSWindowController {
         window.center()
 
         super.init(window: window)
+        window.delegate = self
 
         updateWindowTitle()
 
@@ -41,10 +44,27 @@ final class SettingsWindowController: NSWindowController {
         super.showWindow(sender)
         window?.makeKeyAndOrderFront(sender)
         NSApp.activate(ignoringOtherApps: true)
+        notifyVisibilityChanged(true)
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        notifyVisibilityChanged(false)
+    }
+
+    func windowDidMiniaturize(_ notification: Notification) {
+        notifyVisibilityChanged(false)
+    }
+
+    func windowDidDeminiaturize(_ notification: Notification) {
+        notifyVisibilityChanged(true)
     }
 
     private func updateWindowTitle() {
         window?.title = viewModel.text("settings.windowTitle")
+    }
+
+    private func notifyVisibilityChanged(_ isVisible: Bool) {
+        onVisibilityChanged?(isVisible)
     }
 }
 

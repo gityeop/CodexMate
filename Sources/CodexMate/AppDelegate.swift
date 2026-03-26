@@ -100,6 +100,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusAnimationFrameIndex = 0
     private var currentEffectiveDisplayMode: AppDisplayMode?
     private var isMenuOpen = false
+    private var isSettingsWindowVisible = false
     private var lastDesktopActivityRefreshRequestAt: Date?
     private var lastThreadRefreshRequestAt: Date?
     private var desktopActivityRefreshGate = RefreshRequestGate()
@@ -111,6 +112,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var highlightedThreadID: String?
     private var projectShortcutThreadIDs: [String] = []
     private var threadProjectIndexByThreadID: [String: Int] = [:]
+    private var pendingMenuBarPositionedThreadID: String?
+    private var skipNextMenuBarMenuWillOpenRender = false
     private var foregroundRefreshObserverTokens: [NSObjectProtocol] = []
     private var cancellables: Set<AnyCancellable> = []
     private var foregroundRefreshThrottle = ForegroundRefreshThrottle(
@@ -125,7 +128,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         launchAtLoginService: launchAtLoginService,
         updaterService: updaterService
     )
-    private lazy var settingsWindowController = SettingsWindowController(viewModel: settingsViewModel)
+    private lazy var settingsWindowController: SettingsWindowController = {
+        let controller = SettingsWindowController(viewModel: settingsViewModel)
+        controller.onVisibilityChanged = { [weak self] isVisible in
+            guard let self else { return }
+            self.isSettingsWindowVisible = isVisible
+            self.debugLog("settingsWindowVisibilityChanged visible=\(isVisible)")
+
+            if self.currentEffectiveDisplayMode == .notch {
+                self.updateNotchStatusPanel()
+            }
+        }
+        return controller
+    }()
     private lazy var menuToggleController = MenuToggleController(
         openMenu: { [weak self] in
             self?.openMenu()
@@ -297,6 +312,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func updateNotchStatusPanel() {
         guard currentEffectiveDisplayMode == .notch else {
+            notchStatusOverlay.hide()
+            return
+        }
+
+        guard !isSettingsWindowVisible else {
             notchStatusOverlay.hide()
             return
         }
@@ -836,6 +856,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func applyNotchStatusOverlay() {
+        guard !isSettingsWindowVisible else {
+            notchStatusOverlay.hide()
+            return
+        }
+
         guard let overlayScreen = preferredNotchScreen() else {
             notchStatusOverlay.hide()
             return
@@ -964,6 +989,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 action: #selector(quit)
             )
         )
+        menu.addItem(
+            makeHiddenShortcutItem(
+                action: #selector(moveToPreviousProjectSelectionAction),
+                keyEquivalent: String(UnicodeScalar(NSUpArrowFunctionKey)!),
+                modifierMask: [.option]
+            )
+        )
+        menu.addItem(
+            makeHiddenShortcutItem(
+                action: #selector(moveToNextProjectSelectionAction),
+                keyEquivalent: String(UnicodeScalar(NSDownArrowFunctionKey)!),
+                modifierMask: [.option]
+            )
+        )
         if currentEffectiveDisplayMode == .notch {
             notchStatusOverlay.setMenuItems(overlayMenuEntries(from: menu.items))
         }
@@ -975,6 +1014,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func overlayMenuEntry(for item: NSMenuItem) -> NotchStatusOverlayMenuEntry? {
+        if item.isHidden {
+            return nil
+        }
+
         if item.isSeparatorItem {
             return .separator()
         }
@@ -1058,6 +1101,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func makeActionItem(title: String, action: Selector) -> NSMenuItem {
         let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
         item.target = self
+        return item
+    }
+
+    private func makeHiddenShortcutItem(
+        action: Selector,
+        keyEquivalent: String,
+        modifierMask: NSEvent.ModifierFlags
+    ) -> NSMenuItem {
+        let item = NSMenuItem(title: "", action: action, keyEquivalent: keyEquivalent)
+        item.target = self
+        item.isHidden = true
+        item.allowsKeyEquivalentWhenHidden = true
+        item.keyEquivalentModifierMask = modifierMask
         return item
     }
 
@@ -1695,16 +1751,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func openMenu() {
         switch currentEffectiveDisplayMode {
         case .menuBar:
-            debugLog("openMenu mode=menuBar")
-            hideHoverTooltip()
-            renderMenu()
-            requestDesktopActivityRefresh()
-            requestThreadRefresh()
-            configureStatusItemForMenuBarMode()
-            statusItem?.button?.performClick(nil)
+            openMenuBarMenu(positioningThreadID: nil, requestRefresh: true)
         case .notch:
             guard let screen = preferredNotchScreen() else {
                 applyPresentationMode()
+                return
+            }
+
+            guard !isSettingsWindowVisible else {
+                isMenuOpen = false
+                menuToggleController.menuDidClose()
+                settingsWindowController.showWindow(nil)
                 return
             }
 
@@ -1724,6 +1781,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             applyPresentationMode(force: true)
             openMenu()
         }
+    }
+
+    private func openMenuBarMenu(positioningThreadID: String?, requestRefresh: Bool) {
+        debugLog(
+            "openMenuBarMenu positioningThreadID=\(positioningThreadID ?? "nil") requestRefresh=\(requestRefresh)"
+        )
+        hideHoverTooltip()
+        renderMenu()
+        if requestRefresh {
+            requestDesktopActivityRefresh()
+            requestThreadRefresh()
+        }
+        configureStatusItemForMenuBarMode()
+
+        guard let button = statusItem?.button,
+              let positioningThreadID,
+              let positioningItem = menu.items.first(where: { ($0.representedObject as? String) == positioningThreadID }) else {
+            statusItem?.button?.performClick(nil)
+            return
+        }
+
+        highlightedThreadID = positioningThreadID
+        skipNextMenuBarMenuWillOpenRender = true
+        menu.popUp(positioning: positioningItem, at: NSPoint(x: button.bounds.midX, y: button.bounds.minY), in: button)
     }
 
     private func closeMenu() {
@@ -1815,8 +1896,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         let currentThreadID = (menu.highlightedItem?.representedObject as? String) ?? highlightedThreadID
-        let targetProjectIndex: Int
+        guard let targetThreadID = menuBarProjectTargetThreadID(from: currentThreadID, delta: delta) else {
+            return false
+        }
 
+        if targetThreadID == currentThreadID {
+            highlightedThreadID = targetThreadID
+            return true
+        }
+
+        pendingMenuBarPositionedThreadID = targetThreadID
+        closeMenu()
+        return true
+    }
+
+    private func menuBarProjectTargetThreadID(from currentThreadID: String?, delta: Int) -> String? {
+        guard !projectShortcutThreadIDs.isEmpty else {
+            return nil
+        }
+
+        let targetProjectIndex: Int
         if let currentThreadID,
            let currentProjectIndex = threadProjectIndexByThreadID[currentThreadID] {
             targetProjectIndex = (currentProjectIndex + delta + projectShortcutThreadIDs.count) % projectShortcutThreadIDs.count
@@ -1824,17 +1923,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             targetProjectIndex = delta > 0 ? 0 : projectShortcutThreadIDs.count - 1
         }
 
-        return highlightMenuBarThread(threadID: projectShortcutThreadIDs[targetProjectIndex])
-    }
-
-    private func highlightMenuBarThread(threadID: String) -> Bool {
-        guard let item = menu.items.first(where: { ($0.representedObject as? String) == threadID }) else {
-            return false
+        guard projectShortcutThreadIDs.indices.contains(targetProjectIndex) else {
+            return nil
         }
 
-        updateHoverTooltip(for: item)
-        _ = menu.perform(NSSelectorFromString("highlightItem:"), with: item)
-        return true
+        return projectShortcutThreadIDs[targetProjectIndex]
+    }
+
+    @objc
+    private func moveToPreviousProjectSelectionAction() {
+        _ = moveProjectSelection(by: -1)
+    }
+
+    @objc
+    private func moveToNextProjectSelectionAction() {
+        _ = moveProjectSelection(by: 1)
     }
 
     private func handleOverlayShortcutEvent(_ event: NSEvent) -> Bool {
@@ -1961,6 +2064,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc
     private func openSettingsAction() {
         debugLog("openSettingsAction")
+        if currentEffectiveDisplayMode == .notch {
+            isSettingsWindowVisible = true
+            notchStatusOverlay.hide()
+        }
+        closeMenu()
         launchAtLoginService.refresh()
         updaterService.refresh()
         settingsWindowController.showWindow(nil)
@@ -2054,7 +2162,11 @@ extension AppDelegate: NSMenuDelegate {
         debugLog("menuWillOpen")
         hideHoverTooltip()
         isMenuOpen = true
-        renderMenu()
+        if skipNextMenuBarMenuWillOpenRender {
+            skipNextMenuBarMenuWillOpenRender = false
+        } else {
+            renderMenu()
+        }
         KeyboardShortcuts.disable(.toggleMenuBarDropdown)
         installMenuShortcutEventMonitor()
         menuToggleController.menuWillOpen()
@@ -2079,5 +2191,12 @@ extension AppDelegate: NSMenuDelegate {
         KeyboardShortcuts.enable(.toggleMenuBarDropdown)
         menuToggleController.menuDidClose()
         scheduleRefreshTimerIfNeeded()
+
+        if let pendingMenuBarPositionedThreadID {
+            self.pendingMenuBarPositionedThreadID = nil
+            DispatchQueue.main.async { [weak self] in
+                self?.openMenuBarMenu(positioningThreadID: pendingMenuBarPositionedThreadID, requestRefresh: false)
+            }
+        }
     }
 }

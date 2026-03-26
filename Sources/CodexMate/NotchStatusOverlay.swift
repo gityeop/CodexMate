@@ -137,7 +137,7 @@ private final class NotchMotionAnimator {
         update(from)
 
         let timer = Timer(timeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in
-            Task { @MainActor [weak self] in
+            MainActor.assumeIsolated {
                 self?.tick()
             }
         }
@@ -440,7 +440,7 @@ final class NotchStatusOverlayController {
 
         let geometry = screen.notchStatusOverlayGeometry(panelHeight: Metrics.expandedPanelHeight)
         if panel.frame != geometry.panelFrame {
-            panel.setFrame(geometry.panelFrame, display: true)
+            panel.setFrame(geometry.panelFrame, display: false)
         }
 
         overlayView.geometry = geometry
@@ -450,7 +450,6 @@ final class NotchStatusOverlayController {
         panel.ignoresMouseEvents = menuExpansionProgress < 0.98
         overlayView.needsLayout = true
         overlayView.needsDisplay = true
-        overlayView.layoutSubtreeIfNeeded()
 
         if !panel.isVisible {
             panel.orderFrontRegardless()
@@ -534,6 +533,15 @@ private final class LockedHorizontalClipView: NSClipView {
     }
 }
 
+private final class NotchMenuScrollView: NSScrollView {
+    var onManualScroll: (() -> Void)?
+
+    override func scrollWheel(with event: NSEvent) {
+        onManualScroll?()
+        super.scrollWheel(with: event)
+    }
+}
+
 final class NotchStatusOverlayView: NSView {
     private enum Layout {
         static let notchSpriteOffsetFromHardwareNotch: CGFloat = 12
@@ -568,13 +576,15 @@ final class NotchStatusOverlayView: NSView {
     }
 
     private let imageView = NSImageView()
-    private let menuScrollView = NSScrollView()
+    private let menuScrollView = NotchMenuScrollView()
     private let menuDocumentView = NotchMenuDocumentView()
     private let surfaceMaskLayer = CAShapeLayer()
     private var menuRows: [MenuRowRecord] = []
     private var selectedMenuRowIndex: Int?
+    private var usesContextualSelectionAnchor = false
     private var flashedMenuIdentifier: String?
     private var highlightResetWorkItem: DispatchWorkItem?
+    private var lastLaidOutMenuContentWidth: CGFloat = -1
     fileprivate var geometry: NotchStatusOverlayGeometry?
     var onKeyDown: ((NSEvent) -> Bool)?
 
@@ -616,6 +626,7 @@ final class NotchStatusOverlayView: NSView {
     var usesCompactLayout = false {
         didSet {
             syncMenuBackgrounds()
+            lastLaidOutMenuContentWidth = -1
             needsLayout = true
             needsDisplay = true
         }
@@ -686,6 +697,9 @@ final class NotchStatusOverlayView: NSView {
         menuScrollView.contentView.layer?.backgroundColor = NSColor.black.cgColor
         menuScrollView.documentView = menuDocumentView
         menuScrollView.isHidden = true
+        menuScrollView.onManualScroll = { [weak self] in
+            self?.clearKeyboardSelectionForManualScroll()
+        }
         addSubview(menuScrollView)
 
         menuDocumentView.wantsLayer = true
@@ -753,6 +767,7 @@ final class NotchStatusOverlayView: NSView {
     }
 
     func prepareForMenuOpen() {
+        usesContextualSelectionAnchor = false
         setSelectedMenuRowIndex(nextSelectableMenuRowIndex(from: nil, delta: 1))
         menuScrollView.contentView.scroll(to: .zero)
         menuScrollView.reflectScrolledClipView(menuScrollView.contentView)
@@ -778,7 +793,11 @@ final class NotchStatusOverlayView: NSView {
 
         let contentFrame = expandedContentFrame
         menuScrollView.frame = contentFrame
-        layoutMenuRows(contentWidth: contentFrame.width)
+        let menuLayoutWidth = expandedMenuLayoutFrame.width
+        if abs(menuLayoutWidth - lastLaidOutMenuContentWidth) > 0.5 {
+            layoutMenuRows(contentWidth: menuLayoutWidth)
+            lastLaidOutMenuContentWidth = menuLayoutWidth
+        }
         updateSurfaceMask()
     }
 
@@ -836,7 +855,9 @@ final class NotchStatusOverlayView: NSView {
         menuRows.forEach { $0.view.removeFromSuperview() }
         menuRows.removeAll()
         selectedMenuRowIndex = nil
+        usesContextualSelectionAnchor = false
         flashedMenuIdentifier = nil
+        lastLaidOutMenuContentWidth = -1
         highlightResetWorkItem?.cancel()
         highlightResetWorkItem = nil
 
@@ -891,6 +912,9 @@ final class NotchStatusOverlayView: NSView {
                     },
                     onToggle: nil
                 )
+                rowView.onScrollWheel = { [weak self] in
+                    self?.clearKeyboardSelectionForManualScroll()
+                }
                 rowView.alphaValue = item.isEnabled ? 1 : 0.45
                 menuDocumentView.addSubview(rowView)
                 menuRows.append(
@@ -1057,7 +1081,14 @@ final class NotchStatusOverlayView: NSView {
             return nil
         }
 
-        if let currentIndex, let currentPosition = selectableIndices.firstIndex(of: currentIndex) {
+        if let currentIndex,
+           let currentPosition = selectableIndices.firstIndex(of: currentIndex) {
+            let nextPosition = (currentPosition + delta + selectableIndices.count) % selectableIndices.count
+            return selectableIndices[nextPosition]
+        }
+
+        if let currentIndex = contextualSelectionAnchorIndex(delta: delta, selectableIndices: selectableIndices),
+           let currentPosition = selectableIndices.firstIndex(of: currentIndex) {
             let nextPosition = (currentPosition + delta + selectableIndices.count) % selectableIndices.count
             return selectableIndices[nextPosition]
         }
@@ -1085,7 +1116,16 @@ final class NotchStatusOverlayView: NSView {
             return nil
         }
 
+        let selectableIndices = menuRows.indices.filter { menuRows[$0].kind == .item && menuRows[$0].isEnabled }
         if let currentIndex,
+           menuRows.indices.contains(currentIndex),
+           let currentProjectIndex = menuRows[currentIndex].projectIndex,
+           let currentPosition = orderedProjectIndices.firstIndex(of: currentProjectIndex) {
+            let nextPosition = (currentPosition + delta + orderedProjectIndices.count) % orderedProjectIndices.count
+            return firstSelectableIndexByProject[orderedProjectIndices[nextPosition]]
+        }
+
+        if let currentIndex = contextualSelectionAnchorIndex(delta: delta, selectableIndices: selectableIndices),
            menuRows.indices.contains(currentIndex),
            let currentProjectIndex = menuRows[currentIndex].projectIndex,
            let currentPosition = orderedProjectIndices.firstIndex(of: currentProjectIndex) {
@@ -1097,10 +1137,59 @@ final class NotchStatusOverlayView: NSView {
         return firstSelectableIndexByProject[orderedProjectIndices[boundaryPosition]]
     }
 
+    private func contextualSelectionAnchorIndex(delta: Int, selectableIndices: [Int]) -> Int? {
+        guard usesContextualSelectionAnchor else {
+            return nil
+        }
+
+        return selectableMenuRowIndexUnderPointer(selectableIndices: selectableIndices)
+            ?? visibleSelectableMenuRowIndex(delta: delta, selectableIndices: selectableIndices)
+    }
+
+    private func selectableMenuRowIndexUnderPointer(selectableIndices: [Int]) -> Int? {
+        guard let window else {
+            return nil
+        }
+
+        let documentPoint = menuDocumentView.convert(window.mouseLocationOutsideOfEventStream, from: nil)
+        let visibleRect = menuDocumentView.visibleRect
+        guard visibleRect.contains(documentPoint) else {
+            return nil
+        }
+
+        return selectableIndices.first(where: { menuRows[$0].view.frame.contains(documentPoint) })
+    }
+
+    private func visibleSelectableMenuRowIndex(delta: Int, selectableIndices: [Int]) -> Int? {
+        let visibleRect = menuDocumentView.visibleRect
+        let visibleSelectableIndices = selectableIndices.filter {
+            menuRows[$0].view.frame.intersects(visibleRect)
+        }
+
+        if !visibleSelectableIndices.isEmpty {
+            return delta > 0 ? visibleSelectableIndices.first : visibleSelectableIndices.last
+        }
+
+        return delta > 0 ? selectableIndices.first : selectableIndices.last
+    }
+
     private func setSelectedMenuRowIndex(_ index: Int?) {
         selectedMenuRowIndex = index
+        if index != nil {
+            usesContextualSelectionAnchor = false
+        }
         applyRowHighlights()
         scrollSelectedMenuRowIntoView()
+    }
+
+    private func clearKeyboardSelectionForManualScroll() {
+        guard selectedMenuRowIndex != nil else {
+            return
+        }
+
+        selectedMenuRowIndex = nil
+        usesContextualSelectionAnchor = true
+        applyRowHighlights()
     }
 
     private var selectedMenuIdentifier: String? {
@@ -1121,6 +1210,7 @@ final class NotchStatusOverlayView: NSView {
         }
 
         selectedMenuRowIndex = nextIndex
+        usesContextualSelectionAnchor = false
     }
 
     private func scrollSelectedMenuRowIntoView() {
@@ -1175,11 +1265,13 @@ final class NotchStatusOverlayView: NSView {
     }
 
     private func applyRowHighlights() {
+        let suppressHoverHighlights = selectedMenuRowIndex != nil
         for (index, row) in menuRows.enumerated() {
             guard let rowView = row.view as? ThreadDropdownMenuRowView else {
                 continue
             }
 
+            rowView.suppressHoverHighlight = suppressHoverHighlights
             let isSelected = selectedMenuRowIndex == index
             let isFlashed = flashedMenuIdentifier != nil && row.identifier == flashedMenuIdentifier
             rowView.isHighlighted = isSelected || isFlashed
@@ -1187,11 +1279,14 @@ final class NotchStatusOverlayView: NSView {
     }
 
     private func updateSurfaceMask() {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
         surfaceMaskLayer.frame = bounds
         surfaceMaskLayer.path = surfacePath(
             in: surfaceFrame,
             expansionProgress: surfaceExpansionProgress
         )
+        CATransaction.commit()
     }
 
     private func drawSurface() {
@@ -1347,8 +1442,7 @@ final class NotchStatusOverlayView: NSView {
         surfaceFrame
     }
 
-    private var expandedHeaderFrame: CGRect {
-        let frame = surfaceFrame
+    private func expandedHeaderFrame(for frame: CGRect) -> CGRect {
         return CGRect(
             x: frame.minX,
             y: frame.maxY - Layout.expandedHeaderHeight - 12,
@@ -1357,17 +1451,28 @@ final class NotchStatusOverlayView: NSView {
         )
     }
 
-    private var expandedContentFrame: CGRect {
-        let frame = surfaceFrame
+    private var expandedHeaderFrame: CGRect {
+        expandedHeaderFrame(for: surfaceFrame)
+    }
+
+    private func expandedContentFrame(for frame: CGRect) -> CGRect {
         return CGRect(
             x: frame.minX + Layout.expandedContentHorizontalInset,
             y: frame.minY + Layout.expandedContentBottomInset,
             width: frame.width - (Layout.expandedContentHorizontalInset * 2),
             height: max(
                 0,
-                expandedHeaderFrame.minY - frame.minY - Layout.expandedContentBottomInset - Layout.expandedHeaderBottomSpacing
+                expandedHeaderFrame(for: frame).minY - frame.minY - Layout.expandedContentBottomInset - Layout.expandedHeaderBottomSpacing
             )
         )
+    }
+
+    private var expandedContentFrame: CGRect {
+        expandedContentFrame(for: surfaceFrame)
+    }
+
+    private var expandedMenuLayoutFrame: CGRect {
+        expandedContentFrame(for: expandedSurfaceFrame)
     }
 
     private var expandedSurfaceFillColor: NSColor {

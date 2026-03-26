@@ -54,9 +54,18 @@ final class ThreadDropdownMenuRowView: NSView {
     private var debugIdentifier = ""
     private var onOpen: (() -> Void)?
     private var onToggle: (() -> Void)?
+    var onScrollWheel: (() -> Void)?
 
     var isHighlighted: Bool = false {
         didSet {
+            needsDisplay = true
+            updateAppearance()
+        }
+    }
+
+    var suppressHoverHighlight = false {
+        didSet {
+            guard suppressHoverHighlight != oldValue else { return }
             needsDisplay = true
             updateAppearance()
         }
@@ -233,7 +242,7 @@ final class ThreadDropdownMenuRowView: NSView {
         if isHighlighted {
             Self.selectedFillColor.setFill()
             path.fill()
-        } else if isHovered {
+        } else if isHovered && !suppressHoverHighlight {
             Self.hoverFillColor.setFill()
             path.fill()
         } else {
@@ -276,6 +285,12 @@ final class ThreadDropdownMenuRowView: NSView {
 
     override func scrollWheel(with event: NSEvent) {
         setHovered(false)
+        onScrollWheel?()
+        if let enclosingScrollView {
+            enclosingScrollView.scrollWheel(with: event)
+            return
+        }
+
         super.scrollWheel(with: event)
     }
 
@@ -286,14 +301,15 @@ final class ThreadDropdownMenuRowView: NSView {
     }
 
     private func updateAppearance() {
-        let textColor: NSColor = (isHighlighted || isHovered)
+        let showsHoverState = isHovered && !suppressHoverHighlight
+        let textColor: NSColor = (isHighlighted || showsHoverState)
             ? NSColor(calibratedWhite: 1, alpha: 0.98)
             : .labelColor
         titleLabel.textColor = textColor
-        secondaryLabel.textColor = (isHighlighted || isHovered)
+        secondaryLabel.textColor = (isHighlighted || showsHoverState)
             ? NSColor(calibratedWhite: 1, alpha: 0.72)
             : .secondaryLabelColor
-        disclosureButton.contentTintColor = (isHighlighted || isHovered)
+        disclosureButton.contentTintColor = (isHighlighted || showsHoverState)
             ? NSColor(calibratedWhite: 1, alpha: 0.92)
             : .secondaryLabelColor
     }
