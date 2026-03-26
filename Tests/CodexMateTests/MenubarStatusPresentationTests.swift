@@ -36,9 +36,19 @@ final class MenubarStatusPresentationTests: XCTestCase {
     func testStatusSpriteCatalogLoadsFramesFromProcessedResources() {
         let catalog = MenubarStatusSpriteCatalog()
 
+        XCTAssertEqual(catalog.frameCount(for: .connecting), 9)
         XCTAssertEqual(catalog.frameCount(for: .idle), 9)
+        XCTAssertEqual(catalog.frameCount(for: .waitingForUser), 9)
         XCTAssertEqual(catalog.frameCount(for: .running), 9)
+        XCTAssertEqual(catalog.frameCount(for: .failed), 9)
         XCTAssertEqual(catalog.frameCount(for: .unread), 9)
+        XCTAssertNotNil(
+            catalog.frame(
+                for: .connecting,
+                index: 8,
+                tintColor: .white
+            )
+        )
         XCTAssertNotNil(
             catalog.frame(
                 for: .idle,
@@ -48,7 +58,21 @@ final class MenubarStatusPresentationTests: XCTestCase {
         )
         XCTAssertNotNil(
             catalog.frame(
+                for: .waitingForUser,
+                index: 8,
+                tintColor: .white
+            )
+        )
+        XCTAssertNotNil(
+            catalog.frame(
                 for: .running,
+                index: 8,
+                tintColor: .white
+            )
+        )
+        XCTAssertNotNil(
+            catalog.frame(
+                for: .failed,
                 index: 8,
                 tintColor: .white
             )
@@ -62,6 +86,14 @@ final class MenubarStatusPresentationTests: XCTestCase {
         )
         XCTAssertNotNil(
             catalog.notchFrame(
+                for: .connecting,
+                index: 8,
+                renderedPixelSize: 128,
+                renderedPointSize: NotchStatusOverlayController.Metrics.spritePointSize
+            )
+        )
+        XCTAssertNotNil(
+            catalog.notchFrame(
                 for: .idle,
                 index: 8,
                 renderedPixelSize: 128,
@@ -70,7 +102,23 @@ final class MenubarStatusPresentationTests: XCTestCase {
         )
         XCTAssertNotNil(
             catalog.notchFrame(
+                for: .waitingForUser,
+                index: 8,
+                renderedPixelSize: 128,
+                renderedPointSize: NotchStatusOverlayController.Metrics.spritePointSize
+            )
+        )
+        XCTAssertNotNil(
+            catalog.notchFrame(
                 for: .running,
+                index: 8,
+                renderedPixelSize: 128,
+                renderedPointSize: NotchStatusOverlayController.Metrics.spritePointSize
+            )
+        )
+        XCTAssertNotNil(
+            catalog.notchFrame(
+                for: .failed,
                 index: 8,
                 renderedPixelSize: 128,
                 renderedPointSize: NotchStatusOverlayController.Metrics.spritePointSize

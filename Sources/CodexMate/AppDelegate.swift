@@ -59,6 +59,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let launchAtLoginService = LaunchAtLoginService()
     private let updaterService = UpdaterService()
     private let statusSpriteCatalog = MenubarStatusSpriteCatalog()
+    private let debugStatusOverride = DebugStatusOverride.overallStatus()
     private let unreadIndicatorImage = AppDelegate.makeUnreadIndicatorImage()
     private let runningIndicatorImage = AppDelegate.makeTextIndicatorImage("⏳")
     private let waitingForUserIndicatorImage = AppDelegate.makeTextIndicatorImage("💬")
@@ -135,6 +136,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         debugLog("applicationDidFinishLaunching log=\(DebugTraceLogger.logFileURL.path)")
+        if let debugStatusOverride {
+            debugLog("debugStatusOverride value=\(debugStatusOverride.displayName)")
+        }
         menu.autoenablesItems = false
         menu.delegate = self
         menu.onKeyboardShortcut = { [weak self] action in
@@ -870,7 +874,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         projectShortcutThreadIDs = menuSections.compactMap { $0.threads.first?.thread.id }
         let renderThreadIDs = Set(flattenedThreadIDs(from: menuSections.flatMap(\.threads)))
         let hasUnreadThreads = menuSections.flatMap(\.threads).contains(where: hasUnreadContent(in:))
-        renderStatusItem(overallStatus: snapshot.overallStatus, hasUnreadThreads: hasUnreadThreads)
+        let statusOverride = debugStatusOverride
+        renderStatusItem(
+            overallStatus: statusOverride ?? snapshot.overallStatus,
+            hasUnreadThreads: statusOverride == nil ? hasUnreadThreads : false
+        )
         var didChangeReadMarkers = preparedSnapshot.didChangeReadMarkers
         if controller.seedThreadReadMarkers(for: renderThreadIDs) {
             didChangeReadMarkers = true

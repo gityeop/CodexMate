@@ -514,6 +514,7 @@ private final class NotchStatusOverlayView: NSView {
         static let notchSpriteOffsetFromHardwareNotch: CGFloat = 12
         static let notchSpriteTrailingInset: CGFloat = 18
         static let notchSpriteBottomInset: CGFloat = 1
+        static let expandedMenuSpriteHorizontalShift: CGFloat = 16
         static let notchTopCornerRadius: CGFloat = 6
         static let notchBottomCornerRadius: CGFloat = 14
         static let expandedNotchTopCornerRadius: CGFloat = 19
@@ -977,9 +978,11 @@ private final class NotchStatusOverlayView: NSView {
             width: spritePointSize.width * spriteScale,
             height: spritePointSize.height * spriteScale
         )
-        let maxX = islandFrame.maxX - Layout.notchSpriteTrailingInset - size.width
+        let collapsedMaxX = islandFrame.maxX - Layout.notchSpriteTrailingInset - size.width
+        let expandedMaxX = expandedSurfaceFrame.maxX - Layout.expandedContentHorizontalInset - size.width
+        let baseX = min(hardwareFrame.maxX + Layout.notchSpriteOffsetFromHardwareNotch, collapsedMaxX)
         return CGRect(
-            x: min(hardwareFrame.maxX + Layout.notchSpriteOffsetFromHardwareNotch, maxX),
+            x: min(baseX + (menuExpansionProgress * Layout.expandedMenuSpriteHorizontalShift), expandedMaxX),
             y: islandFrame.minY - Layout.notchSpriteBottomInset + bobOffset + islandEmphasisProgress,
             width: size.width,
             height: size.height

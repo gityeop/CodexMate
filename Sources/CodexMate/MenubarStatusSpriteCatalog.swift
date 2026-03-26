@@ -170,12 +170,8 @@ final class MenubarStatusSpriteCatalog {
     }
 
     private func spriteSheetLayout(for sprite: MenubarStatusPresentation.StatusSprite) -> SpriteSheetLayout {
-        switch sprite {
-        case .idle, .running, .unread:
-            SpriteSheetLayout(columns: 3, rows: 3)
-        default:
-            SpriteSheetLayout(columns: Metrics.defaultFrameCount, rows: 1)
-        }
+        _ = sprite
+        return SpriteSheetLayout(columns: 3, rows: 3)
     }
 
     private func aspectFitRect(for source: CGImage, in bounds: CGRect) -> CGRect {

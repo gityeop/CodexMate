@@ -733,7 +733,10 @@ struct CodexDesktopStateReader {
         guard process.terminationStatus == 0 else {
             let message = String(data: outputData, encoding: .utf8)?
                 .trimmingCharacters(in: .whitespacesAndNewlines)
-            throw ReaderError.queryFailed(message: message ?? "sqlite3 exited with status \(process.terminationStatus)")
+            throw ReaderError.queryFailed(
+                message: message ?? "sqlite3 exited with status \(process.terminationStatus)",
+                databasePath: databaseURL.path
+            )
         }
 
         return String(data: outputData, encoding: .utf8) ?? ""
@@ -804,13 +807,13 @@ private final class StateDatabaseURLCache {
 extension CodexDesktopStateReader {
     enum ReaderError: LocalizedError {
         case databaseNotFound
-        case queryFailed(message: String)
+        case queryFailed(message: String, databasePath: String?)
 
         var errorDescription: String? {
             switch self {
             case .databaseNotFound:
                 return "Could not find a Codex state database in ~/.codex."
-            case let .queryFailed(message):
+            case let .queryFailed(message, _):
                 return message
             }
         }
@@ -819,8 +822,17 @@ extension CodexDesktopStateReader {
             switch self {
             case .databaseNotFound:
                 return false
-            case let .queryFailed(message):
+            case let .queryFailed(message, _):
                 return message.localizedCaseInsensitiveContains("unable to open database file")
+            }
+        }
+
+        var databasePath: String? {
+            switch self {
+            case .databaseNotFound:
+                return nil
+            case let .queryFailed(_, databasePath):
+                return databasePath
             }
         }
     }

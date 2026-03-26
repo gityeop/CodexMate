@@ -8,10 +8,17 @@ struct DesktopActivityUpdate {
 }
 
 actor DesktopActivityService {
+    private enum RuntimeErrorPolicy {
+        static let retryableOpenFailureAttempts = 2
+        static let diagnosticThrottleInterval: TimeInterval = 30
+    }
+
     private let stateReader: CodexDesktopStateReader
     private let conversationActivityReader: CodexDesktopConversationActivityReader
     private let completionHintInterval: TimeInterval
     private let runningHintInterval: TimeInterval
+    private var lastRuntimeErrorFingerprint: String?
+    private var lastRuntimeErrorAt: Date?
 
     init(
         stateReader: CodexDesktopStateReader = .init(),
@@ -37,7 +44,7 @@ actor DesktopActivityService {
         )
 
         do {
-            let runtimeSnapshot = try stateReader.snapshot(candidateSessionPaths: candidateSessionPaths)
+            let runtimeSnapshot = try loadRuntimeSnapshot(candidateSessionPaths: candidateSessionPaths)
             let hintedRunningThreadIDs = DesktopActivityHintPlanner.hintedRunningThreadIDs(
                 activitySnapshot: activitySnapshot,
                 candidateThreadIDs: candidateThreadIDs,
@@ -70,12 +77,62 @@ actor DesktopActivityService {
                 runtimeErrorMessage: nil
             )
         } catch {
+            let runtimeErrorMessage = throttledRuntimeErrorMessage(for: error, now: now)
             return DesktopActivityUpdate(
                 runtimeSnapshot: nil,
                 latestViewedAtByThreadID: activitySnapshot.latestViewedAtByThreadID,
                 latestTurnCompletedAtByThreadID: latestTurnCompletedAtByThreadID,
-                runtimeErrorMessage: error.localizedDescription
+                runtimeErrorMessage: runtimeErrorMessage
             )
         }
+    }
+
+    private func loadRuntimeSnapshot(candidateSessionPaths: [String: String?]) throws -> CodexDesktopRuntimeSnapshot {
+        var attempt = 0
+
+        while true {
+            do {
+                let snapshot = try stateReader.snapshot(candidateSessionPaths: candidateSessionPaths)
+                lastRuntimeErrorFingerprint = nil
+                lastRuntimeErrorAt = nil
+                return snapshot
+            } catch let error as CodexDesktopStateReader.ReaderError
+                where error.isRetriableDatabaseOpenFailure && attempt + 1 < RuntimeErrorPolicy.retryableOpenFailureAttempts {
+                attempt += 1
+                continue
+            } catch {
+                throw error
+            }
+        }
+    }
+
+    private func throttledRuntimeErrorMessage(for error: Error, now: Date) -> String? {
+        let fingerprint = runtimeErrorFingerprint(for: error)
+        if let lastRuntimeErrorFingerprint,
+           lastRuntimeErrorFingerprint == fingerprint,
+           let lastRuntimeErrorAt,
+           now.timeIntervalSince(lastRuntimeErrorAt) < RuntimeErrorPolicy.diagnosticThrottleInterval {
+            return nil
+        }
+
+        lastRuntimeErrorFingerprint = fingerprint
+        lastRuntimeErrorAt = now
+
+        if let readerError = error as? CodexDesktopStateReader.ReaderError,
+           let databasePath = readerError.databasePath {
+            DebugTraceLogger.log(
+                "desktop activity state-db error path=\(databasePath) message=\(readerError.localizedDescription)"
+            )
+        }
+
+        return error.localizedDescription
+    }
+
+    private func runtimeErrorFingerprint(for error: Error) -> String {
+        if let readerError = error as? CodexDesktopStateReader.ReaderError {
+            return [readerError.localizedDescription, readerError.databasePath ?? ""].joined(separator: "|")
+        }
+
+        return error.localizedDescription
     }
 }
