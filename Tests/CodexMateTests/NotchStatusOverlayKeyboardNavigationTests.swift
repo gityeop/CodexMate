@@ -47,6 +47,20 @@ final class NotchStatusOverlayKeyboardNavigationTests: XCTestCase {
         XCTAssertEqual(try selectedRowTitle(in: view), "Thread 1")
     }
 
+    func testOptionArrowNavigationMovesByProject() throws {
+        let view = NotchStatusOverlayView(frame: NSRect(x: 0, y: 0, width: 520, height: 220))
+        view.setMenuItems(makeSectionedMenuItems())
+        view.menuExpansionProgress = 1
+        view.prepareForMenuOpen()
+        view.layoutSubtreeIfNeeded()
+
+        try sendKeyEvent(to: view, keyCode: 125, characters: "↓", modifierFlags: [.option])
+        XCTAssertEqual(try selectedRowTitle(in: view), "Project B Thread 1")
+
+        try sendKeyEvent(to: view, keyCode: 126, characters: "↑", modifierFlags: [.option])
+        XCTAssertEqual(try selectedRowTitle(in: view), "Project A Thread 1")
+    }
+
     func testArrowNavigationScrollsSelectedRowIntoView() throws {
         let view = NotchStatusOverlayView(frame: NSRect(x: 0, y: 0, width: 520, height: 220))
         view.setMenuItems(makeScrollableMenuItems())
@@ -191,12 +205,12 @@ final class NotchStatusOverlayKeyboardNavigationTests: XCTestCase {
     private func makeSectionedMenuItems() -> [NotchStatusOverlayMenuEntry] {
         [
             .header("Project A | 스레드 2개"),
-            .item(primaryText: "Project A Thread 1", onSelect: {}),
-            .item(primaryText: "Project A Thread 2", onSelect: {}),
+            .item(primaryText: "Project A Thread 1", projectIndex: 0, onSelect: {}),
+            .item(primaryText: "Project A Thread 2", projectIndex: 0, onSelect: {}),
             .separator(),
             .header("Project B | 스레드 2개"),
-            .item(primaryText: "Project B Thread 1", onSelect: {}),
-            .item(primaryText: "Project B Thread 2", onSelect: {}),
+            .item(primaryText: "Project B Thread 1", projectIndex: 1, onSelect: {}),
+            .item(primaryText: "Project B Thread 2", projectIndex: 1, onSelect: {}),
         ]
     }
 

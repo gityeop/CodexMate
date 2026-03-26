@@ -110,6 +110,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var hoverTooltipWorkItem: DispatchWorkItem?
     private var highlightedThreadID: String?
     private var projectShortcutThreadIDs: [String] = []
+    private var threadProjectIndexByThreadID: [String: Int] = [:]
     private var foregroundRefreshObserverTokens: [NSObjectProtocol] = []
     private var cancellables: Set<AnyCancellable> = []
     private var foregroundRefreshThrottle = ForegroundRefreshThrottle(
@@ -871,6 +872,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             recentThreads: controller.recentThreads,
             projectCatalog: controller.projectCatalog
         )
+        var threadProjectIndexByThreadID: [String: Int] = [:]
+        for (index, section) in menuSections.enumerated() {
+            for threadID in flattenedThreadIDs(from: section.threads) {
+                threadProjectIndexByThreadID[threadID] = index
+            }
+        }
+
+        self.threadProjectIndexByThreadID = threadProjectIndexByThreadID
         projectShortcutThreadIDs = menuSections.compactMap { $0.threads.first?.thread.id }
         let renderThreadIDs = Set(flattenedThreadIDs(from: menuSections.flatMap(\.threads)))
         let hasUnreadThreads = menuSections.flatMap(\.threads).contains(where: hasUnreadContent(in:))
@@ -981,6 +990,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let indentationLevel = item.indentationLevel
         let isEnabled = item.isEnabled
         let representedThreadID = item.representedObject as? String
+        let projectIndex = representedThreadID.flatMap { threadProjectIndexByThreadID[$0] }
 
         let onSelect: (() -> Void)? = { [weak self] in
             guard let self else { return }
@@ -1022,6 +1032,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             secondaryText: splitTitle.secondary,
             identifier: representedThreadID,
             indicatorImage: indicatorImage,
+            projectIndex: projectIndex,
             indentationLevel: indentationLevel,
             isEnabled: isEnabled,
             onSelect: onSelect
@@ -1782,7 +1793,48 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.openThread(threadID: threadID)
             }
             return true
+        case let .moveProjectSelection(delta):
+            return moveProjectSelection(by: delta)
         }
+    }
+
+    private func moveProjectSelection(by delta: Int) -> Bool {
+        switch currentEffectiveDisplayMode {
+        case .menuBar:
+            return moveMenuBarProjectSelection(by: delta)
+        case .notch:
+            return notchStatusOverlay.moveExpandedMenuSelectionByProject(delta)
+        case nil:
+            return false
+        }
+    }
+
+    private func moveMenuBarProjectSelection(by delta: Int) -> Bool {
+        guard isMenuOpen, !projectShortcutThreadIDs.isEmpty else {
+            return false
+        }
+
+        let currentThreadID = (menu.highlightedItem?.representedObject as? String) ?? highlightedThreadID
+        let targetProjectIndex: Int
+
+        if let currentThreadID,
+           let currentProjectIndex = threadProjectIndexByThreadID[currentThreadID] {
+            targetProjectIndex = (currentProjectIndex + delta + projectShortcutThreadIDs.count) % projectShortcutThreadIDs.count
+        } else {
+            targetProjectIndex = delta > 0 ? 0 : projectShortcutThreadIDs.count - 1
+        }
+
+        return highlightMenuBarThread(threadID: projectShortcutThreadIDs[targetProjectIndex])
+    }
+
+    private func highlightMenuBarThread(threadID: String) -> Bool {
+        guard let item = menu.items.first(where: { ($0.representedObject as? String) == threadID }) else {
+            return false
+        }
+
+        updateHoverTooltip(for: item)
+        _ = menu.perform(NSSelectorFromString("highlightItem:"), with: item)
+        return true
     }
 
     private func handleOverlayShortcutEvent(_ event: NSEvent) -> Bool {

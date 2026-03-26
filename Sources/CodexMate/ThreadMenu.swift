@@ -3,6 +3,7 @@ import AppKit
 enum ThreadMenuKeyboardShortcutAction: Equatable {
     case openHighlightedThread
     case openProjectThread(Int)
+    case moveProjectSelection(Int)
 }
 
 final class ThreadMenu: NSMenu {
@@ -28,6 +29,17 @@ final class ThreadMenu: NSMenu {
 
         if modifierFlags.isEmpty && (event.keyCode == 36 || event.keyCode == 76) {
             return .openHighlightedThread
+        }
+
+        if modifierFlags == .option {
+            switch event.keyCode {
+            case 125:
+                return .moveProjectSelection(1)
+            case 126:
+                return .moveProjectSelection(-1)
+            default:
+                return nil
+            }
         }
 
         guard modifierFlags == NSEvent.ModifierFlags.command,

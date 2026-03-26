@@ -18,6 +18,7 @@ struct NotchStatusOverlayMenuEntry {
     let secondaryText: String?
     let identifier: String?
     let indicatorImage: NSImage?
+    let projectIndex: Int?
     let indentationLevel: Int
     let isEnabled: Bool
     let onSelect: (() -> Void)?
@@ -27,6 +28,7 @@ struct NotchStatusOverlayMenuEntry {
         secondaryText: String? = nil,
         identifier: String? = nil,
         indicatorImage: NSImage? = nil,
+        projectIndex: Int? = nil,
         indentationLevel: Int = 0,
         isEnabled: Bool = true,
         onSelect: (() -> Void)? = nil
@@ -37,6 +39,7 @@ struct NotchStatusOverlayMenuEntry {
             secondaryText: secondaryText,
             identifier: identifier,
             indicatorImage: indicatorImage,
+            projectIndex: projectIndex,
             indentationLevel: indentationLevel,
             isEnabled: isEnabled,
             onSelect: onSelect
@@ -50,6 +53,7 @@ struct NotchStatusOverlayMenuEntry {
             secondaryText: nil,
             identifier: nil,
             indicatorImage: nil,
+            projectIndex: nil,
             indentationLevel: 0,
             isEnabled: false,
             onSelect: nil
@@ -63,6 +67,7 @@ struct NotchStatusOverlayMenuEntry {
             secondaryText: nil,
             identifier: nil,
             indicatorImage: nil,
+            projectIndex: nil,
             indentationLevel: 0,
             isEnabled: false,
             onSelect: nil
@@ -278,6 +283,14 @@ final class NotchStatusOverlayController {
         }
 
         return overlayView.handleMenuNavigationKeyDown(event)
+    }
+
+    func moveExpandedMenuSelectionByProject(_ delta: Int) -> Bool {
+        guard isMenuExpanded else {
+            return false
+        }
+
+        return overlayView.moveKeyboardSelectionByProject(delta)
     }
 
     func showMenu(on screen: NSScreen) {
@@ -575,6 +588,7 @@ final class NotchStatusOverlayView: NSView {
         let view: NSView
         let kind: MenuRowKind
         let identifier: String?
+        let projectIndex: Int?
         let isEnabled: Bool
     }
 
@@ -831,7 +845,15 @@ final class NotchStatusOverlayView: NSView {
             case .separator:
                 let separatorView = NotchMenuSeparatorView(frame: .zero)
                 menuDocumentView.addSubview(separatorView)
-                menuRows.append(MenuRowRecord(view: separatorView, kind: .separator, identifier: nil, isEnabled: false))
+                menuRows.append(
+                    MenuRowRecord(
+                        view: separatorView,
+                        kind: .separator,
+                        identifier: nil,
+                        projectIndex: nil,
+                        isEnabled: false
+                    )
+                )
             case .header:
                 let label = NSTextField(labelWithString: item.primaryText)
                 label.font = NSFont.systemFont(ofSize: 11, weight: .semibold)
@@ -839,7 +861,15 @@ final class NotchStatusOverlayView: NSView {
                 label.lineBreakMode = .byTruncatingTail
                 label.maximumNumberOfLines = 1
                 menuDocumentView.addSubview(label)
-                menuRows.append(MenuRowRecord(view: label, kind: .header, identifier: nil, isEnabled: false))
+                menuRows.append(
+                    MenuRowRecord(
+                        view: label,
+                        kind: .header,
+                        identifier: nil,
+                        projectIndex: nil,
+                        isEnabled: false
+                    )
+                )
             case .item:
                 let rowView = ThreadDropdownMenuRowView(frame: .zero)
                 rowView.configure(
@@ -863,7 +893,15 @@ final class NotchStatusOverlayView: NSView {
                 )
                 rowView.alphaValue = item.isEnabled ? 1 : 0.45
                 menuDocumentView.addSubview(rowView)
-                menuRows.append(MenuRowRecord(view: rowView, kind: .item, identifier: item.identifier, isEnabled: item.isEnabled))
+                menuRows.append(
+                    MenuRowRecord(
+                        view: rowView,
+                        kind: .item,
+                        identifier: item.identifier,
+                        projectIndex: item.projectIndex,
+                        isEnabled: item.isEnabled
+                    )
+                )
             }
         }
 
@@ -943,6 +981,17 @@ final class NotchStatusOverlayView: NSView {
         let modifierFlags = event.modifierFlags
             .intersection(.deviceIndependentFlagsMask)
             .subtracting([.numericPad, .function])
+        if modifierFlags == .option {
+            switch event.keyCode {
+            case 125:
+                return moveKeyboardSelectionByProject(1)
+            case 126:
+                return moveKeyboardSelectionByProject(-1)
+            default:
+                return false
+            }
+        }
+
         guard modifierFlags.isEmpty else {
             return false
         }
@@ -961,6 +1010,15 @@ final class NotchStatusOverlayView: NSView {
 
     private func moveKeyboardSelection(by delta: Int) -> Bool {
         guard let nextIndex = nextSelectableMenuRowIndex(from: selectedMenuRowIndex, delta: delta) else {
+            return false
+        }
+
+        setSelectedMenuRowIndex(nextIndex)
+        return true
+    }
+
+    func moveKeyboardSelectionByProject(_ delta: Int) -> Bool {
+        guard let nextIndex = nextProjectSelectableMenuRowIndex(from: selectedMenuRowIndex, delta: delta) else {
             return false
         }
 
@@ -1005,6 +1063,38 @@ final class NotchStatusOverlayView: NSView {
         }
 
         return delta > 0 ? selectableIndices.first : selectableIndices.last
+    }
+
+    private func nextProjectSelectableMenuRowIndex(from currentIndex: Int?, delta: Int) -> Int? {
+        var firstSelectableIndexByProject: [Int: Int] = [:]
+        var orderedProjectIndices: [Int] = []
+
+        for (index, row) in menuRows.enumerated() {
+            guard row.kind == .item,
+                  row.isEnabled,
+                  let projectIndex = row.projectIndex,
+                  firstSelectableIndexByProject[projectIndex] == nil else {
+                continue
+            }
+
+            firstSelectableIndexByProject[projectIndex] = index
+            orderedProjectIndices.append(projectIndex)
+        }
+
+        guard !orderedProjectIndices.isEmpty else {
+            return nil
+        }
+
+        if let currentIndex,
+           menuRows.indices.contains(currentIndex),
+           let currentProjectIndex = menuRows[currentIndex].projectIndex,
+           let currentPosition = orderedProjectIndices.firstIndex(of: currentProjectIndex) {
+            let nextPosition = (currentPosition + delta + orderedProjectIndices.count) % orderedProjectIndices.count
+            return firstSelectableIndexByProject[orderedProjectIndices[nextPosition]]
+        }
+
+        let boundaryPosition = delta > 0 ? 0 : orderedProjectIndices.count - 1
+        return firstSelectableIndexByProject[orderedProjectIndices[boundaryPosition]]
     }
 
     private func setSelectedMenuRowIndex(_ index: Int?) {
