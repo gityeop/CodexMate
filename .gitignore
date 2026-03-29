@@ -8,3 +8,5 @@ DerivedData/
 .netrc
 /dist
 PROJECT_DASHBOARD.md
+__pycache__/
+*.pyc
