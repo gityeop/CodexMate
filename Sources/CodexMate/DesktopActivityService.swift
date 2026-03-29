@@ -21,12 +21,15 @@ actor DesktopActivityService {
     private var lastRuntimeErrorAt: Date?
 
     init(
-        stateReader: CodexDesktopStateReader = .init(),
+        stateReader: CodexDesktopStateReader? = nil,
         conversationActivityReader: CodexDesktopConversationActivityReader = .init(),
+        codexDirectoryURLProvider: (@Sendable () -> URL)? = nil,
         completionHintInterval: TimeInterval = 30 * 60,
         runningHintInterval: TimeInterval = 15
     ) {
-        self.stateReader = stateReader
+        self.stateReader = stateReader ?? CodexDesktopStateReader(
+            codexDirectoryURLProvider: codexDirectoryURLProvider
+        )
         self.conversationActivityReader = conversationActivityReader
         self.completionHintInterval = completionHintInterval
         self.runningHintInterval = runningHintInterval

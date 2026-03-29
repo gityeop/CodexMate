@@ -69,6 +69,18 @@ final class SettingsViewModel: ObservableObject {
         .toggleMenuBarDropdown
     }
 
+    var projectLimitRange: ClosedRange<Int> {
+        AppPreferencesStore.projectLimitRange
+    }
+
+    var projectLimitLabel: String {
+        strings.format(
+            "settings.projectLimitLabel",
+            language: preferences.language,
+            Int64(preferences.projectLimit)
+        )
+    }
+
     var threadsPerProjectLimitRange: ClosedRange<Int> {
         AppPreferencesStore.threadsPerProjectLimitRange
     }
@@ -111,6 +123,10 @@ final class SettingsViewModel: ObservableObject {
 
     func setDisplayMode(_ displayMode: AppDisplayMode) {
         preferences.displayMode = displayMode
+    }
+
+    func setProjectLimit(_ limit: Int) {
+        preferences.projectLimit = limit
     }
 
     func setThreadsPerProjectLimit(_ limit: Int) {

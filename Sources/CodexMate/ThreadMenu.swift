@@ -47,19 +47,10 @@ final class ThreadMenu: NSMenu {
             return nil
         }
 
-        switch characters {
-        case "1":
-            return .openProjectThread(0)
-        case "2":
-            return .openProjectThread(1)
-        case "3":
-            return .openProjectThread(2)
-        case "4":
-            return .openProjectThread(3)
-        case "5":
-            return .openProjectThread(4)
-        default:
+        guard let projectIndex = ProjectMenuShortcut.index(for: characters) else {
             return nil
         }
+
+        return .openProjectThread(projectIndex)
     }
 }

@@ -22,6 +22,7 @@ struct InitializeParams: Encodable {
 
 struct InitializeResponse: Decodable {
     let userAgent: String
+    let codexHome: String?
 }
 
 enum ThreadListSortKey: String, Encodable {
@@ -134,9 +135,88 @@ struct CodexThread: Decodable, Equatable {
         cwd = try container.decode(String.self, forKey: .cwd)
         name = try container.decodeIfPresent(String.self, forKey: .name)
         path = try container.decodeIfPresent(String.self, forKey: .path)
-        source = try container.decodeIfPresent(String.self, forKey: .source)
+        if let sourceString = try? container.decode(String.self, forKey: .source) {
+            source = sourceString
+        } else if let sourcePayload = try? container.decode(ThreadSourcePayload.self, forKey: .source) {
+            source = sourcePayload.legacyJSONString
+        } else {
+            source = nil
+        }
         agentRole = try container.decodeIfPresent(String.self, forKey: .agentRole)
         agentNickname = try container.decodeIfPresent(String.self, forKey: .agentNickname)
+    }
+}
+
+private struct ThreadSourcePayload: Codable {
+    let subagent: SubagentPayload?
+
+    private enum CodingKeys: String, CodingKey {
+        case subagent
+        case subAgent
+    }
+
+    init(subagent: SubagentPayload?) {
+        self.subagent = subagent
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        subagent = try container.decodeIfPresent(SubagentPayload.self, forKey: .subagent)
+            ?? container.decodeIfPresent(SubagentPayload.self, forKey: .subAgent)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(subagent, forKey: .subagent)
+    }
+
+    static func parse(from source: String?) -> ThreadSourcePayload? {
+        guard let source,
+              source.first == "{",
+              let data = source.data(using: .utf8)
+        else {
+            return nil
+        }
+
+        return try? JSONDecoder().decode(ThreadSourcePayload.self, from: data)
+    }
+
+    var legacyJSONString: String? {
+        guard subagent != nil else {
+            return nil
+        }
+
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        guard let data = try? encoder.encode(self) else {
+            return nil
+        }
+
+        return String(data: data, encoding: .utf8)
+    }
+}
+
+private struct SubagentPayload: Codable {
+    let threadSpawn: ThreadSpawnPayload?
+
+    private enum CodingKeys: String, CodingKey {
+        case threadSpawn = "thread_spawn"
+    }
+}
+
+private struct ThreadSpawnPayload: Codable {
+    let parentThreadID: String?
+    let depth: Int?
+    let agentPath: String?
+    let agentNickname: String?
+    let agentRole: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case parentThreadID = "parent_thread_id"
+        case depth
+        case agentPath = "agent_path"
+        case agentNickname = "agent_nickname"
+        case agentRole = "agent_role"
     }
 }
 
@@ -255,26 +335,11 @@ struct ThreadClosedNotification: Decodable, Equatable {
 
 extension CodexThread {
     var isSubagent: Bool {
-        guard let source,
-              source.first == "{",
-              let data = source.data(using: .utf8),
-              let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let subagent = payload["subagent"] as? [String: Any]
-        else {
-            return false
-        }
-
-        return subagent["thread_spawn"] != nil
+        ThreadSourcePayload.parse(from: source)?.subagent?.threadSpawn != nil
     }
 
     var subagentParentThreadID: String? {
-        guard let source,
-              source.first == "{",
-              let data = source.data(using: .utf8),
-              let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let subagent = payload["subagent"] as? [String: Any],
-              let threadSpawn = subagent["thread_spawn"] as? [String: Any],
-              let parentThreadID = threadSpawn["parent_thread_id"] as? String,
+        guard let parentThreadID = ThreadSourcePayload.parse(from: source)?.subagent?.threadSpawn?.parentThreadID,
               !parentThreadID.isEmpty
         else {
             return nil

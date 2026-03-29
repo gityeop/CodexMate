@@ -42,6 +42,27 @@ final class ThreadMenuTests: XCTestCase {
         )
     }
 
+    func testCommandZeroShortcutMapsToTenthProjectIndex() throws {
+        let event = try makeKeyEvent(
+            keyCode: 29,
+            modifierFlags: [.command],
+            characters: "0"
+        )
+
+        XCTAssertEqual(
+            ThreadMenu.shortcutAction(for: event),
+            .openProjectThread(9)
+        )
+    }
+
+    func testProjectShortcutKeyEquivalentsExpandThroughZero() {
+        XCTAssertEqual(ProjectMenuShortcut.maxCount, 10)
+        XCTAssertEqual(ProjectMenuShortcut.keyEquivalent(for: 0), "1")
+        XCTAssertEqual(ProjectMenuShortcut.keyEquivalent(for: 8), "9")
+        XCTAssertEqual(ProjectMenuShortcut.keyEquivalent(for: 9), "0")
+        XCTAssertNil(ProjectMenuShortcut.keyEquivalent(for: 10))
+    }
+
     func testCommandNumberShortcutRejectsExtraModifiers() throws {
         let event = try makeKeyEvent(
             keyCode: 18,

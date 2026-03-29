@@ -73,6 +73,7 @@ struct CodexDesktopStateReader {
     private let databaseLocationCacheLifetime: TimeInterval
     private let stateDatabaseURLOverride: URL?
     private let codexDirectoryURLOverride: URL?
+    private let codexDirectoryURLProvider: @Sendable () -> URL
     private let sessionPendingStateCache = SessionPendingStateCache()
     private let stateDatabaseURLCache = StateDatabaseURLCache()
 
@@ -85,7 +86,8 @@ struct CodexDesktopStateReader {
         recentProcessActivityInterval: TimeInterval = 10 * 60,
         databaseLocationCacheLifetime: TimeInterval = 30,
         stateDatabaseURLOverride: URL? = nil,
-        codexDirectoryURLOverride: URL? = nil
+        codexDirectoryURLOverride: URL? = nil,
+        codexDirectoryURLProvider: (@Sendable () -> URL)? = nil
     ) {
         self.fileManager = fileManager
         self.now = now
@@ -96,6 +98,9 @@ struct CodexDesktopStateReader {
         self.databaseLocationCacheLifetime = max(1, databaseLocationCacheLifetime)
         self.stateDatabaseURLOverride = stateDatabaseURLOverride
         self.codexDirectoryURLOverride = codexDirectoryURLOverride
+        self.codexDirectoryURLProvider = codexDirectoryURLProvider ?? {
+            FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex", isDirectory: true)
+        }
     }
 
     func snapshot(candidates: Set<String>) throws -> CodexDesktopRuntimeSnapshot {
@@ -268,10 +273,12 @@ struct CodexDesktopStateReader {
         }
 
         let referenceNow = now()
+        let codexDirectoryURL = resolvedCodexDirectoryURL()
         var candidateURLs: [URL] = []
 
         if let cachedURL = stateDatabaseURLCache.value(
             now: referenceNow,
+            codexDirectoryURL: codexDirectoryURL,
             fileManager: fileManager,
             cacheLifetime: databaseLocationCacheLifetime
         ) {
@@ -291,7 +298,7 @@ struct CodexDesktopStateReader {
         for candidateURL in candidateURLs {
             do {
                 let result = try operation(candidateURL)
-                stateDatabaseURLCache.store(candidateURL, checkedAt: referenceNow)
+                stateDatabaseURLCache.store(candidateURL, codexDirectoryURL: codexDirectoryURL, checkedAt: referenceNow)
                 return result
             } catch let error as ReaderError where error.isRetriableDatabaseOpenFailure {
                 lastRetriableError = error
@@ -316,8 +323,7 @@ struct CodexDesktopStateReader {
             return [stateDatabaseURLOverride]
         }
 
-        let codexDirectory = codexDirectoryURLOverride
-            ?? fileManager.homeDirectoryForCurrentUser.appendingPathComponent(".codex", isDirectory: true)
+        let codexDirectory = resolvedCodexDirectoryURL()
         let candidateURLs = try fileManager.contentsOfDirectory(
             at: codexDirectory,
             includingPropertiesForKeys: [.contentModificationDateKey],
@@ -338,6 +344,10 @@ struct CodexDesktopStateReader {
         }
 
         return sortedCandidateURLs
+    }
+
+    private func resolvedCodexDirectoryURL() -> URL {
+        (codexDirectoryURLOverride ?? codexDirectoryURLProvider()).standardizedFileURL
     }
 
     private func querySnapshotState(
@@ -778,6 +788,7 @@ final class SessionPendingStateCache {
 
 private final class StateDatabaseURLCache {
     private struct Entry {
+        let codexDirectoryURL: URL
         let url: URL
         let checkedAt: Date
     }
@@ -786,10 +797,12 @@ private final class StateDatabaseURLCache {
 
     func value(
         now: Date,
+        codexDirectoryURL: URL,
         fileManager: FileManager,
         cacheLifetime: TimeInterval
     ) -> URL? {
         guard let entry,
+              entry.codexDirectoryURL == codexDirectoryURL,
               now.timeIntervalSince(entry.checkedAt) < cacheLifetime,
               fileManager.fileExists(atPath: entry.url.path)
         else {
@@ -799,8 +812,8 @@ private final class StateDatabaseURLCache {
         return entry.url
     }
 
-    func store(_ url: URL, checkedAt: Date) {
-        entry = Entry(url: url, checkedAt: checkedAt)
+    func store(_ url: URL, codexDirectoryURL: URL, checkedAt: Date) {
+        entry = Entry(codexDirectoryURL: codexDirectoryURL, url: url, checkedAt: checkedAt)
     }
 
     func clear() {
@@ -816,7 +829,7 @@ extension CodexDesktopStateReader {
         var errorDescription: String? {
             switch self {
             case .databaseNotFound:
-                return "Could not find a Codex state database in ~/.codex."
+                return "Could not find a Codex state database in the configured Codex home."
             case let .queryFailed(message, _):
                 return message
             }

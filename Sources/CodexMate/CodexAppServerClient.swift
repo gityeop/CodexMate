@@ -44,6 +44,7 @@ actor CodexAppServerClient {
     private var stderrBuffer = Data()
     private var nextRequestID = 1
     private var pendingResponses: [Int: CheckedContinuation<Data, Error>] = [:]
+    private var initializeResponse: InitializeResponse?
 
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
@@ -56,8 +57,14 @@ actor CodexAppServerClient {
         self.onTermination = onTermination
     }
 
-    func start(codexBinaryURL: URL) async throws {
-        guard process == nil else { return }
+    func start(codexBinaryURL: URL) async throws -> InitializeResponse {
+        guard process == nil else {
+            if let initializeResponse {
+                return initializeResponse
+            }
+
+            throw CodexAppServerClientError.notConnected
+        }
 
         let newProcess = Process()
         let stdinPipe = Pipe()
@@ -108,7 +115,7 @@ actor CodexAppServerClient {
         stdoutHandle = stdoutPipe.fileHandleForReading
         stderrHandle = stderrPipe.fileHandleForReading
 
-        let _: InitializeResponse = try await call(
+        let initializeResponse: InitializeResponse = try await call(
             method: "initialize",
             params: InitializeParams(
                 clientInfo: ClientInfo(name: "CodexMate", version: "0.1.0"),
@@ -117,6 +124,8 @@ actor CodexAppServerClient {
         )
 
         try sendNotification(method: "initialized")
+        self.initializeResponse = initializeResponse
+        return initializeResponse
     }
 
     func stop() {
@@ -138,6 +147,7 @@ actor CodexAppServerClient {
         stderrHandle = nil
         stdoutBuffer.removeAll(keepingCapacity: false)
         stderrBuffer.removeAll(keepingCapacity: false)
+        initializeResponse = nil
 
         for (_, continuation) in pendingResponses {
             continuation.resume(throwing: CodexAppServerClientError.notConnected)

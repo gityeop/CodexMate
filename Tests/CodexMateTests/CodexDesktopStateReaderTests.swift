@@ -421,6 +421,113 @@ final class CodexDesktopStateReaderTests: XCTestCase {
         XCTAssertTrue(snapshot.runningThreadIDs.isEmpty)
     }
 
+    func testCodexDirectoryOverrideTakesPrecedenceOverProvider() throws {
+        let tempDirectoryURL = FileManager.default.temporaryDirectory
+            .appending(path: UUID().uuidString)
+        let overrideDirectoryURL = tempDirectoryURL.appending(path: "override-codex-home", directoryHint: .isDirectory)
+        let providerDirectoryURL = tempDirectoryURL.appending(path: "provider-codex-home", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: overrideDirectoryURL, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: providerDirectoryURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDirectoryURL) }
+
+        try createStateDatabase(
+            at: overrideDirectoryURL.appending(path: "state_1.sqlite"),
+            sql: """
+            CREATE TABLE threads (
+                id TEXT PRIMARY KEY,
+                first_user_message TEXT NOT NULL DEFAULT '',
+                title TEXT NOT NULL DEFAULT '',
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                cwd TEXT NOT NULL,
+                rollout_path TEXT,
+                source TEXT NOT NULL DEFAULT 'vscode',
+                agent_role TEXT,
+                agent_nickname TEXT,
+                archived INTEGER NOT NULL DEFAULT 0
+            );
+            INSERT INTO threads (
+                id,
+                first_user_message,
+                title,
+                created_at,
+                updated_at,
+                cwd,
+                rollout_path,
+                source,
+                agent_role,
+                agent_nickname,
+                archived
+            ) VALUES (
+                'override-thread',
+                'Override Preview',
+                'Override Thread',
+                100,
+                200,
+                '/tmp/override',
+                '/tmp/override.jsonl',
+                'vscode',
+                NULL,
+                NULL,
+                0
+            );
+            """
+        )
+
+        try createStateDatabase(
+            at: providerDirectoryURL.appending(path: "state_1.sqlite"),
+            sql: """
+            CREATE TABLE threads (
+                id TEXT PRIMARY KEY,
+                first_user_message TEXT NOT NULL DEFAULT '',
+                title TEXT NOT NULL DEFAULT '',
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                cwd TEXT NOT NULL,
+                rollout_path TEXT,
+                source TEXT NOT NULL DEFAULT 'vscode',
+                agent_role TEXT,
+                agent_nickname TEXT,
+                archived INTEGER NOT NULL DEFAULT 0
+            );
+            INSERT INTO threads (
+                id,
+                first_user_message,
+                title,
+                created_at,
+                updated_at,
+                cwd,
+                rollout_path,
+                source,
+                agent_role,
+                agent_nickname,
+                archived
+            ) VALUES (
+                'provider-thread',
+                'Provider Preview',
+                'Provider Thread',
+                100,
+                300,
+                '/tmp/provider',
+                '/tmp/provider.jsonl',
+                'vscode',
+                NULL,
+                NULL,
+                0
+            );
+            """
+        )
+
+        let reader = CodexDesktopStateReader(
+            codexDirectoryURLOverride: overrideDirectoryURL,
+            codexDirectoryURLProvider: { providerDirectoryURL }
+        )
+
+        let threads = try reader.recentThreads(limit: 1)
+
+        XCTAssertEqual(threads.map(\.id), ["override-thread"])
+    }
+
     private func createStateDatabase(at databaseURL: URL, sql: String) throws {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/sqlite3")

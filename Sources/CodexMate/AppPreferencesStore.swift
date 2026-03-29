@@ -7,6 +7,8 @@ extension Notification.Name {
 
 @MainActor
 final class AppPreferencesStore: ObservableObject {
+    static let defaultProjectLimit = 5
+    static let projectLimitRange = 1...ProjectMenuShortcut.maxCount
     static let defaultThreadsPerProjectLimit = 8
     static let threadsPerProjectLimitRange = 1...50
 
@@ -16,6 +18,7 @@ final class AppPreferencesStore: ObservableObject {
         static let attentionNotificationsEnabled = "attentionNotificationsEnabled"
         static let completionNotificationsEnabled = "completionNotificationsEnabled"
         static let failureNotificationsEnabled = "failureNotificationsEnabled"
+        static let projectLimit = "projectLimit"
         static let threadsPerProjectLimit = "threadsPerProjectLimit"
     }
 
@@ -47,6 +50,18 @@ final class AppPreferencesStore: ObservableObject {
     @Published var failureNotificationsEnabled: Bool {
         didSet {
             defaults.set(failureNotificationsEnabled, forKey: DefaultsKey.failureNotificationsEnabled)
+        }
+    }
+
+    @Published var projectLimit: Int {
+        didSet {
+            let clampedLimit = Self.clampedProjectLimit(projectLimit)
+            guard projectLimit == clampedLimit else {
+                projectLimit = clampedLimit
+                return
+            }
+
+            defaults.set(projectLimit, forKey: DefaultsKey.projectLimit)
         }
     }
 
@@ -83,6 +98,11 @@ final class AppPreferencesStore: ObservableObject {
         } else {
             failureNotificationsEnabled = defaults.bool(forKey: DefaultsKey.failureNotificationsEnabled)
         }
+        if defaults.object(forKey: DefaultsKey.projectLimit) == nil {
+            projectLimit = Self.defaultProjectLimit
+        } else {
+            projectLimit = Self.clampedProjectLimit(defaults.integer(forKey: DefaultsKey.projectLimit))
+        }
         if defaults.object(forKey: DefaultsKey.threadsPerProjectLimit) == nil {
             threadsPerProjectLimit = Self.defaultThreadsPerProjectLimit
         } else {
@@ -94,6 +114,10 @@ final class AppPreferencesStore: ObservableObject {
 
     var locale: Locale {
         Locale(identifier: language.localeIdentifier)
+    }
+
+    private static func clampedProjectLimit(_ limit: Int) -> Int {
+        min(max(limit, projectLimitRange.lowerBound), projectLimitRange.upperBound)
     }
 
     private static func clampedThreadsPerProjectLimit(_ limit: Int) -> Int {

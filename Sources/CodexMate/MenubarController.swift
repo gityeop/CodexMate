@@ -296,10 +296,14 @@ final class MenubarController {
 
     func prepareSnapshot(
         additionalTrackedThreadIDs: Set<String> = [],
+        projectLimit: Int? = nil,
         visibleThreadLimit: Int? = nil
     ) -> MenubarPreparedSnapshot {
+        let effectiveProjectLimit = projectLimit ?? configuration.projectLimit
+        let effectiveVisibleThreadLimit = visibleThreadLimit ?? configuration.visibleThreadLimit
         let snapshotSections = projectSectionsWithSubagentThreads(
-            visibleThreadLimit: visibleThreadLimit ?? configuration.visibleThreadLimit
+            projectLimit: effectiveProjectLimit,
+            visibleThreadLimit: effectiveVisibleThreadLimit
         )
         let displayedThreads = snapshotSections.flatMap { section in
             section.threads + section.threadGroups.flatMap(\.childThreads)
@@ -472,7 +476,10 @@ final class MenubarController {
         return "[" + sample.joined(separator: ",") + suffix + "]"
     }
 
-    private func projectSectionsWithSubagentThreads(visibleThreadLimit: Int) -> [MenubarProjectSectionSnapshot] {
+    private func projectSectionsWithSubagentThreads(
+        projectLimit: Int,
+        visibleThreadLimit: Int
+    ) -> [MenubarProjectSectionSnapshot] {
         let allThreads = state.recentThreads
         guard !allThreads.isEmpty else { return [] }
 
@@ -556,11 +563,15 @@ final class MenubarController {
             )
         }
 
-        guard configuration.projectLimit != .max || visibleThreadLimit != .max else {
+        guard projectLimit != .max || visibleThreadLimit != .max else {
             return sections
         }
 
-        return limitProjectSections(sections, visibleThreadLimit: visibleThreadLimit)
+        return limitProjectSections(
+            sections,
+            projectLimit: projectLimit,
+            visibleThreadLimit: visibleThreadLimit
+        )
     }
 
     private static func isNewerThread(_ lhs: AppStateStore.ThreadRow, _ rhs: AppStateStore.ThreadRow) -> Bool {
@@ -573,9 +584,10 @@ final class MenubarController {
 
     private func limitProjectSections(
         _ sections: [MenubarProjectSectionSnapshot],
+        projectLimit: Int,
         visibleThreadLimit: Int
     ) -> [MenubarProjectSectionSnapshot] {
-        let limitedSections = Array(sections.prefix(max(0, configuration.projectLimit)))
+        let limitedSections = Array(sections.prefix(max(0, projectLimit)))
 
         return limitedSections.map { section in
             let limitedThreads = Array(section.threads.prefix(max(0, visibleThreadLimit)))

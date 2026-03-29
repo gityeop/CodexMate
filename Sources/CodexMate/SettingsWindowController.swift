@@ -91,6 +91,14 @@ private struct SettingsView: View {
                 }
 
                 Stepper(
+                    value: projectLimitBinding,
+                    in: viewModel.projectLimitRange
+                ) {
+                    Text(viewModel.projectLimitLabel)
+                }
+                helpText(viewModel.text("settings.projectLimitHelp"))
+
+                Stepper(
                     value: threadsPerProjectBinding,
                     in: viewModel.threadsPerProjectLimitRange
                 ) {
@@ -182,6 +190,13 @@ private struct SettingsView: View {
         Binding(
             get: { viewModel.preferences.threadsPerProjectLimit },
             set: { viewModel.setThreadsPerProjectLimit($0) }
+        )
+    }
+
+    private var projectLimitBinding: Binding<Int> {
+        Binding(
+            get: { viewModel.preferences.projectLimit },
+            set: { viewModel.setProjectLimit($0) }
         )
     }
 

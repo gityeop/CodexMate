@@ -389,6 +389,57 @@ final class MenubarControllerIntegrationTests: XCTestCase {
         XCTAssertEqual(snapshot.projectSections.first?.threads.map(\.id), ["thread-c", "thread-b"])
     }
 
+    func testPrepareSnapshotAppliesProjectLimitOverride() async throws {
+        let controller = makeController(
+            recentThreadResponses: [
+                [
+                    thread(id: "thread-a", updatedAt: 100, cwd: "/tmp/A/work"),
+                    thread(id: "thread-b", updatedAt: 200, cwd: "/tmp/B/work"),
+                    thread(id: "thread-c", updatedAt: 300, cwd: "/tmp/C/work")
+                ]
+            ],
+            projectCatalog: .success(
+                CodexDesktopProjectCatalog(workspaceRoots: [
+                    .init(path: "/tmp/A", displayName: "A"),
+                    .init(path: "/tmp/B", displayName: "B"),
+                    .init(path: "/tmp/C", displayName: "C")
+                ])
+            )
+        )
+
+        try await controller.loadInitialThreads()
+        let snapshot = controller.prepareSnapshot(projectLimit: 2).snapshot
+
+        XCTAssertEqual(snapshot.projectSections.map(\.section.displayName), ["C", "B"])
+    }
+
+    func testPrepareSnapshotAppliesProjectAndThreadLimitOverridesIndependently() async throws {
+        let controller = makeController(
+            recentThreadResponses: [
+                [
+                    thread(id: "thread-a-1", updatedAt: 100, cwd: "/tmp/A/work"),
+                    thread(id: "thread-a-2", updatedAt: 400, cwd: "/tmp/A/work"),
+                    thread(id: "thread-b-1", updatedAt: 300, cwd: "/tmp/B/work"),
+                    thread(id: "thread-c-1", updatedAt: 200, cwd: "/tmp/C/work")
+                ]
+            ],
+            projectCatalog: .success(
+                CodexDesktopProjectCatalog(workspaceRoots: [
+                    .init(path: "/tmp/A", displayName: "A"),
+                    .init(path: "/tmp/B", displayName: "B"),
+                    .init(path: "/tmp/C", displayName: "C")
+                ])
+            )
+        )
+
+        try await controller.loadInitialThreads()
+        let snapshot = controller.prepareSnapshot(projectLimit: 2, visibleThreadLimit: 1).snapshot
+
+        XCTAssertEqual(snapshot.projectSections.map(\.section.displayName), ["A", "B"])
+        XCTAssertEqual(snapshot.projectSections.first?.threads.map(\.id), ["thread-a-2"])
+        XCTAssertEqual(snapshot.projectSections.dropFirst().first?.threads.map(\.id), ["thread-b-1"])
+    }
+
     private func makeController(
         desktopUpdates: [DesktopActivityUpdate] = [],
         recentThreadResponses: [[CodexThread]],

@@ -62,14 +62,23 @@ struct CodexDesktopProjectCatalog: Equatable {
 
 struct CodexDesktopProjectCatalogReader {
     private let fileManager: FileManager
+    private let codexDirectoryURLOverride: URL?
+    private let codexDirectoryURLProvider: @Sendable () -> URL
 
-    init(fileManager: FileManager = .default) {
+    init(
+        fileManager: FileManager = .default,
+        codexDirectoryURLOverride: URL? = nil,
+        codexDirectoryURLProvider: (@Sendable () -> URL)? = nil
+    ) {
         self.fileManager = fileManager
+        self.codexDirectoryURLOverride = codexDirectoryURLOverride
+        self.codexDirectoryURLProvider = codexDirectoryURLProvider ?? {
+            FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex", isDirectory: true)
+        }
     }
 
     func load() throws -> CodexDesktopProjectCatalog {
-        let fileURL = fileManager.homeDirectoryForCurrentUser
-            .appendingPathComponent(".codex", isDirectory: true)
+        let fileURL = (codexDirectoryURLOverride ?? codexDirectoryURLProvider()).standardizedFileURL
             .appendingPathComponent(".codex-global-state.json", isDirectory: false)
 
         let data = try Data(contentsOf: fileURL)

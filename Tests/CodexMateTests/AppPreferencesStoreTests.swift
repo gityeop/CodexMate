@@ -12,6 +12,7 @@ final class AppPreferencesStoreTests: XCTestCase {
         XCTAssertTrue(store.attentionNotificationsEnabled)
         XCTAssertTrue(store.completionNotificationsEnabled)
         XCTAssertTrue(store.failureNotificationsEnabled)
+        XCTAssertEqual(store.projectLimit, AppPreferencesStore.defaultProjectLimit)
         XCTAssertEqual(store.threadsPerProjectLimit, AppPreferencesStore.defaultThreadsPerProjectLimit)
     }
 
@@ -33,6 +34,7 @@ final class AppPreferencesStoreTests: XCTestCase {
         store.attentionNotificationsEnabled = false
         store.completionNotificationsEnabled = false
         store.failureNotificationsEnabled = false
+        store.projectLimit = 7
         store.threadsPerProjectLimit = 12
 
         let reloaded = AppPreferencesStore(defaults: defaults)
@@ -41,6 +43,7 @@ final class AppPreferencesStoreTests: XCTestCase {
         XCTAssertFalse(reloaded.attentionNotificationsEnabled)
         XCTAssertFalse(reloaded.completionNotificationsEnabled)
         XCTAssertFalse(reloaded.failureNotificationsEnabled)
+        XCTAssertEqual(reloaded.projectLimit, 7)
         XCTAssertEqual(reloaded.threadsPerProjectLimit, 12)
     }
 
@@ -69,6 +72,25 @@ final class AppPreferencesStoreTests: XCTestCase {
         XCTAssertEqual(
             store.threadsPerProjectLimit,
             AppPreferencesStore.threadsPerProjectLimitRange.upperBound
+        )
+    }
+
+    func testProjectLimitClampsOutOfRangeValues() {
+        let defaults = makeDefaults()
+        defaults.set(0, forKey: "projectLimit")
+
+        let store = AppPreferencesStore(defaults: defaults)
+
+        XCTAssertEqual(
+            store.projectLimit,
+            AppPreferencesStore.projectLimitRange.lowerBound
+        )
+
+        store.projectLimit = 999
+
+        XCTAssertEqual(
+            store.projectLimit,
+            AppPreferencesStore.projectLimitRange.upperBound
         )
     }
 

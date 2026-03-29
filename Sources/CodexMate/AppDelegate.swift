@@ -14,6 +14,41 @@ private struct ThreadMenuThread {
     let children: [ThreadMenuThread]
 }
 
+private final class CodexHomeStore: @unchecked Sendable {
+    private let lock = NSLock()
+    private var codexDirectoryURL: URL
+
+    init(defaultDirectoryURL: URL = CodexHomeStore.defaultDirectoryURL()) {
+        codexDirectoryURL = defaultDirectoryURL.standardizedFileURL
+    }
+
+    var currentDirectoryURL: URL {
+        lock.lock()
+        defer { lock.unlock() }
+        return codexDirectoryURL
+    }
+
+    func update(codexHomePath: String?) {
+        guard let codexHomePath else { return }
+
+        let trimmedPath = codexHomePath.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedPath.isEmpty else { return }
+
+        let expandedPath = (trimmedPath as NSString).expandingTildeInPath
+        let directoryURL = URL(fileURLWithPath: expandedPath, isDirectory: true).standardizedFileURL
+
+        lock.lock()
+        codexDirectoryURL = directoryURL
+        lock.unlock()
+    }
+
+    static func defaultDirectoryURL(fileManager: FileManager = .default) -> URL {
+        fileManager.homeDirectoryForCurrentUser
+            .appendingPathComponent(".codex", isDirectory: true)
+            .standardizedFileURL
+    }
+}
+
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private enum RetentionPolicy {
@@ -36,7 +71,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         static let maxTrackedThreads = 256
         static let initialSubscriptionLimit = 8
         static let subscriptionConcurrency = 4
-        static let projectLimit = 5
         static let visibleThreadLimit = 8
         static let maxProjectDisplayNameLength = 28
         static let maxThreadDisplayTitleLength = 44
@@ -53,9 +87,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let preferences = AppPreferencesStore()
     private let strings = AppStrings.shared
     private let client = CodexAppServerClient()
-    private let desktopActivityService = DesktopActivityService()
-    private let desktopStateReader = CodexDesktopStateReader()
-    private let projectCatalogReader = CodexDesktopProjectCatalogReader()
+    private let codexHomeStore = CodexHomeStore()
+    private lazy var desktopStateReader = CodexDesktopStateReader(
+        codexDirectoryURLProvider: { [codexHomeStore] in
+            codexHomeStore.currentDirectoryURL
+        }
+    )
+    private lazy var desktopActivityService = DesktopActivityService(
+        codexDirectoryURLProvider: { [codexHomeStore] in
+            codexHomeStore.currentDirectoryURL
+        }
+    )
+    private lazy var projectCatalogReader = CodexDesktopProjectCatalogReader(
+        codexDirectoryURLProvider: { [codexHomeStore] in
+            codexHomeStore.currentDirectoryURL
+        }
+    )
     private let launchAtLoginService = LaunchAtLoginService()
     private let updaterService = UpdaterService()
     private let statusSpriteCatalog = MenubarStatusSpriteCatalog()
@@ -82,7 +129,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         configuration: MenubarControllerConfiguration(
             initialFetchLimit: ThreadListDisplay.initialFetchLimit,
             maxTrackedThreads: ThreadListDisplay.maxTrackedThreads,
-            projectLimit: ThreadListDisplay.projectLimit,
+            projectLimit: preferences.projectLimit,
             visibleThreadLimit: ThreadListDisplay.visibleThreadLimit,
             maxPendingDiscoveredThreads: RetentionPolicy.maxPendingDiscoveredThreads,
             pendingDiscoveredThreadTTL: RetentionPolicy.pendingDiscoveredThreadSeconds,
@@ -396,6 +443,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             .store(in: &cancellables)
 
+        preferences.$projectLimit
+            .dropFirst()
+            .sink { [weak self] _ in
+                self?.renderMenu()
+            }
+            .store(in: &cancellables)
+
         NotificationCenter.default.publisher(for: .appDisplayModeDidChange, object: preferences)
             .sink { [weak self] _ in
                 guard let self else { return }
@@ -483,7 +537,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         do {
             let binaryURL = try CodexBinaryLocator.locate()
-            try await client.start(codexBinaryURL: binaryURL)
+            let initializeResponse = try await client.start(codexBinaryURL: binaryURL)
+            codexHomeStore.update(codexHomePath: initializeResponse.codexHome)
             connectedBinaryPath = binaryURL.path
             controller.setConnection(.connected(binaryPath: binaryURL.path))
             renderMenu()
@@ -889,6 +944,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let preparedSnapshot = controller.prepareSnapshot(
             additionalTrackedThreadIDs: Set(liveSubscribedThreadUpdatedAtByID.keys),
+            projectLimit: preferences.projectLimit,
             visibleThreadLimit: preferences.threadsPerProjectLimit
         )
         let snapshot = preparedSnapshot.snapshot
@@ -941,7 +997,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         level: 0,
                         worktreeDisplayName: section.displayName,
                         hoverTooltipContentsByThreadID: &hoverTooltipContentsByThreadID,
-                        keyEquivalent: index < 5 && threadIndex == 0 ? String(index + 1) : nil
+                        keyEquivalent: threadIndex == 0 ? ProjectMenuShortcut.keyEquivalent(for: index) : nil
                     )
                 }
             }
