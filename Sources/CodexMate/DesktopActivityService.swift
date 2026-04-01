@@ -81,6 +81,20 @@ actor DesktopActivityService {
             )
         } catch {
             let runtimeErrorMessage = throttledRuntimeErrorMessage(for: error, now: now)
+            if let fallbackSnapshot = stateReader.sessionFallbackSnapshot(
+                candidateSessionPaths: candidateSessionPaths,
+                databaseError: error.localizedDescription
+            ) {
+                DebugTraceLogger.log(
+                    "desktop activity using session fallback candidates=\(candidateSessionPaths.count) message=\(error.localizedDescription)"
+                )
+                return DesktopActivityUpdate(
+                    runtimeSnapshot: fallbackSnapshot,
+                    latestViewedAtByThreadID: activitySnapshot.latestViewedAtByThreadID,
+                    latestTurnCompletedAtByThreadID: latestTurnCompletedAtByThreadID,
+                    runtimeErrorMessage: nil
+                )
+            }
             return DesktopActivityUpdate(
                 runtimeSnapshot: nil,
                 latestViewedAtByThreadID: activitySnapshot.latestViewedAtByThreadID,

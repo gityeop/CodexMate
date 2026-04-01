@@ -95,7 +95,7 @@ struct AppStateStore {
             case .running:
                 return "⏳"
             case .needsApproval:
-                return "🟡"
+                return "💬"
             case .failed:
                 return "⚠️"
             }
@@ -303,10 +303,13 @@ struct AppStateStore {
         }.count
         let runningCount = max(runningThreadCount, desktopActiveTurnCount)
         let waitingCount = recentThreads.filter {
-            $0.presentationStatus == .waitingForUser
+            $0.displayStatus == .waitingForInput
+        }.count
+        let approvalCount = recentThreads.filter {
+            $0.displayStatus == .needsApproval
         }.count
 
-        return "Recent \(recentThreads.count) | Watching \(watchedCount) | Running \(runningCount) | Reply \(waitingCount) | Approval 0"
+        return "Recent \(recentThreads.count) | Watching \(watchedCount) | Running \(runningCount) | Reply \(waitingCount) | Approval \(approvalCount)"
     }
 
     var failedThreads: [ThreadRow] {

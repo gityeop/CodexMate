@@ -73,6 +73,7 @@ struct CodexDesktopStateReader {
     private let databaseLocationCacheLifetime: TimeInterval
     private let stateDatabaseURLOverride: URL?
     private let codexDirectoryURLOverride: URL?
+    private let desktopLogsDirectoryURLOverride: URL?
     private let codexDirectoryURLProvider: @Sendable () -> URL
     private let sessionPendingStateCache = SessionPendingStateCache()
     private let stateDatabaseURLCache = StateDatabaseURLCache()
@@ -87,6 +88,7 @@ struct CodexDesktopStateReader {
         databaseLocationCacheLifetime: TimeInterval = 30,
         stateDatabaseURLOverride: URL? = nil,
         codexDirectoryURLOverride: URL? = nil,
+        desktopLogsDirectoryURLOverride: URL? = nil,
         codexDirectoryURLProvider: (@Sendable () -> URL)? = nil
     ) {
         self.fileManager = fileManager
@@ -98,6 +100,7 @@ struct CodexDesktopStateReader {
         self.databaseLocationCacheLifetime = max(1, databaseLocationCacheLifetime)
         self.stateDatabaseURLOverride = stateDatabaseURLOverride
         self.codexDirectoryURLOverride = codexDirectoryURLOverride
+        self.desktopLogsDirectoryURLOverride = desktopLogsDirectoryURLOverride
         self.codexDirectoryURLProvider = codexDirectoryURLProvider ?? {
             FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex", isDirectory: true)
         }
@@ -165,6 +168,44 @@ struct CodexDesktopStateReader {
             waitingForInputThreadIDs: pendingStates.waitingForInputThreadIDs,
             approvalThreadIDs: pendingStates.approvalThreadIDs,
             failedThreads: failedThreads,
+            debugSummary: debugSummary
+        )
+    }
+
+    func sessionFallbackSnapshot(
+        candidateSessionPaths: [String: String?],
+        databaseError: String? = nil
+    ) -> CodexDesktopRuntimeSnapshot? {
+        guard candidateSessionPaths.values.contains(where: { $0 != nil }) else {
+            return nil
+        }
+
+        let sessionStates = querySessionPendingThreadStates(candidateSessionPaths: candidateSessionPaths)
+        let desktopApprovalStates = queryDesktopPendingApprovalThreadStates(
+            candidateThreadIDs: Set(candidateSessionPaths.keys)
+        )
+        let approvalThreadIDs = sessionStates.approvalThreadIDs.union(desktopApprovalStates.approvalThreadIDs)
+        let runningThreadIDs = sessionStates.activeTaskThreadIDs
+            .subtracting(sessionStates.waitingForInputThreadIDs)
+            .subtracting(approvalThreadIDs)
+        let debugSummary = [
+            "source=session-fallback",
+            "candidates=\(candidateSessionPaths.count)",
+            "running=\(runningThreadIDs.count)",
+            "waiting=\(sessionStates.waitingForInputThreadIDs.count)",
+            "approval=\(approvalThreadIDs.count)",
+            "rows=\(sessionStates.debugRows.count + desktopApprovalStates.debugRows.count)",
+            "sample=\(desktopApprovalDebugSample(sessionDebugRows: sessionStates.debugRows, desktopDebugRows: desktopApprovalStates.debugRows))",
+            "databaseError=\(databaseError ?? "-")",
+        ].joined(separator: " ")
+
+        return CodexDesktopRuntimeSnapshot(
+            activeTurnCount: sessionStates.activeTaskThreadIDs.isEmpty ? 0 : 1,
+            runningThreadIDs: runningThreadIDs,
+            recentActivityThreadIDs: [],
+            waitingForInputThreadIDs: sessionStates.waitingForInputThreadIDs,
+            approvalThreadIDs: approvalThreadIDs,
+            failedThreads: [:],
             debugSummary: debugSummary
         )
     }
@@ -516,8 +557,13 @@ struct CodexDesktopStateReader {
     ) -> (waitingForInputThreadIDs: Set<String>, approvalThreadIDs: Set<String>, runningThreadIDs: Set<String>, debugRows: [String]) {
         let logStates = queryLogPendingThreadStates(logPendingRows: logPendingRows)
         let sessionStates = querySessionPendingThreadStates(candidateSessionPaths: candidateSessionPaths)
+        let desktopApprovalStates = queryDesktopPendingApprovalThreadStates(
+            candidateThreadIDs: Set(candidateSessionPaths.keys)
+        )
         let waitingForInputThreadIDs = logStates.waitingForInputThreadIDs.union(sessionStates.waitingForInputThreadIDs)
-        let approvalThreadIDs = logStates.approvalThreadIDs.union(sessionStates.approvalThreadIDs)
+        let approvalThreadIDs = logStates.approvalThreadIDs
+            .union(sessionStates.approvalThreadIDs)
+            .union(desktopApprovalStates.approvalThreadIDs)
         let runningThreadIDs = sessionStates.activeTaskThreadIDs
             .subtracting(waitingForInputThreadIDs)
             .subtracting(approvalThreadIDs)
@@ -526,8 +572,206 @@ struct CodexDesktopStateReader {
             waitingForInputThreadIDs: waitingForInputThreadIDs,
             approvalThreadIDs: approvalThreadIDs,
             runningThreadIDs: runningThreadIDs,
-            debugRows: logStates.debugRows + sessionStates.debugRows
+            debugRows: logStates.debugRows + sessionStates.debugRows + desktopApprovalStates.debugRows
         )
+    }
+
+    private func queryDesktopPendingApprovalThreadStates(
+        candidateThreadIDs: Set<String>
+    ) -> (approvalThreadIDs: Set<String>, debugRows: [String]) {
+        guard !candidateThreadIDs.isEmpty else {
+            return ([], [])
+        }
+
+        let logURLs = locateDesktopLogCandidates()
+        guard !logURLs.isEmpty else {
+            return ([], [])
+        }
+
+        var approvalThreadIDs: Set<String> = []
+        var debugRows: [String] = []
+
+        for logURL in logURLs {
+            guard let contents = recentDesktopLogContents(at: logURL) else {
+                continue
+            }
+
+            let states = Self.parseDesktopPendingApprovalThreadStates(
+                from: contents,
+                candidateThreadIDs: candidateThreadIDs
+            )
+            approvalThreadIDs.formUnion(states.approvalThreadIDs)
+            debugRows.append(contentsOf: states.debugRows)
+        }
+
+        return (approvalThreadIDs, debugRows)
+    }
+
+    private func locateDesktopLogCandidates(maxDays: Int = 2, limit: Int = 4) -> [URL] {
+        let logsRootURL = resolvedDesktopLogsDirectoryURL()
+        guard fileManager.fileExists(atPath: logsRootURL.path) else {
+            return []
+        }
+
+        let calendar = Calendar.current
+        let currentDate = now()
+        var candidates: [URL] = []
+
+        for dayOffset in 0..<maxDays {
+            guard let day = calendar.date(byAdding: .day, value: -dayOffset, to: currentDate) else {
+                continue
+            }
+
+            let components = calendar.dateComponents([.year, .month, .day], from: day)
+            guard let year = components.year,
+                  let month = components.month,
+                  let day = components.day
+            else {
+                continue
+            }
+
+            let directoryURL = logsRootURL
+                .appendingPathComponent(String(format: "%04d", year), isDirectory: true)
+                .appendingPathComponent(String(format: "%02d", month), isDirectory: true)
+                .appendingPathComponent(String(format: "%02d", day), isDirectory: true)
+
+            guard let logURLs = try? fileManager.contentsOfDirectory(
+                at: directoryURL,
+                includingPropertiesForKeys: [.contentModificationDateKey, .isRegularFileKey],
+                options: [.skipsHiddenFiles]
+            ) else {
+                continue
+            }
+
+            candidates.append(contentsOf:
+                contentsSortedByModificationDateDescending(logURLs)
+                    .filter { $0.pathExtension == "log" }
+            )
+        }
+
+        return Array(contentsSortedByModificationDateDescending(candidates).prefix(limit))
+    }
+
+    private func contentsSortedByModificationDateDescending(_ urls: [URL]) -> [URL] {
+        urls.sorted { lhs, rhs in
+            let lhsValues = (try? lhs.resourceValues(forKeys: [.contentModificationDateKey, .isRegularFileKey])) ?? URLResourceValues()
+            let rhsValues = (try? rhs.resourceValues(forKeys: [.contentModificationDateKey, .isRegularFileKey])) ?? URLResourceValues()
+            let lhsIsRegular = lhsValues.isRegularFile ?? true
+            let rhsIsRegular = rhsValues.isRegularFile ?? true
+
+            if lhsIsRegular != rhsIsRegular {
+                return lhsIsRegular && !rhsIsRegular
+            }
+
+            let lhsDate = lhsValues.contentModificationDate ?? .distantPast
+            let rhsDate = rhsValues.contentModificationDate ?? .distantPast
+            return lhsDate > rhsDate
+        }
+    }
+
+    private func recentDesktopLogContents(at logURL: URL, maximumBytes: Int = 256 * 1024) -> String? {
+        guard let attributes = try? fileManager.attributesOfItem(atPath: logURL.path),
+              let fileSize = attributes[.size] as? NSNumber
+        else {
+            return try? String(contentsOf: logURL, encoding: .utf8)
+        }
+
+        let totalBytes = fileSize.intValue
+        guard totalBytes > maximumBytes else {
+            return try? String(contentsOf: logURL, encoding: .utf8)
+        }
+
+        guard let handle = try? FileHandle(forReadingFrom: logURL) else {
+            return nil
+        }
+
+        defer { try? handle.close() }
+
+        let offset = UInt64(max(0, totalBytes - maximumBytes))
+        do {
+            try handle.seek(toOffset: offset)
+            let data = try handle.readToEnd() ?? Data()
+            guard var contents = String(data: data, encoding: .utf8) else {
+                return nil
+            }
+
+            if offset > 0, let newlineIndex = contents.firstIndex(of: "\n") {
+                contents = String(contents[contents.index(after: newlineIndex)...])
+            }
+
+            return contents
+        } catch {
+            return nil
+        }
+    }
+
+    private func resolvedDesktopLogsDirectoryURL() -> URL {
+        (desktopLogsDirectoryURLOverride
+            ?? fileManager.homeDirectoryForCurrentUser
+                .appendingPathComponent("Library", isDirectory: true)
+                .appendingPathComponent("Logs", isDirectory: true)
+                .appendingPathComponent("com.openai.codex", isDirectory: true)
+        ).standardizedFileURL
+    }
+
+    private func desktopApprovalDebugSample(sessionDebugRows: [String], desktopDebugRows: [String]) -> String {
+        let debugRows = sessionDebugRows + desktopDebugRows
+        guard !debugRows.isEmpty else {
+            return "[]"
+        }
+
+        let sample = debugRows.prefix(3).joined(separator: ", ")
+        if debugRows.count > 3 {
+            return "[\(sample), +\(debugRows.count - 3)]"
+        }
+
+        return "[\(sample)]"
+    }
+
+    static func parseDesktopPendingApprovalThreadStates(
+        from contents: String,
+        candidateThreadIDs: Set<String>
+    ) -> (approvalThreadIDs: Set<String>, debugRows: [String]) {
+        var requestIDToThreadID: [String: String] = [:]
+
+        for rawLine in contents.split(whereSeparator: \.isNewline) {
+            let line = String(rawLine)
+
+            if line.contains("[desktop-notifications] show approval"),
+               let conversationID = tokenValue(in: line, after: "conversationId="),
+               candidateThreadIDs.contains(conversationID),
+               tokenValue(in: line, after: "kind=") == "commandExecution",
+               let requestID = tokenValue(in: line, after: "requestId=") {
+                requestIDToThreadID[requestID] = conversationID
+                continue
+            }
+
+            if line.contains("method=item/commandExecution/requestApproval"),
+               let requestID = tokenValue(in: line, after: "id=") {
+                requestIDToThreadID.removeValue(forKey: requestID)
+            }
+        }
+
+        let approvalThreadIDs = Set(requestIDToThreadID.values)
+        let debugRows = approvalThreadIDs.sorted().map { threadID in
+            "\(String(threadID.prefix(8))):desktop-approval"
+        }
+
+        return (approvalThreadIDs, debugRows)
+    }
+
+    private static func tokenValue(in line: String, after marker: String) -> String? {
+        guard let markerRange = line.range(of: marker) else {
+            return nil
+        }
+
+        let suffix = line[markerRange.upperBound...]
+        let token = suffix.prefix { !$0.isWhitespace }
+        guard !token.isEmpty else {
+            return nil
+        }
+
+        return String(token)
     }
 
     private func queryLogPendingThreadStates(logPendingRows: [PendingLogRow]) -> (waitingForInputThreadIDs: Set<String>, approvalThreadIDs: Set<String>, debugRows: [String]) {
@@ -633,20 +877,36 @@ struct CodexDesktopStateReader {
 
             switch type {
             case "event_msg":
-                guard let turnID = payload["turn_id"] as? String else {
-                    continue
-                }
-
                 if payloadType == "task_started" {
+                    guard let turnID = payload["turn_id"] as? String else {
+                        continue
+                    }
+
                     // A thread only executes one turn at a time; a newer task start
                     // supersedes any orphaned active turn that never emitted completion.
                     activeTaskIDs = [turnID]
                     unresolvedRequestUserInputCallIDs.removeAll()
                     unresolvedApprovalCallIDs.removeAll()
                 } else if payloadType == "task_complete" || payloadType == "turn_aborted" {
+                    guard let turnID = payload["turn_id"] as? String else {
+                        continue
+                    }
+
                     activeTaskIDs.remove(turnID)
                     unresolvedRequestUserInputCallIDs.removeAll()
                     unresolvedApprovalCallIDs.removeAll()
+                } else if payloadType == "exec_approval_request" {
+                    guard let callID = payload["call_id"] as? String else {
+                        continue
+                    }
+
+                    unresolvedApprovalCallIDs.insert(callID)
+                } else if payloadType == "exec_command_begin" || payloadType == "exec_command_end" {
+                    guard let callID = payload["call_id"] as? String else {
+                        continue
+                    }
+
+                    unresolvedApprovalCallIDs.remove(callID)
                 }
             case "response_item":
                 switch payloadType {
@@ -660,6 +920,8 @@ struct CodexDesktopStateReader {
                     if name == "request_user_input" {
                         unresolvedRequestUserInputCallIDs.insert(callID)
                     } else if name == "request_approval" || name == "requestApproval" {
+                        unresolvedApprovalCallIDs.insert(callID)
+                    } else if isEscalatedExecCommandCall(name: name, arguments: payload["arguments"]) {
                         unresolvedApprovalCallIDs.insert(callID)
                     }
                 case "function_call_output":
@@ -682,6 +944,33 @@ struct CodexDesktopStateReader {
             needsApproval: !unresolvedApprovalCallIDs.isEmpty,
             hasActiveTask: !activeTaskIDs.isEmpty
         )
+    }
+
+    private static func isEscalatedExecCommandCall(name: String, arguments: Any?) -> Bool {
+        guard name == "exec_command",
+              let object = jsonObject(from: arguments)
+        else {
+            return false
+        }
+
+        let sandboxPermissions = object["sandbox_permissions"] as? String
+            ?? object["sandboxPermissions"] as? String
+        return sandboxPermissions == "require_escalated"
+    }
+
+    private static func jsonObject(from value: Any?) -> [String: Any]? {
+        if let object = value as? [String: Any] {
+            return object
+        }
+
+        guard let rawJSON = value as? String,
+              let data = rawJSON.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else {
+            return nil
+        }
+
+        return object
     }
 
     private func sqlQuoted(_ value: String) -> String {
@@ -731,7 +1020,9 @@ struct CodexDesktopStateReader {
         process.arguments = [
             "-readonly",
             "-noheader",
-            databaseURL.path,
+            "-cmd",
+            ".timeout 1000",
+            Self.sqliteDatabaseArgument(for: databaseURL),
             sql,
         ]
 
@@ -754,6 +1045,16 @@ struct CodexDesktopStateReader {
         }
 
         return String(data: outputData, encoding: .utf8) ?? ""
+    }
+
+    static func sqliteDatabaseArgument(for databaseURL: URL) -> String {
+        var components = URLComponents(url: databaseURL.standardizedFileURL, resolvingAgainstBaseURL: false)
+        components?.queryItems = [
+            URLQueryItem(name: "mode", value: "ro"),
+            URLQueryItem(name: "immutable", value: "1"),
+        ]
+
+        return components?.string ?? databaseURL.path
     }
 }
 
@@ -840,7 +1141,11 @@ extension CodexDesktopStateReader {
             case .databaseNotFound:
                 return false
             case let .queryFailed(message, _):
-                return message.localizedCaseInsensitiveContains("unable to open database file")
+                let lowercaseMessage = message.lowercased()
+                return lowercaseMessage.contains("unable to open database file")
+                    || lowercaseMessage.contains("database is locked")
+                    || lowercaseMessage.contains("database table is locked")
+                    || lowercaseMessage.contains("database schema is locked")
             }
         }
 

@@ -51,6 +51,12 @@ private final class CodexHomeStore: @unchecked Sendable {
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    enum ServerRequestKind: Equatable {
+        case toolUserInput
+        case approval
+        case other
+    }
+
     private enum RetentionPolicy {
         static let threadReadMarkerSeconds: TimeInterval = 30 * 24 * 60 * 60
         static let pendingDiscoveredThreadSeconds: TimeInterval = 2 * 60
@@ -78,7 +84,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private enum DefaultsKey {
         static let threadReadMarkers = "threadLastReadTerminalMarkers"
+        static let hasCompletedFirstLaunch = "hasCompletedFirstLaunch"
     }
+
+    private let openSettingsOnLaunch: Bool
 
     private var statusItem: NSStatusItem?
     private let menu = ThreadMenu()
@@ -112,6 +121,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let waitingForUserIndicatorImage = AppDelegate.makeTextIndicatorImage("💬")
     private let failedIndicatorImage = AppDelegate.makeTextIndicatorImage("⚠️")
     private let hoverTooltipController = ThreadHoverTooltipController()
+    private let defaults = UserDefaults.standard
     private lazy var appServerRecentThreadListing = AppServerRecentThreadListing(
         client: client,
         fetchPageLimit: ThreadListDisplay.fetchPageLimit
@@ -163,6 +173,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var skipNextMenuBarMenuWillOpenRender = false
     private var foregroundRefreshObserverTokens: [NSObjectProtocol] = []
     private var cancellables: Set<AnyCancellable> = []
+    private var loggedUnhandledServerRequestMethods: Set<String> = []
     private var foregroundRefreshThrottle = ForegroundRefreshThrottle(
         minimumInterval: ForegroundRefreshPolicy.minimumInterval
     )
@@ -197,6 +208,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     )
 
+    init(openSettingsOnLaunch: Bool = false) {
+        self.openSettingsOnLaunch = openSettingsOnLaunch
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         debugLog("applicationDidFinishLaunching log=\(DebugTraceLogger.logFileURL.path)")
         if let debugStatusOverride {
@@ -219,9 +234,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         requestNotificationPermission()
         renderMenu()
 
+        if shouldOpenSettingsOnLaunch() {
+            openSettingsAction()
+        }
+
         Task {
             await connectAndLoad()
         }
+    }
+
+    private func shouldOpenSettingsOnLaunch() -> Bool {
+        if openSettingsOnLaunch {
+            return true
+        }
+
+        guard Bundle.main.bundleURL.pathExtension == "app" else {
+            return false
+        }
+
+        if defaults.bool(forKey: DefaultsKey.hasCompletedFirstLaunch) {
+            return false
+        }
+
+        defaults.set(true, forKey: DefaultsKey.hasCompletedFirstLaunch)
+        return true
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -671,64 +707,95 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 controller.markUnwatched(threadIDs: Set([notification.threadId]))
             }
         default:
-            break
+            if Self.shouldHandleNotificationAsServerRequest(method) {
+                handleServerRequest(method: method, payload: payload)
+                return
+            }
         }
 
         renderMenu()
     }
 
     private func handleServerRequest(method: String, payload: Data) {
-        switch method {
-        case "item/tool/requestUserInput", "tool/requestUserInput":
-            decodeAndApply(payload, as: ToolRequestUserInputRequest.self) { [weak self] request in
-                guard let self else { return }
-                controller.apply(serverRequest: .toolUserInput(request))
-                controller.recordDiagnostic("user-input request method=\(method) thread=\(request.threadId.prefix(8)) turn=\(request.turnId.prefix(8))")
-                if preferences.attentionNotificationsEnabled {
-                    sendNotification(
-                        title: strings.text("notification.needsInput.title", language: preferences.language),
-                        body: controller.notificationBody(
-                            forThreadID: request.threadId,
-                            fallback: strings.text("notification.needsInput.bodyFallback", language: preferences.language)
-                        )
-                    )
-                }
+        switch Self.classifyServerRequestMethod(method) {
+        case .toolUserInput:
+            guard let request = decodeServerRequestPayload(payload, as: ToolRequestUserInputRequest.self) else {
+                controller.recordDiagnostic("server request decode failed method=\(method)")
+                renderMenu()
+                return
             }
-        case "item/commandExecution/requestApproval", "commandExecution/requestApproval":
-            decodeAndApply(payload, as: ApprovalRequestPayload.self) { [weak self] request in
-                guard let self else { return }
-                controller.apply(serverRequest: .approval(request))
-                controller.recordDiagnostic("approval request method=\(method) thread=\(request.threadId.prefix(8)) turn=\(request.turnId.prefix(8))")
-                if preferences.attentionNotificationsEnabled {
-                    sendNotification(
-                        title: strings.text("notification.approval.title", language: preferences.language),
-                        body: controller.notificationBody(
-                            forThreadID: request.threadId,
-                            fallback: strings.text("notification.approval.bodyFallback", language: preferences.language)
-                        )
+
+            controller.apply(serverRequest: .toolUserInput(request))
+            controller.recordDiagnostic("user-input request method=\(method) thread=\(request.threadId.prefix(8)) turn=\(request.turnId.prefix(8))")
+            if preferences.attentionNotificationsEnabled {
+                sendNotification(
+                    title: strings.text("notification.needsInput.title", language: preferences.language),
+                    body: controller.notificationBody(
+                        forThreadID: request.threadId,
+                        fallback: strings.text("notification.needsInput.bodyFallback", language: preferences.language)
                     )
-                }
+                )
             }
-        case "item/fileChange/requestApproval", "fileChange/requestApproval":
-            decodeAndApply(payload, as: ApprovalRequestPayload.self) { [weak self] request in
-                guard let self else { return }
-                controller.apply(serverRequest: .approval(request))
-                controller.recordDiagnostic("approval request method=\(method) thread=\(request.threadId.prefix(8)) turn=\(request.turnId.prefix(8))")
-                if preferences.attentionNotificationsEnabled {
-                    sendNotification(
-                        title: strings.text("notification.approval.title", language: preferences.language),
-                        body: controller.notificationBody(
-                            forThreadID: request.threadId,
-                            fallback: strings.text("notification.approval.bodyFallback", language: preferences.language)
-                        )
+        case .approval:
+            guard let request = decodeServerRequestPayload(payload, as: ApprovalRequestPayload.self) else {
+                controller.recordDiagnostic("server request decode failed method=\(method)")
+                renderMenu()
+                return
+            }
+
+            controller.apply(serverRequest: .approval(request))
+            controller.recordDiagnostic("approval request method=\(method) thread=\(request.threadId.prefix(8)) turn=\(request.turnId.prefix(8))")
+            if preferences.attentionNotificationsEnabled {
+                sendNotification(
+                    title: strings.text("notification.approval.title", language: preferences.language),
+                    body: controller.notificationBody(
+                        forThreadID: request.threadId,
+                        fallback: strings.text("notification.approval.bodyFallback", language: preferences.language)
                     )
-                }
+                )
             }
-        default:
-            break
+        case .other:
+            if loggedUnhandledServerRequestMethods.insert(method).inserted {
+                controller.recordDiagnostic("unhandled server request method=\(method)")
+            }
         }
 
         renderMenu()
+    }
+
+    nonisolated static func classifyServerRequestMethod(_ method: String) -> ServerRequestKind {
+        let normalized = normalizedServerRequestMethodComponent(method)
+
+        switch normalized {
+        case "requestuserinput":
+            return .toolUserInput
+        case "requestapproval":
+            return .approval
+        default:
+            return .other
+        }
+    }
+
+    nonisolated static func shouldHandleNotificationAsServerRequest(_ method: String) -> Bool {
+        classifyServerRequestMethod(method) != .other
+    }
+
+    private nonisolated static func normalizedServerRequestMethodComponent(_ method: String) -> String {
+        let lastComponent = method.split(separator: "/").last.map(String.init) ?? method
+        return lastComponent
+            .unicodeScalars
+            .filter { CharacterSet.alphanumerics.contains($0) }
+            .map(String.init)
+            .joined()
+            .lowercased()
+    }
+
+    private func decodeServerRequestPayload<T: Decodable>(_ payload: Data, as type: T.Type) -> T? {
+        guard let message = try? JSONDecoder().decode(WireMessage<T>.self, from: payload) else {
+            return nil
+        }
+
+        return message.params
     }
 
     private func decodeAndApply<T: Decodable>(_ payload: Data, as type: T.Type, apply: (T) -> Void) {

@@ -10,8 +10,9 @@ struct AppStrings: Sendable {
 
     private let catalog: Catalog
 
-    init(bundle: Bundle = .module) {
-        guard let url = bundle.url(forResource: "strings", withExtension: "json"),
+    init(bundle: Bundle? = CodexMateResourceLocator.bundle) {
+        guard let bundle,
+              let url = bundle.url(forResource: "strings", withExtension: "json"),
               let data = try? Data(contentsOf: url),
               let catalog = try? JSONDecoder().decode(Catalog.self, from: data) else {
             self.catalog = Catalog(en: [:], ko: [:])

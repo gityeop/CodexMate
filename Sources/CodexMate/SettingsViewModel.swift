@@ -69,6 +69,10 @@ final class SettingsViewModel: ObservableObject {
         .toggleMenuBarDropdown
     }
 
+    var shortcut: KeyboardShortcuts.Shortcut? {
+        KeyboardShortcuts.getShortcut(for: shortcutName)
+    }
+
     var projectLimitRange: ClosedRange<Int> {
         AppPreferencesStore.projectLimitRange
     }
@@ -143,6 +147,11 @@ final class SettingsViewModel: ObservableObject {
 
     func checkForUpdates() {
         updaterService.checkForUpdates()
+    }
+
+    func setShortcut(_ shortcut: KeyboardShortcuts.Shortcut?) {
+        KeyboardShortcuts.setShortcut(shortcut, for: shortcutName)
+        objectWillChange.send()
     }
 
     var launchAtLoginMessage: String? {

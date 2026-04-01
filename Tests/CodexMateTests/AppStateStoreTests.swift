@@ -245,7 +245,7 @@ final class AppStateStoreTests: XCTestCase {
 
     func testThreadStatusIconsMatchMenuGlyphs() {
         XCTAssertEqual(AppStateStore.ThreadStatus.waitingForInput.icon, "💬")
-        XCTAssertEqual(AppStateStore.ThreadStatus.needsApproval.icon, "🟡")
+        XCTAssertEqual(AppStateStore.ThreadStatus.needsApproval.icon, "💬")
         XCTAssertEqual(AppStateStore.ThreadStatus.running.icon, "⏳")
         XCTAssertEqual(AppStateStore.ThreadStatus.idle.icon, "✅")
         XCTAssertEqual(AppStateStore.ThreadStatus.notLoaded.icon, "◌")
@@ -737,6 +737,16 @@ final class AppStateStoreTests: XCTestCase {
 
         XCTAssertEqual(store.overallStatus, .running)
         XCTAssertEqual(store.summaryText, "Recent 1 | Watching 0 | Running 1 | Reply 0 | Approval 0")
+    }
+
+    func testSummaryTextSeparatesReplyAndApprovalCounts() {
+        var store = AppStateStore()
+        store.replaceRecentThreads(with: [
+            thread(id: "reply-thread", updatedAt: 100, status: .active(flags: [.waitingOnUserInput])),
+            thread(id: "approval-thread", updatedAt: 90, status: .active(flags: [.waitingOnApproval]))
+        ])
+
+        XCTAssertEqual(store.summaryText, "Recent 2 | Watching 0 | Running 0 | Reply 1 | Approval 1")
     }
 
     func testDesktopSnapshotDoesNotClearWatchedActiveTurnWithoutRunningEvidence() {

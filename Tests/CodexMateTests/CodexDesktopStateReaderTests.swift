@@ -70,6 +70,82 @@ final class CodexDesktopStateReaderTests: XCTestCase {
         XCTAssertEqual(state, .init(waitingForInput: false, needsApproval: false))
     }
 
+    func testParseSessionPendingStateMarksUnresolvedEscalatedExecCommandAsApproval() {
+        let contents = """
+        {"timestamp":"2026-03-31T09:40:28.324Z","type":"response_item","payload":{"type":"function_call","name":"exec_command","arguments":"{\\"cmd\\":\\"ALLOW_ADHOC_SIGNING=1 ./scripts/package_app.sh\\",\\"justification\\":\\"package app\\",\\"sandbox_permissions\\":\\"require_escalated\\"}","call_id":"call_exec_approval"}}
+        """
+
+        let state = CodexDesktopStateReader.parseSessionPendingState(from: contents)
+
+        XCTAssertEqual(state, .init(waitingForInput: false, needsApproval: true))
+    }
+
+    func testParseSessionPendingStateDoesNotMarkDefaultExecCommandAsApproval() {
+        let contents = """
+        {"timestamp":"2026-03-31T09:40:28.324Z","type":"response_item","payload":{"type":"function_call","name":"exec_command","arguments":"{\\"cmd\\":\\"swift test\\",\\"workdir\\":\\"/tmp/project\\"}","call_id":"call_exec"}}
+        """
+
+        let state = CodexDesktopStateReader.parseSessionPendingState(from: contents)
+
+        XCTAssertEqual(state, .init(waitingForInput: false, needsApproval: false))
+    }
+
+    func testParseSessionPendingStateMarksCamelCaseEscalatedExecCommandAsApproval() {
+        let contents = """
+        {"timestamp":"2026-03-31T09:40:28.324Z","type":"response_item","payload":{"type":"function_call","name":"exec_command","arguments":"{\\"cmd\\":\\"ALLOW_ADHOC_SIGNING=1 ./scripts/package_app.sh\\",\\"sandboxPermissions\\":\\"require_escalated\\"}","call_id":"call_exec_approval"}}
+        """
+
+        let state = CodexDesktopStateReader.parseSessionPendingState(from: contents)
+
+        XCTAssertEqual(state, .init(waitingForInput: false, needsApproval: true))
+    }
+
+    func testParseSessionPendingStateClearsEscalatedExecApprovalWhenFunctionCallOutputArrives() {
+        let contents = """
+        {"timestamp":"2026-03-31T09:40:28.324Z","type":"response_item","payload":{"type":"function_call","name":"exec_command","arguments":"{\\"cmd\\":\\"ALLOW_ADHOC_SIGNING=1 ./scripts/package_app.sh\\",\\"sandbox_permissions\\":\\"require_escalated\\"}","call_id":"call_exec_approval"}}
+        {"timestamp":"2026-03-31T09:42:10.965Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call_exec_approval","output":"Rejected(\\"rejected by user\\")"}}
+        """
+
+        let state = CodexDesktopStateReader.parseSessionPendingState(from: contents)
+
+        XCTAssertEqual(state, .init(waitingForInput: false, needsApproval: false))
+    }
+
+    func testParseSessionPendingStateMarksExplicitExecApprovalEventAsApproval() {
+        let contents = """
+        {"timestamp":"2026-03-31T09:40:28.324Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-1"}}
+        {"timestamp":"2026-03-31T09:40:29.324Z","type":"event_msg","payload":{"type":"exec_approval_request","turn_id":"turn-1","call_id":"call_exec_approval","command":["./scripts/package_app.sh"],"cwd":"/tmp/project","parsed_cmd":[{"type":"literal","value":"./scripts/package_app.sh"}]}}
+        """
+
+        let state = CodexDesktopStateReader.parseSessionPendingState(from: contents)
+
+        XCTAssertEqual(state, .init(waitingForInput: false, needsApproval: true, hasActiveTask: true))
+    }
+
+    func testParseSessionPendingStateClearsExplicitExecApprovalWhenCommandBegins() {
+        let contents = """
+        {"timestamp":"2026-03-31T09:40:28.324Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-1"}}
+        {"timestamp":"2026-03-31T09:40:29.324Z","type":"event_msg","payload":{"type":"exec_approval_request","turn_id":"turn-1","call_id":"call_exec_approval","command":["./scripts/package_app.sh"],"cwd":"/tmp/project","parsed_cmd":[{"type":"literal","value":"./scripts/package_app.sh"}]}}
+        {"timestamp":"2026-03-31T09:40:35.324Z","type":"event_msg","payload":{"type":"exec_command_begin","call_id":"call_exec_approval","command":"./scripts/package_app.sh","cwd":"/tmp/project","parsed_cmd":[{"type":"literal","value":"./scripts/package_app.sh"}]}}
+        """
+
+        let state = CodexDesktopStateReader.parseSessionPendingState(from: contents)
+
+        XCTAssertEqual(state, .init(waitingForInput: false, needsApproval: false, hasActiveTask: true))
+    }
+
+    func testSQLiteDatabaseArgumentUsesReadOnlyImmutableFileURI() {
+        let url = URL(fileURLWithPath: "/tmp/Codex State/state 5.sqlite")
+
+        let argument = CodexDesktopStateReader.sqliteDatabaseArgument(for: url)
+
+        XCTAssertTrue(argument.hasPrefix("file://"))
+        XCTAssertTrue(argument.contains("mode=ro"))
+        XCTAssertTrue(argument.contains("immutable=1"))
+        XCTAssertTrue(argument.contains("Codex%20State"))
+        XCTAssertTrue(argument.contains("state%205.sqlite"))
+    }
+
     func testParseSessionPendingStateDropsStaleRequestUserInputWhenNewTurnStarts() {
         let contents = """
         {"timestamp":"2026-03-10T19:39:10.465Z","type":"response_item","payload":{"type":"function_call","name":"request_user_input","arguments":"{}","call_id":"call_old"}}
@@ -199,6 +275,194 @@ final class CodexDesktopStateReaderTests: XCTestCase {
         XCTAssertEqual(snapshot.runningThreadIDs, ["thread-1"])
         XCTAssertTrue(snapshot.waitingForInputThreadIDs.isEmpty)
         XCTAssertTrue(snapshot.approvalThreadIDs.isEmpty)
+    }
+
+    func testSnapshotUsesDesktopCommandExecutionApprovalToSuppressRunning() throws {
+        let tempDirectoryURL = FileManager.default.temporaryDirectory
+            .appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: tempDirectoryURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDirectoryURL) }
+
+        let databaseURL = tempDirectoryURL.appending(path: "state.sqlite")
+        try createStateDatabase(
+            at: databaseURL,
+            sql: """
+            CREATE TABLE threads (
+                id TEXT PRIMARY KEY,
+                first_user_message TEXT NOT NULL DEFAULT '',
+                title TEXT NOT NULL DEFAULT '',
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                cwd TEXT NOT NULL,
+                rollout_path TEXT,
+                archived INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE TABLE logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                process_uuid TEXT,
+                target TEXT,
+                message TEXT,
+                ts INTEGER NOT NULL,
+                ts_nanos INTEGER NOT NULL DEFAULT 0,
+                thread_id TEXT
+            );
+            INSERT INTO threads (id, first_user_message, title, created_at, updated_at, cwd, rollout_path, archived)
+            VALUES ('thread-1', 'Preview', 'Thread 1', 150, 150, '/tmp/project', NULL, 0);
+            """
+        )
+
+        let sessionURL = tempDirectoryURL.appending(path: "thread-1.jsonl")
+        try """
+        {"timestamp":"2026-03-31T09:14:08.377Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-1"}}
+        """.write(to: sessionURL, atomically: true, encoding: .utf8)
+
+        let desktopLogsURL = try createDesktopLogDirectory(
+            in: tempDirectoryURL,
+            year: 2026,
+            month: 3,
+            day: 31
+        )
+        let desktopLogURL = desktopLogsURL.appending(path: "codex-desktop.log")
+        try """
+        2026-03-31T09:14:13.578Z info [electron-message-handler] [desktop-notifications] show approval conversationId=thread-1 kind=commandExecution requestId=14
+        """.write(to: desktopLogURL, atomically: true, encoding: .utf8)
+
+        let reader = CodexDesktopStateReader(
+            now: { Date(timeIntervalSince1970: 1_774_948_853) },
+            recentThreadUpdateInterval: 10,
+            recentLogInterval: 15,
+            stateDatabaseURLOverride: databaseURL,
+            desktopLogsDirectoryURLOverride: tempDirectoryURL.appending(path: "desktop-logs", directoryHint: .isDirectory)
+        )
+
+        let snapshot = try reader.snapshot(candidateSessionPaths: ["thread-1": sessionURL.path])
+
+        XCTAssertEqual(snapshot.approvalThreadIDs, ["thread-1"])
+        XCTAssertEqual(snapshot.runningThreadIDs, [])
+    }
+
+    func testSnapshotClearsDesktopCommandExecutionApprovalAfterResponse() throws {
+        let tempDirectoryURL = FileManager.default.temporaryDirectory
+            .appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: tempDirectoryURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDirectoryURL) }
+
+        let databaseURL = tempDirectoryURL.appending(path: "state.sqlite")
+        try createStateDatabase(
+            at: databaseURL,
+            sql: """
+            CREATE TABLE threads (
+                id TEXT PRIMARY KEY,
+                first_user_message TEXT NOT NULL DEFAULT '',
+                title TEXT NOT NULL DEFAULT '',
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                cwd TEXT NOT NULL,
+                rollout_path TEXT,
+                archived INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE TABLE logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                process_uuid TEXT,
+                target TEXT,
+                message TEXT,
+                ts INTEGER NOT NULL,
+                ts_nanos INTEGER NOT NULL DEFAULT 0,
+                thread_id TEXT
+            );
+            INSERT INTO threads (id, first_user_message, title, created_at, updated_at, cwd, rollout_path, archived)
+            VALUES ('thread-1', 'Preview', 'Thread 1', 150, 150, '/tmp/project', NULL, 0);
+            """
+        )
+
+        let sessionURL = tempDirectoryURL.appending(path: "thread-1.jsonl")
+        try """
+        {"timestamp":"2026-03-31T09:14:08.377Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-1"}}
+        """.write(to: sessionURL, atomically: true, encoding: .utf8)
+
+        let desktopLogsURL = try createDesktopLogDirectory(
+            in: tempDirectoryURL,
+            year: 2026,
+            month: 3,
+            day: 31
+        )
+        let desktopLogURL = desktopLogsURL.appending(path: "codex-desktop.log")
+        try """
+        2026-03-31T09:14:13.578Z info [electron-message-handler] [desktop-notifications] show approval conversationId=thread-1 kind=commandExecution requestId=14
+        2026-03-31T09:14:23.983Z info [electron-message-handler] Sending server response id=14 method=item/commandExecution/requestApproval response={"decision":"decline"}
+        """.write(to: desktopLogURL, atomically: true, encoding: .utf8)
+
+        let reader = CodexDesktopStateReader(
+            now: { Date(timeIntervalSince1970: 1_774_948_853) },
+            recentThreadUpdateInterval: 10,
+            recentLogInterval: 15,
+            stateDatabaseURLOverride: databaseURL,
+            desktopLogsDirectoryURLOverride: tempDirectoryURL.appending(path: "desktop-logs", directoryHint: .isDirectory)
+        )
+
+        let snapshot = try reader.snapshot(candidateSessionPaths: ["thread-1": sessionURL.path])
+
+        XCTAssertTrue(snapshot.approvalThreadIDs.isEmpty)
+        XCTAssertEqual(snapshot.runningThreadIDs, ["thread-1"])
+    }
+
+    func testSessionFallbackUsesDesktopCommandExecutionApproval() throws {
+        let tempDirectoryURL = FileManager.default.temporaryDirectory
+            .appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: tempDirectoryURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDirectoryURL) }
+
+        let sessionURL = tempDirectoryURL.appending(path: "thread-1.jsonl")
+        try """
+        {"timestamp":"2026-03-31T09:14:08.377Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-1"}}
+        """.write(to: sessionURL, atomically: true, encoding: .utf8)
+
+        let desktopLogsURL = try createDesktopLogDirectory(
+            in: tempDirectoryURL,
+            year: 2026,
+            month: 3,
+            day: 31
+        )
+        let desktopLogURL = desktopLogsURL.appending(path: "codex-desktop.log")
+        try """
+        2026-03-31T09:14:13.578Z info [electron-message-handler] [desktop-notifications] show approval conversationId=thread-1 kind=commandExecution requestId=14
+        """.write(to: desktopLogURL, atomically: true, encoding: .utf8)
+
+        let reader = CodexDesktopStateReader(
+            now: { Date(timeIntervalSince1970: 1_774_948_853) },
+            desktopLogsDirectoryURLOverride: tempDirectoryURL.appending(path: "desktop-logs", directoryHint: .isDirectory)
+        )
+
+        let snapshot = reader.sessionFallbackSnapshot(
+            candidateSessionPaths: ["thread-1": sessionURL.path],
+            databaseError: "missing db"
+        )
+
+        XCTAssertEqual(snapshot?.approvalThreadIDs, ["thread-1"])
+        XCTAssertEqual(snapshot?.runningThreadIDs, [])
+    }
+
+    func testSessionFallbackUsesEscalatedExecCommandApprovalWithoutDesktopLog() throws {
+        let tempDirectoryURL = FileManager.default.temporaryDirectory
+            .appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: tempDirectoryURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDirectoryURL) }
+
+        let sessionURL = tempDirectoryURL.appending(path: "thread-1.jsonl")
+        try """
+        {"timestamp":"2026-03-31T09:40:28.324Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-1"}}
+        {"timestamp":"2026-03-31T09:40:29.324Z","type":"response_item","payload":{"type":"function_call","name":"exec_command","arguments":"{\\"cmd\\":\\"ALLOW_ADHOC_SIGNING=1 ./scripts/package_app.sh\\",\\"justification\\":\\"package app\\",\\"sandbox_permissions\\":\\"require_escalated\\"}","call_id":"call_exec_approval"}}
+        """.write(to: sessionURL, atomically: true, encoding: .utf8)
+
+        let reader = CodexDesktopStateReader(now: { Date(timeIntervalSince1970: 1_774_950_000) })
+
+        let snapshot = reader.sessionFallbackSnapshot(
+            candidateSessionPaths: ["thread-1": sessionURL.path],
+            databaseError: "missing db"
+        )
+
+        XCTAssertEqual(snapshot?.approvalThreadIDs, ["thread-1"])
+        XCTAssertEqual(snapshot?.runningThreadIDs, [])
     }
 
     func testThreadsLoadSubagentMetadata() throws {
@@ -421,6 +685,20 @@ final class CodexDesktopStateReaderTests: XCTestCase {
         XCTAssertTrue(snapshot.runningThreadIDs.isEmpty)
     }
 
+    func testReaderErrorTreatsLockedDatabaseFailuresAsRetriable() {
+        let locked = CodexDesktopStateReader.ReaderError.queryFailed(
+            message: "Error: in prepare, database is locked (5)",
+            databasePath: "/tmp/state.sqlite"
+        )
+        let openFailure = CodexDesktopStateReader.ReaderError.queryFailed(
+            message: "Error: in prepare, unable to open database file (14)",
+            databasePath: "/tmp/state.sqlite"
+        )
+
+        XCTAssertTrue(locked.isRetriableDatabaseOpenFailure)
+        XCTAssertTrue(openFailure.isRetriableDatabaseOpenFailure)
+    }
+
     func testCodexDirectoryOverrideTakesPrecedenceOverProvider() throws {
         let tempDirectoryURL = FileManager.default.temporaryDirectory
             .appending(path: UUID().uuidString)
@@ -545,5 +823,20 @@ final class CodexDesktopStateReaderTests: XCTestCase {
             XCTFail(errorMessage)
             return
         }
+    }
+
+    private func createDesktopLogDirectory(
+        in rootDirectoryURL: URL,
+        year: Int,
+        month: Int,
+        day: Int
+    ) throws -> URL {
+        let directoryURL = rootDirectoryURL
+            .appending(path: "desktop-logs", directoryHint: .isDirectory)
+            .appending(path: String(format: "%04d", year), directoryHint: .isDirectory)
+            .appending(path: String(format: "%02d", month), directoryHint: .isDirectory)
+            .appending(path: String(format: "%02d", day), directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+        return directoryURL
     }
 }

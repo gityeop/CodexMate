@@ -15,27 +15,59 @@ FRAMEWORKS_DIR="$CONTENTS_DIR/Frameworks"
 PLIST_TEMPLATE="$ROOT_DIR/Packaging/CodexMate-Info.plist.template"
 APP_ICON_SOURCE="${APP_ICON_SOURCE:-$ROOT_DIR/Packaging/$APP_NAME.png}"
 APP_ICON_FILE="${APP_ICON_FILE:-$APP_NAME.icns}"
-APPLE_KEYCHAIN_PATH="${APPLE_KEYCHAIN_PATH:-$(security login-keychain | tr -d '"' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')}"
+APPLE_KEYCHAIN_PATH="${APPLE_KEYCHAIN_PATH:-}"
 APPLE_KEYCHAIN_PASSWORD="${APPLE_KEYCHAIN_PASSWORD:-}"
 APPLE_KEYCHAIN_UNLOCK_TIMEOUT="${APPLE_KEYCHAIN_UNLOCK_TIMEOUT:-21600}"
+ALLOW_ADHOC_SIGNING="${ALLOW_ADHOC_SIGNING:-0}"
 
 BUNDLE_IDENTIFIER="${CODEXMATE_BUNDLE_ID:-${CODEXTENSION_BUNDLE_ID:-com.imsangyeob.codexmate}}"
 APP_VERSION="${APP_VERSION:-$(git -C "$ROOT_DIR" rev-parse --short HEAD)}"
 APP_SHORT_VERSION="${APP_SHORT_VERSION:-$APP_VERSION}"
 SPARKLE_PUBLIC_KEY="${SPARKLE_PUBLIC_KEY:-}"
 SPARKLE_KEYCHAIN_ACCOUNT="${SPARKLE_KEYCHAIN_ACCOUNT:-ed25519}"
+typeset -a REQUIRED_RESOURCE_BUNDLES
+REQUIRED_RESOURCE_BUNDLES=(
+  "CodexMate_CodexMate.bundle"
+)
 
 typeset -a CODESIGN_KEYCHAIN_ARGS
-if [[ -n "$APPLE_KEYCHAIN_PATH" ]]; then
-  CODESIGN_KEYCHAIN_ARGS=(--keychain "$APPLE_KEYCHAIN_PATH")
-else
-  CODESIGN_KEYCHAIN_ARGS=()
-fi
+CODESIGN_KEYCHAIN_ARGS=()
+
+configure_codesign_keychain_args() {
+  local resolved_keychain_path="${APPLE_KEYCHAIN_PATH:-}"
+
+  if [[ -z "${APPLE_SIGN_IDENTITY:-}" ]]; then
+    CODESIGN_KEYCHAIN_ARGS=()
+    return
+  fi
+
+  if [[ -z "$resolved_keychain_path" ]]; then
+    resolved_keychain_path="$(security login-keychain 2>/dev/null | tr -d '"' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+  fi
+
+  APPLE_KEYCHAIN_PATH="$resolved_keychain_path"
+
+  if [[ -n "$APPLE_KEYCHAIN_PATH" ]]; then
+    CODESIGN_KEYCHAIN_ARGS=(--keychain "$APPLE_KEYCHAIN_PATH")
+  else
+    CODESIGN_KEYCHAIN_ARGS=()
+  fi
+}
 
 ensure_executable() {
   local path="$1"
   if [[ ! -x "$path" ]]; then
     return 1
+  fi
+}
+
+verify_resource_bundles() {
+  local expected_bundle_path="$1"
+  local expected_bundle_name="${expected_bundle_path:t}"
+
+  if [[ ! -d "$RESOURCES_DIR/$expected_bundle_name" ]]; then
+    echo "Missing packaged resource bundle: $expected_bundle_name" >&2
+    exit 1
   fi
 }
 
@@ -67,6 +99,11 @@ sign_with_identity() {
 
 prepare_signing_keychain() {
   [[ -n "${APPLE_SIGN_IDENTITY:-}" ]] || return 0
+
+  if [[ -z "$APPLE_KEYCHAIN_PATH" ]]; then
+    echo "Signing without an explicit keychain path. codesign will use the default keychain search list." >&2
+    return
+  fi
 
   if [[ -z "$APPLE_KEYCHAIN_PASSWORD" ]]; then
     echo "Signing without APPLE_KEYCHAIN_PASSWORD may trigger repeated Keychain prompts." >&2
@@ -122,6 +159,11 @@ if [[ -z "$SPARKLE_PUBLIC_KEY" ]]; then
   echo "Packaging without SUPublicEDKey. Automatic updates will stay unavailable until SPARKLE_PUBLIC_KEY is configured." >&2
 fi
 
+if [[ -z "${APPLE_SIGN_IDENTITY:-}" && "$ALLOW_ADHOC_SIGNING" != "1" ]]; then
+  echo "Set APPLE_SIGN_IDENTITY for a distributable app. Use ALLOW_ADHOC_SIGNING=1 only for local dry runs." >&2
+  exit 1
+fi
+
 mkdir -p "$DIST_DIR"
 
 swift build -c "$CONFIGURATION" --product "$APP_NAME"
@@ -140,10 +182,25 @@ cp "$EXECUTABLE_PATH" "$MACOS_DIR/$APP_NAME"
 
 install_name_tool -add_rpath "@executable_path/../Frameworks" "$MACOS_DIR/$APP_NAME" 2>/dev/null || true
 
-RESOURCE_BUNDLE_PATH="$(find "$BIN_DIR" -maxdepth 1 -name "${APP_NAME}_*.bundle" -print -quit || true)"
-if [[ -n "$RESOURCE_BUNDLE_PATH" ]]; then
-  cp -R "$RESOURCE_BUNDLE_PATH" "$RESOURCES_DIR/"
+RESOURCE_PRODUCTS_DIR="$BIN_DIR"
+APPLE_PRODUCTS_DIR="$ROOT_DIR/.build/apple/Products/${(C)CONFIGURATION}"
+if [[ -d "$APPLE_PRODUCTS_DIR" ]]; then
+  RESOURCE_PRODUCTS_DIR="$APPLE_PRODUCTS_DIR"
 fi
+
+typeset -a RESOURCE_BUNDLE_PATHS
+RESOURCE_BUNDLE_PATHS=("$RESOURCE_PRODUCTS_DIR"/*_*.bundle(N/))
+for resource_bundle_path in "$RESOURCE_BUNDLE_PATHS[@]"; do
+  cp -R "$resource_bundle_path" "$RESOURCES_DIR/"
+  verify_resource_bundles "$resource_bundle_path"
+done
+
+for required_bundle in "$REQUIRED_RESOURCE_BUNDLES[@]"; do
+  if [[ ! -d "$RESOURCES_DIR/$required_bundle" ]]; then
+    echo "Missing required packaged resource bundle: $required_bundle" >&2
+    exit 1
+  fi
+done
 
 create_app_icon "$APP_ICON_SOURCE" "$APP_ICON_FILE"
 
@@ -164,6 +221,7 @@ sed \
 
 SIGN_IDENTITY="${APPLE_SIGN_IDENTITY:--}"
 
+configure_codesign_keychain_args
 prepare_signing_keychain
 
 if [[ -n "${APPLE_SIGN_IDENTITY:-}" ]]; then
@@ -188,6 +246,9 @@ if [[ -n "${APPLE_SIGN_IDENTITY:-}" ]]; then
 
     sign_with_identity "$FRAMEWORKS_DIR/Sparkle.framework" "$APPLE_SIGN_IDENTITY" --options runtime --timestamp
   fi
+  for resource_bundle_path in "$RESOURCES_DIR"/*.bundle(N/); do
+    sign_with_identity "$resource_bundle_path" "$APPLE_SIGN_IDENTITY" --timestamp
+  done
   sign_with_identity "$MACOS_DIR/$APP_NAME" "$APPLE_SIGN_IDENTITY" --options runtime --timestamp
   sign_with_identity "$APP_DIR" "$APPLE_SIGN_IDENTITY" --options runtime --timestamp
 else

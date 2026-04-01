@@ -1,4 +1,5 @@
 import AppKit
+import Carbon.HIToolbox
 import Combine
 import SwiftUI
 import KeyboardShortcuts
@@ -119,10 +120,20 @@ private struct SettingsView: View {
 
             Section(viewModel.text("settings.shortcutSection")) {
                 VStack(alignment: .leading, spacing: 8) {
-                    KeyboardShortcuts.Recorder(
-                        viewModel.text("settings.shortcutLabel"),
-                        name: viewModel.shortcutName
-                    )
+                    Text(viewModel.text("settings.shortcutLabel"))
+                    HStack(spacing: 12) {
+                        ShortcutRecorderField(
+                            shortcut: viewModel.shortcut,
+                            placeholder: viewModel.text("settings.shortcutRecordPlaceholder"),
+                            onChange: { viewModel.setShortcut($0) }
+                        )
+                        .frame(width: 220, height: 28)
+
+                        Button(viewModel.text("settings.shortcutClear")) {
+                            viewModel.setShortcut(nil)
+                        }
+                        .disabled(viewModel.shortcut == nil)
+                    }
                     helpText(viewModel.text("settings.shortcutHelp"))
                 }
             }
@@ -235,4 +246,145 @@ private struct SettingsView: View {
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
     }
+}
+
+private struct ShortcutRecorderField: NSViewRepresentable {
+    let shortcut: KeyboardShortcuts.Shortcut?
+    let placeholder: String
+    let onChange: (KeyboardShortcuts.Shortcut?) -> Void
+
+    func makeNSView(context: Context) -> ShortcutRecorderTextField {
+        let textField = ShortcutRecorderTextField(frame: .zero)
+        textField.onChange = onChange
+        return textField
+    }
+
+    func updateNSView(_ nsView: ShortcutRecorderTextField, context: Context) {
+        nsView.shortcut = shortcut
+        nsView.placeholderLabel = placeholder
+        nsView.onChange = onChange
+    }
+}
+
+private final class ShortcutRecorderTextField: NSTextField {
+    var shortcut: KeyboardShortcuts.Shortcut? {
+        didSet {
+            guard !isRecording else { return }
+            refreshDisplay()
+        }
+    }
+
+    var placeholderLabel: String = "" {
+        didSet {
+            refreshDisplay()
+        }
+    }
+
+    var onChange: ((KeyboardShortcuts.Shortcut?) -> Void)?
+
+    override var acceptsFirstResponder: Bool { true }
+
+    private var isRecording = false {
+        didSet {
+            refreshDisplay()
+        }
+    }
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        isEditable = false
+        isSelectable = false
+        isBezeled = true
+        bezelStyle = .roundedBezel
+        drawsBackground = true
+        alignment = .center
+        font = .systemFont(ofSize: NSFont.systemFontSize)
+        lineBreakMode = .byTruncatingTail
+        focusRingType = .default
+        refreshDisplay()
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func becomeFirstResponder() -> Bool {
+        let didBecomeFirstResponder = super.becomeFirstResponder()
+        if didBecomeFirstResponder {
+            isRecording = true
+        }
+        return didBecomeFirstResponder
+    }
+
+    override func resignFirstResponder() -> Bool {
+        let didResignFirstResponder = super.resignFirstResponder()
+        if didResignFirstResponder {
+            isRecording = false
+        }
+        return didResignFirstResponder
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        window?.makeFirstResponder(self)
+    }
+
+    override func keyDown(with event: NSEvent) {
+        let modifiers = normalizedModifiers(event.modifierFlags)
+
+        if modifiers.isEmpty, event.keyCode == UInt16(kVK_Escape) {
+            window?.makeFirstResponder(nil)
+            return
+        }
+
+        if modifiers.isEmpty, let specialKey = event.specialKey, Self.clearKeys.contains(specialKey) {
+            onChange?(nil)
+            window?.makeFirstResponder(nil)
+            return
+        }
+
+        let allowsShortcutWithoutModifier = event.specialKey.map { Self.functionKeys.contains($0) } ?? false
+        guard !modifiers.subtracting(.shift).isEmpty || allowsShortcutWithoutModifier else {
+            NSSound.beep()
+            return
+        }
+
+        guard let shortcut = KeyboardShortcuts.Shortcut(event: event) else {
+            NSSound.beep()
+            return
+        }
+
+        onChange?(shortcut)
+        window?.makeFirstResponder(nil)
+    }
+
+    private func refreshDisplay() {
+        if isRecording {
+            stringValue = placeholderLabel
+            textColor = .secondaryLabelColor
+            return
+        }
+
+        if let shortcut {
+            stringValue = shortcut.description
+            textColor = .labelColor
+        } else {
+            stringValue = placeholderLabel
+            textColor = .secondaryLabelColor
+        }
+    }
+
+    private func normalizedModifiers(_ modifierFlags: NSEvent.ModifierFlags) -> NSEvent.ModifierFlags {
+        modifierFlags
+            .intersection(.deviceIndependentFlagsMask)
+            .subtracting([.capsLock, .numericPad, .function])
+    }
+
+    private static let clearKeys: Set<NSEvent.SpecialKey> = [.backspace, .delete, .deleteForward]
+    private static let functionKeys: Set<NSEvent.SpecialKey> = [
+        .f1, .f2, .f3, .f4, .f5, .f6, .f7, .f8, .f9, .f10,
+        .f11, .f12, .f13, .f14, .f15, .f16, .f17, .f18, .f19, .f20,
+        .f21, .f22, .f23, .f24, .f25, .f26, .f27, .f28, .f29, .f30,
+        .f31, .f32, .f33, .f34, .f35,
+    ]
 }

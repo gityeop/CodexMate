@@ -14,6 +14,32 @@ If the `codex` binary is not in the default app bundle path or `PATH`, set:
 CODEX_BINARY=/absolute/path/to/codex swift run CodexMate
 ```
 
+If you are running inside UTM or another VM and the app seems to "not launch", force a normal app window on startup:
+
+```bash
+CODEXMATE_REGULAR_APP=1 \
+CODEXMATE_OPEN_SETTINGS_ON_LAUNCH=1 \
+CODEX_BINARY=/absolute/path/to/codex \
+swift run CodexMate
+```
+
+This disables the accessory-only launch style for that run so the app appears in the Dock/app switcher and immediately opens Settings.
+
+For the packaged `.app`, you can do the same with launch arguments:
+
+```bash
+open -a /absolute/path/to/CodexMate.app --args --regular-app --open-settings-on-launch
+```
+
+## UTM Troubleshooting
+
+- The app only supports `macOS 13+`.
+- Run it from a GUI login session inside the VM, not over SSH or another headless shell.
+- If the menu bar item is hard to spot in the VM, use `CODEXMATE_REGULAR_APP=1` and `CODEXMATE_OPEN_SETTINGS_ON_LAUNCH=1`.
+- The packaged `.app` now opens `Settings` automatically on first launch so you still get a visible window even if the menu bar item is not obvious.
+- If CodexMate starts but cannot connect, point `CODEX_BINARY` at a working `codex` binary inside the guest.
+- Startup debug logs are written to `~/Library/Logs/CodexMate/overlay-debug.log`.
+
 ## Notes
 
 - The current app-server request method for user input is `item/tool/requestUserInput`.
@@ -40,6 +66,8 @@ Create a release-style `.app` bundle:
 ```bash
 ./scripts/package_app.sh
 ```
+
+`package_app.sh` expects `APPLE_SIGN_IDENTITY` for a distributable build. Use `ALLOW_ADHOC_SIGNING=1` only when you explicitly want a local unsigned/ad-hoc dry run that will fail Gatekeeper checks and show no Developer ID signer.
 
 Optional environment variables:
 

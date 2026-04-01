@@ -67,21 +67,19 @@ final class MenubarStatusSpriteCatalog {
 
     private func loadSourceFrames(for sprite: MenubarStatusPresentation.StatusSprite) -> [CGImage] {
         let layout = spriteSheetLayout(for: sprite)
-        let subdirectory = "StatusSprites.xcassets/\(sprite.assetName).imageset"
-        guard let spriteSheetURL = Bundle.module.url(
-            forResource: "sprite_sheet",
-            withExtension: "png",
-            subdirectory: subdirectory
-        ) else {
+        guard let resourceBundle = CodexMateResourceLocator.bundle else {
+            DebugTraceLogger.log("status sprite missing bundle sprite=\(sprite.assetName)")
             return []
         }
 
-        guard let spriteSheet = NSImage(contentsOf: spriteSheetURL) else {
+        guard let spriteSheet = loadSpriteSheetImage(for: sprite, from: resourceBundle) else {
+            DebugTraceLogger.log("status sprite missing image sprite=\(sprite.assetName)")
             return []
         }
 
         var proposedRect = NSRect(origin: .zero, size: spriteSheet.size)
         guard let spriteSheetCGImage = spriteSheet.cgImage(forProposedRect: &proposedRect, context: nil, hints: nil) else {
+            DebugTraceLogger.log("status sprite missing cgimage sprite=\(sprite.assetName)")
             return []
         }
 
@@ -127,6 +125,26 @@ final class MenubarStatusSpriteCatalog {
             )
             return usableSheet.cropping(to: cropRect)
         }
+    }
+
+    private func loadSpriteSheetImage(
+        for sprite: MenubarStatusPresentation.StatusSprite,
+        from resourceBundle: Bundle
+    ) -> NSImage? {
+        if let assetImage = resourceBundle.image(forResource: NSImage.Name(sprite.assetName)) {
+            return assetImage
+        }
+
+        let subdirectory = "StatusSprites.xcassets/\(sprite.assetName).imageset"
+        if let spriteSheetURL = resourceBundle.url(
+            forResource: "sprite_sheet",
+            withExtension: "png",
+            subdirectory: subdirectory
+        ) {
+            return NSImage(contentsOf: spriteSheetURL)
+        }
+
+        return nil
     }
 
     private func renderTintedFrame(
