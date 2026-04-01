@@ -122,6 +122,7 @@ Optional environment variables:
 SPARKLE_DOWNLOAD_URL_PREFIX=https://github.com/your-org/your-repo/releases/latest/download \
 SPARKLE_KEYCHAIN_ACCOUNT=ed25519 \
 SPARKLE_PRIVATE_KEY_FILE=/absolute/path/to/sparkle-private-key \
+SPARKLE_PRIVATE_KEY_SECRET=... \
 RELEASE_LINK=https://github.com/your-org/your-repo/releases/tag/v0.4.2 \
 RELEASE_DIR=/absolute/path/to/output-dir \
 ./scripts/release_app.sh
@@ -139,7 +140,7 @@ RELEASE_NOTES_FILE=/absolute/path/to/release-notes/0.4.2.html \
 ./scripts/release_app.sh
 ```
 
-If `SPARKLE_PUBLIC_KEY` is omitted, `release_app.sh` looks it up from the Sparkle keychain account named by `SPARKLE_KEYCHAIN_ACCOUNT`.
+If `SPARKLE_PUBLIC_KEY` is omitted, `release_app.sh` looks it up from the Sparkle keychain account named by `SPARKLE_KEYCHAIN_ACCOUNT`. To avoid Sparkle-related keychain prompts in unattended releases, set `SPARKLE_PUBLIC_KEY` and either `SPARKLE_PRIVATE_KEY_FILE` or `SPARKLE_PRIVATE_KEY_SECRET` so the release flow does not need to read the Sparkle key from Keychain Access.
 
 Expected release outputs:
 

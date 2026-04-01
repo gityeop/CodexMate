@@ -32,6 +32,7 @@ SPARKLE_APPCAST_URL="${SPARKLE_APPCAST_URL:-}"
 SPARKLE_DOWNLOAD_URL_PREFIX="${SPARKLE_DOWNLOAD_URL_PREFIX:-}"
 SPARKLE_PUBLIC_KEY="${SPARKLE_PUBLIC_KEY:-}"
 SPARKLE_PRIVATE_KEY_FILE="${SPARKLE_PRIVATE_KEY_FILE:-}"
+SPARKLE_PRIVATE_KEY_SECRET="${SPARKLE_PRIVATE_KEY_SECRET:-}"
 RELEASE_NOTES_FILE="${RELEASE_NOTES_FILE:-}"
 RELEASE_LINK="${RELEASE_LINK:-}"
 ALLOW_ADHOC_SIGNING="${ALLOW_ADHOC_SIGNING:-0}"
@@ -66,8 +67,8 @@ fi
 ensure_executable "$GENERATE_APPCAST_BIN"
 
 if [[ -z "$SPARKLE_PUBLIC_KEY" ]]; then
-  if [[ -n "$SPARKLE_PRIVATE_KEY_FILE" ]]; then
-    echo "Set SPARKLE_PUBLIC_KEY when using SPARKLE_PRIVATE_KEY_FILE." >&2
+  if [[ -n "$SPARKLE_PRIVATE_KEY_FILE" || -n "$SPARKLE_PRIVATE_KEY_SECRET" ]]; then
+    echo "Set SPARKLE_PUBLIC_KEY when using SPARKLE_PRIVATE_KEY_FILE or SPARKLE_PRIVATE_KEY_SECRET." >&2
     exit 1
   fi
 
@@ -129,14 +130,18 @@ if [[ -n "$RELEASE_LINK" ]]; then
   generate_appcast_args+=("--link" "$RELEASE_LINK")
 fi
 
+generate_appcast_args+=("$RELEASE_DIR")
+
 if [[ -n "$SPARKLE_PRIVATE_KEY_FILE" ]]; then
   generate_appcast_args+=("--ed-key-file" "$SPARKLE_PRIVATE_KEY_FILE")
+  "${generate_appcast_args[@]}"
+elif [[ -n "$SPARKLE_PRIVATE_KEY_SECRET" ]]; then
+  generate_appcast_args+=("--ed-key-file" "-")
+  print -rn -- "$SPARKLE_PRIVATE_KEY_SECRET" | "${generate_appcast_args[@]}"
 else
   generate_appcast_args+=("--account" "$SPARKLE_KEYCHAIN_ACCOUNT")
+  "${generate_appcast_args[@]}"
 fi
-
-generate_appcast_args+=("$RELEASE_DIR")
-"${generate_appcast_args[@]}"
 
 if ! grep -q "<sparkle:version>${APP_VERSION}</sparkle:version>" "$APPCAST_PATH"; then
   echo "Generated appcast does not contain version $APP_VERSION." >&2
