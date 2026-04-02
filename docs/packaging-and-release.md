@@ -87,7 +87,7 @@ RELEASE_NOTES_FILE=/absolute/path/to/release-notes/0.4.2.html \
 ./scripts/release_app.sh
 ```
 
-If `SPARKLE_PUBLIC_KEY` is omitted, `release_app.sh` looks it up from the Sparkle keychain account named by `SPARKLE_KEYCHAIN_ACCOUNT`. To avoid Sparkle-related keychain prompts in unattended releases, set `SPARKLE_PUBLIC_KEY` and either `SPARKLE_PRIVATE_KEY_FILE` or `SPARKLE_PRIVATE_KEY_SECRET` so the release flow does not need to read the Sparkle key from Keychain Access.
+This still requires `SPARKLE_APPCAST_URL`, `RELEASE_NOTES_FILE`, and Sparkle key material or keychain access. If `SPARKLE_PUBLIC_KEY` is omitted, `release_app.sh` looks it up from the Sparkle keychain account named by `SPARKLE_KEYCHAIN_ACCOUNT`. To avoid Sparkle-related keychain prompts in unattended runs, set `SPARKLE_PUBLIC_KEY` and either `SPARKLE_PRIVATE_KEY_FILE` or `SPARKLE_PRIVATE_KEY_SECRET`, or make sure the configured keychain account can be read non-interactively.
 
 Expected release outputs:
 

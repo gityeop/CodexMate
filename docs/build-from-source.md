@@ -5,6 +5,7 @@ CodexMate can be run directly from source when you are developing or validating 
 ## Requirements
 
 - `macOS 13+`
+- A Swift/Xcode toolchain that can run `swift build` and `swift run`
 - A working `codex` binary available in the default app bundle path or in `PATH`
 - A GUI login session when testing the app UI
 
@@ -51,7 +52,12 @@ Additional notes:
 
 - The current app-server request method for user input is `item/tool/requestUserInput`.
 - Live `turn/*` and approval events only come from the app-server instance the menu bar app launches.
-- The menu bar refreshes Desktop activity every 1 second and refreshes the thread list every 5 seconds.
+- The menu bar uses a state-dependent refresh policy:
+  - when the menu is open, Desktop activity refreshes as fast as 1 second and the thread list refreshes every 5 seconds
+  - when no recent threads exist, Desktop activity stays at the slower 5 second cadence while the thread list remains on the 5 second menu cadence
+  - when the app is tracking recent threads and the overall status is running, Desktop activity stays at 1 second and the thread list moves to 15 seconds
+  - when recent threads exist but the app is otherwise idle, Desktop activity stays at 5 seconds and the thread list moves to 60 seconds
+- See `Sources/CodexMate/RefreshSchedulingPolicy.swift` for the exact refresh policy.
 - For other recent Codex Desktop threads, the menu bar reads `~/.codex/state_*.sqlite` and combines two fallback signals:
   - current Desktop app-server `turn/started` minus `turn/completed` count for the top-level `Running` icon
   - very recent per-thread activity for row-level `Running` labels
