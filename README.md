@@ -21,13 +21,14 @@ CodexMate adds a lightweight layer on top of Codex Desktop. Instead of repeatedl
 
 ## Download and Get Started
 
-- Download the latest release: [GitHub Releases](https://github.com/gityeop/CodexMate/releases/latest)
+- Download the latest release archive: [GitHub Releases](https://github.com/gityeop/CodexMate/releases/latest)
 - Requires `macOS 13+`
 - Designed for people who already use Codex Desktop
 
-1. Download `CodexMate.app` from the latest release.
-2. Open the app and keep it in the menu bar.
-3. Return to Codex Desktop and let CodexMate surface the moments that need your attention.
+1. Download the latest release archive from GitHub Releases.
+2. Unzip the archive to reveal `CodexMate.app`.
+3. Open `CodexMate.app` and keep it in the menu bar.
+4. Return to Codex Desktop and let CodexMate surface the moments that need your attention.
 
 ## Run
 
