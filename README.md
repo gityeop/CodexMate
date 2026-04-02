@@ -54,11 +54,11 @@ You need `macOS 13+` and a working Codex Desktop setup.
 
 ### Are all statuses exact?
 
-Live turn and approval events come from the app-server instance that CodexMate launches. For other recent threads, some row-level status indicators use recent activity heuristics so you can still see what likely needs attention.
+The main events CodexMate watches are accurate, but some recent thread cues can lag or be approximate. It is good at showing what likely needs attention, but the menu can still reflect recent activity rather than a perfectly live state every time.
 
 ### Is there anything that only works in the packaged app?
 
-Yes. `Launch at Login` and Sparkle updates are intentionally disabled when running with `swift run`; they are available in the packaged `.app`.
+Yes. `Launch at Login` requires the bundled `.app`. Automatic updates also require the bundled `.app`, plus the Sparkle metadata included in a packaged release.
 
 ## For Developers
 
