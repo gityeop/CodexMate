@@ -25,7 +25,7 @@ APPLE_KEYCHAIN_PASSWORD='your-login-keychain-password' \
 ./scripts/package_app.sh
 ```
 
-If `SPARKLE_FEED_URL` is omitted, `package_app.sh` tries to derive `https://github.com/<owner>/<repo>/releases/latest/download/appcast.xml` from `origin` when the repository remote is GitHub. If `SPARKLE_PUBLIC_KEY` is omitted, `package_app.sh` tries to resolve it from the Sparkle keychain account named by `SPARKLE_KEYCHAIN_ACCOUNT`. If it still cannot resolve the key, the app is packaged but automatic updates stay unavailable in Settings until the bundle is rebuilt with Sparkle metadata.
+If `SPARKLE_FEED_URL` is omitted, `package_app.sh` tries to derive `https://github.com/<owner>/<repo>/releases/latest/download/appcast.xml` from `origin` when the repository remote is GitHub. If `origin` is not a GitHub remote, it falls back to `https://example.com/appcast.xml`, so set `SPARKLE_FEED_URL` explicitly for non-GitHub or real distributable builds. If `SPARKLE_PUBLIC_KEY` is omitted, `package_app.sh` tries to resolve it from the Sparkle keychain account named by `SPARKLE_KEYCHAIN_ACCOUNT`. If it still cannot resolve the key, the app is packaged but automatic updates stay unavailable in Settings until the bundle is rebuilt with Sparkle metadata.
 
 If `APPLE_KEYCHAIN_PASSWORD` is set, the packaging script unlocks the keychain and configures codesign access up front so macOS does not repeatedly prompt for the signing key during the nested Sparkle and framework signing steps. Set `APPLE_KEYCHAIN_PATH` as well if you do not use the default login keychain.
 
@@ -61,7 +61,7 @@ RELEASE_NOTES_FILE=/absolute/path/to/release-notes/0.4.2.html \
 
 The release script reuses the packaged `.app`, optionally notarizes and staples it, creates a final zip archive, and generates an updated Sparkle appcast in `dist/release`.
 
-Prerequisite: `release_app.sh` expects the Sparkle CLI tools to already exist at `.build/artifacts/sparkle/Sparkle/bin`. On fresh checkouts, run `swift build` or `./scripts/package_app.sh` first so `generate_appcast` is available there; if `SPARKLE_PUBLIC_KEY` is omitted, `generate_keys` must also exist at that path. Otherwise the script fails with an `Expected executable at ...` error before it can generate the appcast.
+Prerequisite: `release_app.sh` expects the Sparkle CLI tools to already exist at `.build/artifacts/sparkle/Sparkle/bin`. On a fresh checkout, bootstrap that path with `swift build` first. `./scripts/package_app.sh` can also produce the tools, but only after you configure signing or set `ALLOW_ADHOC_SIGNING=1`; otherwise it exits before `swift build` runs. Once the directory exists, `generate_appcast` must be available there, and `generate_keys` must also exist if `SPARKLE_PUBLIC_KEY` is omitted. Otherwise the script fails with an `Expected executable at ...` error before it can generate the appcast.
 
 Optional environment variables:
 

@@ -58,7 +58,7 @@ Additional notes:
   - when the app is tracking recent threads and the overall status is running, Desktop activity stays at 1 second and the thread list moves to 15 seconds
   - when recent threads exist but the app is otherwise idle, Desktop activity stays at 5 seconds and the thread list moves to 60 seconds
 - See `Sources/CodexMate/RefreshSchedulingPolicy.swift` for the exact refresh policy.
-- For other recent Codex Desktop threads, the menu bar reads `~/.codex/state_*.sqlite` and combines two fallback signals:
+- For other recent Codex Desktop threads, the menu bar typically reads `~/.codex/state_*.sqlite` and combines two fallback signals:
   - current Desktop app-server `turn/started` minus `turn/completed` count for the top-level `Running` icon
   - very recent per-thread activity for row-level `Running` labels
 - This clears `Running` much faster after a turn completes, but row-level status is still heuristic for threads the app did not resume itself.
