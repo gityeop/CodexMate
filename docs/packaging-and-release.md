@@ -10,7 +10,7 @@ Create a release-style `.app` bundle:
 ./scripts/package_app.sh
 ```
 
-`package_app.sh` expects `APPLE_SIGN_IDENTITY` for a distributable build. Use `ALLOW_ADHOC_SIGNING=1` only when you explicitly want a local unsigned or ad-hoc dry run that will fail Gatekeeper checks and show no Developer ID signer.
+`package_app.sh` expects `APPLE_SIGN_IDENTITY` for a distributable build. Use `ALLOW_ADHOC_SIGNING=1` only when you explicitly want a local ad-hoc-signed dry run that will fail Gatekeeper checks and show no Developer ID signer.
 
 Optional environment variables:
 
@@ -60,6 +60,8 @@ RELEASE_NOTES_FILE=/absolute/path/to/release-notes/0.4.2.html \
 ```
 
 The release script reuses the packaged `.app`, optionally notarizes and staples it, creates a final zip archive, and generates an updated Sparkle appcast in `dist/release`.
+
+Prerequisite: `release_app.sh` expects the Sparkle CLI tools to already exist at `.build/artifacts/sparkle/Sparkle/bin`. On fresh checkouts, run `swift build` or `./scripts/package_app.sh` first so `generate_appcast` is available there; if `SPARKLE_PUBLIC_KEY` is omitted, `generate_keys` must also exist at that path. Otherwise the script fails with an `Expected executable at ...` error before it can generate the appcast.
 
 Optional environment variables:
 
