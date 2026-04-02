@@ -63,6 +63,8 @@ The release script reuses the packaged `.app`, optionally notarizes and staples 
 
 Prerequisite: `release_app.sh` expects the Sparkle CLI tools to already exist at `.build/artifacts/sparkle/Sparkle/bin`. On a fresh checkout, bootstrap that path with `swift build` first. `./scripts/package_app.sh` can also produce the tools, but only after you configure signing or set `ALLOW_ADHOC_SIGNING=1`; otherwise it exits before `swift build` runs. Once the directory exists, `generate_appcast` must be available there, and `generate_keys` must also exist if `SPARKLE_PUBLIC_KEY` is omitted. Otherwise the script fails with an `Expected executable at ...` error before it can generate the appcast.
 
+For the appcast step itself, `SPARKLE_PUBLIC_KEY` is not enough on its own. The release flow must also be able to read Sparkle private-key material through `SPARKLE_PRIVATE_KEY_FILE`, `SPARKLE_PRIVATE_KEY_SECRET`, or a readable `SPARKLE_KEYCHAIN_ACCOUNT`; otherwise `generate_appcast` will fail late in the script when it tries to sign the release metadata.
+
 Optional environment variables:
 
 ```bash
