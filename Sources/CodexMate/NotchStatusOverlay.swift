@@ -575,12 +575,18 @@ final class NotchStatusOverlayView: NSView {
         static let menuSeparatorTrailingInset: CGFloat = 32
     }
 
+    private enum HoverSuppressionPolicy {
+        static let resumeDelay: TimeInterval = 0.18
+    }
+
     private let imageView = NSImageView()
     private let menuScrollView = NotchMenuScrollView()
     private let menuDocumentView = NotchMenuDocumentView()
     private let surfaceMaskLayer = CAShapeLayer()
     private var menuRows: [MenuRowRecord] = []
     private var selectedMenuRowIndex: Int?
+    private var suppressesRowHoverDuringScroll = false
+    private var rowHoverResumeWorkItem: DispatchWorkItem?
     private var usesContextualSelectionAnchor = false
     private var flashedMenuIdentifier: String?
     private var highlightResetWorkItem: DispatchWorkItem?
@@ -699,7 +705,7 @@ final class NotchStatusOverlayView: NSView {
         menuScrollView.documentView = menuDocumentView
         menuScrollView.isHidden = true
         menuScrollView.onManualScroll = { [weak self] in
-            self?.clearKeyboardSelectionForManualScroll()
+            self?.suspendRowHoverForManualScroll()
         }
         addSubview(menuScrollView)
 
@@ -768,6 +774,9 @@ final class NotchStatusOverlayView: NSView {
     }
 
     func prepareForMenuOpen() {
+        rowHoverResumeWorkItem?.cancel()
+        rowHoverResumeWorkItem = nil
+        suppressesRowHoverDuringScroll = false
         usesContextualSelectionAnchor = false
         setSelectedMenuRowIndex(nextSelectableMenuRowIndex(from: nil, delta: 1))
         menuScrollView.contentView.scroll(to: .zero)
@@ -856,6 +865,9 @@ final class NotchStatusOverlayView: NSView {
         menuRows.forEach { $0.view.removeFromSuperview() }
         menuRows.removeAll()
         selectedMenuRowIndex = nil
+        rowHoverResumeWorkItem?.cancel()
+        rowHoverResumeWorkItem = nil
+        suppressesRowHoverDuringScroll = false
         usesContextualSelectionAnchor = false
         flashedMenuIdentifier = nil
         lastLaidOutMenuContentWidth = -1
@@ -916,7 +928,7 @@ final class NotchStatusOverlayView: NSView {
                     onToggle: nil
                 )
                 rowView.onScrollWheel = { [weak self] in
-                    self?.clearKeyboardSelectionForManualScroll()
+                    self?.suspendRowHoverForManualScroll()
                 }
                 rowView.alphaValue = item.isEnabled ? 1 : 0.45
                 menuDocumentView.addSubview(rowView)
@@ -1186,6 +1198,26 @@ final class NotchStatusOverlayView: NSView {
         scrollSelectedMenuRowIntoView()
     }
 
+    private func suspendRowHoverForManualScroll() {
+        rowHoverResumeWorkItem?.cancel()
+
+        if !suppressesRowHoverDuringScroll {
+            suppressesRowHoverDuringScroll = true
+            applyRowHighlights()
+        }
+
+        clearKeyboardSelectionForManualScroll()
+
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.rowHoverResumeWorkItem = nil
+            self.suppressesRowHoverDuringScroll = false
+            self.applyRowHighlights()
+        }
+        rowHoverResumeWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + HoverSuppressionPolicy.resumeDelay, execute: workItem)
+    }
+
     private func clearKeyboardSelectionForManualScroll() {
         guard selectedMenuRowIndex != nil else {
             return
@@ -1269,12 +1301,13 @@ final class NotchStatusOverlayView: NSView {
     }
 
     private func applyRowHighlights() {
-        let suppressHoverHighlights = selectedMenuRowIndex != nil
+        let suppressHoverHighlights = selectedMenuRowIndex != nil || suppressesRowHoverDuringScroll
         for (index, row) in menuRows.enumerated() {
             guard let rowView = row.view as? ThreadDropdownMenuRowView else {
                 continue
             }
 
+            rowView.allowsHover = !suppressesRowHoverDuringScroll
             rowView.suppressHoverHighlight = suppressHoverHighlights
             let isSelected = selectedMenuRowIndex == index
             let isFlashed = flashedMenuIdentifier != nil && row.identifier == flashedMenuIdentifier

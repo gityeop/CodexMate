@@ -56,6 +56,15 @@ final class ThreadDropdownMenuRowView: NSView {
     private var onToggle: (() -> Void)?
     var onScrollWheel: (() -> Void)?
 
+    var allowsHover = true {
+        didSet {
+            guard allowsHover != oldValue else { return }
+            if !allowsHover {
+                setHovered(false)
+            }
+        }
+    }
+
     var isHighlighted: Bool = false {
         didSet {
             needsDisplay = true
@@ -172,7 +181,7 @@ final class ThreadDropdownMenuRowView: NSView {
 
         let trackingArea = NSTrackingArea(
             rect: bounds,
-            options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+            options: [.mouseEnteredAndExited, .mouseMoved, .activeAlways, .inVisibleRect],
             owner: self,
             userInfo: nil
         )
@@ -275,12 +284,19 @@ final class ThreadDropdownMenuRowView: NSView {
 
     override func mouseEntered(with event: NSEvent) {
         super.mouseEntered(with: event)
+        guard allowsHover else { return }
         setHovered(true)
     }
 
     override func mouseExited(with event: NSEvent) {
         super.mouseExited(with: event)
         setHovered(false)
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        super.mouseMoved(with: event)
+        guard allowsHover else { return }
+        setHovered(true)
     }
 
     override func scrollWheel(with event: NSEvent) {

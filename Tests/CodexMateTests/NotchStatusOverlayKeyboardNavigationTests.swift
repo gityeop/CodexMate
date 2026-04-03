@@ -268,6 +268,42 @@ final class NotchStatusOverlayKeyboardNavigationTests: XCTestCase {
         XCTAssertEqual(hoveredLabel.textColor, .labelColor)
     }
 
+
+    func testManualScrollKeepsHoverSuppressedUntilScrollSettles() throws {
+        let view = NotchStatusOverlayView(frame: NSRect(x: 0, y: 0, width: 520, height: 220))
+        view.setMenuItems([
+            .item(primaryText: "Thread 1", onSelect: {}),
+            .item(primaryText: "Thread 2", onSelect: {}),
+            .item(primaryText: "Thread 3", onSelect: {}),
+        ])
+        view.menuExpansionProgress = 1
+        view.prepareForMenuOpen()
+        view.layoutSubtreeIfNeeded()
+
+        let rows = allRowViews(in: view)
+        let scrollingRow = try XCTUnwrap(rows.first)
+        let hoveredRow = try XCTUnwrap(rows.dropFirst().first)
+        let hoveredLabel = try XCTUnwrap(hoveredRow.subviews.compactMap { $0 as? NSTextField }.first)
+        let initialTextColor = try XCTUnwrap(hoveredLabel.textColor)
+        let moveEvent = try makeMouseEvent(type: .mouseMoved)
+
+        scrollingRow.scrollWheel(with: try makeScrollEvent(deltaY: 10))
+        hoveredRow.mouseEntered(with: moveEvent)
+        hoveredRow.mouseMoved(with: moveEvent)
+
+        XCTAssertEqual(hoveredLabel.textColor, initialTextColor)
+
+        let settleExpectation = expectation(description: "hover resumes after scroll settles")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+            XCTAssertEqual(hoveredLabel.textColor, initialTextColor)
+            hoveredRow.mouseMoved(with: moveEvent)
+            XCTAssertNotEqual(hoveredLabel.textColor, initialTextColor)
+            settleExpectation.fulfill()
+        }
+
+        wait(for: [settleExpectation], timeout: 1)
+    }
+
     private func makeMenuItems() -> [NotchStatusOverlayMenuEntry] {
         [
             .header("Recent threads"),
