@@ -7,7 +7,8 @@ final class ThreadDropdownMenuRowView: NSView {
         static let indentationWidth: CGFloat = 14
         static let disclosureSize: CGFloat = 12
         static let disclosureSpacing: CGFloat = 4
-        static let iconSize: CGFloat = 12
+        static let iconSlotWidth: CGFloat = 18
+        static let indicatorImageSize: CGFloat = 12
         static let iconSpacing: CGFloat = 6
         static let metadataSpacing: CGFloat = 8
         static let minimumWidth: CGFloat = 220
@@ -31,7 +32,7 @@ final class ThreadDropdownMenuRowView: NSView {
         )
         let disclosureWidth = isExpandable ? Layout.disclosureSize + Layout.disclosureSpacing : 0
         let indentationWidth = CGFloat(max(0, indentationLevel)) * Layout.indentationWidth
-        let iconWidth = Layout.iconSize + Layout.iconSpacing
+        let iconWidth = Layout.iconSlotWidth + Layout.iconSpacing
         let contentWidth = Layout.horizontalPadding * 2
             + indentationWidth
             + disclosureWidth
@@ -45,6 +46,7 @@ final class ThreadDropdownMenuRowView: NSView {
 
     private let disclosureButton = NSButton(title: "▸", target: nil, action: nil)
     private let iconView = NSImageView(frame: .zero)
+    private let indicatorLabel = NSTextField(labelWithString: "")
     private let titleLabel = NSTextField(labelWithString: "")
     private let secondaryLabel = NSTextField(labelWithString: "")
     private var trackingAreaRef: NSTrackingArea?
@@ -122,6 +124,15 @@ final class ThreadDropdownMenuRowView: NSView {
         iconView.translatesAutoresizingMaskIntoConstraints = true
         addSubview(iconView)
 
+        indicatorLabel.font = NSFont.systemFont(ofSize: 13)
+        indicatorLabel.alignment = .center
+        indicatorLabel.cell?.lineBreakMode = .byClipping
+        indicatorLabel.cell?.usesSingleLineMode = true
+        indicatorLabel.maximumNumberOfLines = 1
+        indicatorLabel.translatesAutoresizingMaskIntoConstraints = true
+        indicatorLabel.isHidden = true
+        addSubview(indicatorLabel)
+
         titleLabel.font = Self.titleFont
         titleLabel.cell?.lineBreakMode = .byTruncatingTail
         titleLabel.cell?.usesSingleLineMode = true
@@ -147,6 +158,7 @@ final class ThreadDropdownMenuRowView: NSView {
     func configure(
         title: String,
         secondaryText: String? = nil,
+        indicatorText: String? = nil,
         indicatorImage: NSImage?,
         indentationLevel: Int,
         isExpandable: Bool,
@@ -164,6 +176,9 @@ final class ThreadDropdownMenuRowView: NSView {
         secondaryLabel.stringValue = secondaryText ?? ""
         secondaryLabel.isHidden = (secondaryText?.isEmpty ?? true)
         iconView.image = indicatorImage
+        iconView.isHidden = indicatorImage == nil
+        indicatorLabel.stringValue = indicatorText ?? ""
+        indicatorLabel.isHidden = indicatorImage != nil || (indicatorText?.isEmpty ?? true)
         disclosureButton.isHidden = !isExpandable
         disclosureButton.title = isExpanded ? "▾" : "▸"
 
@@ -193,7 +208,7 @@ final class ThreadDropdownMenuRowView: NSView {
         super.layout()
 
         let rowHeight = bounds.height
-        let centerY = floor((rowHeight - Layout.iconSize) / 2)
+        let imageOriginY = floor((rowHeight - Layout.indicatorImageSize) / 2)
         var x = Layout.horizontalPadding + CGFloat(indentationLevel) * Layout.indentationWidth
 
         if isExpandable {
@@ -208,13 +223,15 @@ final class ThreadDropdownMenuRowView: NSView {
             disclosureButton.frame = .zero
         }
 
+        indicatorLabel.frame = NSRect(x: x, y: 0, width: Layout.iconSlotWidth, height: rowHeight)
+        let imageX = x + floor((Layout.iconSlotWidth - Layout.indicatorImageSize) / 2)
         iconView.frame = NSRect(
-            x: x,
-            y: centerY,
-            width: Layout.iconSize,
-            height: Layout.iconSize
+            x: imageX,
+            y: imageOriginY,
+            width: Layout.indicatorImageSize,
+            height: Layout.indicatorImageSize
         )
-        x += Layout.iconSize + Layout.iconSpacing
+        x += Layout.iconSlotWidth + Layout.iconSpacing
 
         let secondaryWidth = secondaryLabel.isHidden
             ? CGFloat.zero
@@ -322,6 +339,7 @@ final class ThreadDropdownMenuRowView: NSView {
             ? NSColor(calibratedWhite: 1, alpha: 0.98)
             : .labelColor
         titleLabel.textColor = textColor
+        indicatorLabel.textColor = textColor
         secondaryLabel.textColor = (isHighlighted || showsHoverState)
             ? NSColor(calibratedWhite: 1, alpha: 0.72)
             : .secondaryLabelColor

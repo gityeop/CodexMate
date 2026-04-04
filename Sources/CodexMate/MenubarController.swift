@@ -25,6 +25,14 @@ extension CodexDesktopProjectCatalogReader: ProjectCatalogLoading {
     }
 }
 
+struct DesktopStateRecentThreadListing: RecentThreadListing, @unchecked Sendable {
+    let reader: CodexDesktopStateReader
+
+    func recentThreads(limit: Int) async throws -> [CodexThread] {
+        try reader.recentThreads(limit: limit)
+    }
+}
+
 actor AppServerRecentThreadListing: RecentThreadListing {
     private let client: CodexAppServerClient
     private let fetchPageLimit: Int
@@ -59,10 +67,10 @@ actor AppServerRecentThreadListing: RecentThreadListing {
 
 @MainActor
 final class FallbackRecentThreadListing: RecentThreadListing, @unchecked Sendable {
-    private let primary: AppServerRecentThreadListing
-    private let fallback: CodexDesktopStateReader
+    private let primary: any RecentThreadListing
+    private let fallback: any RecentThreadListing
 
-    init(primary: AppServerRecentThreadListing, fallback: CodexDesktopStateReader) {
+    init(primary: any RecentThreadListing, fallback: any RecentThreadListing) {
         self.primary = primary
         self.fallback = fallback
     }
@@ -70,19 +78,42 @@ final class FallbackRecentThreadListing: RecentThreadListing, @unchecked Sendabl
     func recentThreads(limit: Int) async throws -> [CodexThread] {
         do {
             let primaryThreads = try await primary.recentThreads(limit: limit)
-            if !primaryThreads.isEmpty {
-                return primaryThreads
-            }
-
-            return try fallback.recentThreads(limit: limit)
+            let fallbackThreads = try await fallback.recentThreads(limit: limit)
+            return mergeRecentThreads(primary: primaryThreads, fallback: fallbackThreads, limit: limit)
         } catch {
-            let fallbackThreads = try fallback.recentThreads(limit: limit)
+            let fallbackThreads = try await fallback.recentThreads(limit: limit)
             if !fallbackThreads.isEmpty {
-                return fallbackThreads
+                return Array(fallbackThreads.prefix(limit))
             }
 
             throw error
         }
+    }
+
+    private func mergeRecentThreads(primary: [CodexThread], fallback: [CodexThread], limit: Int) -> [CodexThread] {
+        guard !primary.isEmpty else {
+            return Array(fallback.prefix(limit))
+        }
+
+        guard !fallback.isEmpty else {
+            return Array(primary.prefix(limit))
+        }
+
+        var mergedByID = Dictionary(uniqueKeysWithValues: fallback.map { ($0.id, $0) })
+        for thread in primary {
+            mergedByID[thread.id] = thread
+        }
+
+        return mergedByID.values
+            .sorted { lhs, rhs in
+                if lhs.updatedAt == rhs.updatedAt {
+                    return lhs.id.localizedCaseInsensitiveCompare(rhs.id) == .orderedAscending
+                }
+
+                return lhs.updatedAt > rhs.updatedAt
+            }
+            .prefix(limit)
+            .map { $0 }
     }
 }
 
@@ -195,6 +226,10 @@ final class MenubarController {
     }
 
     var recentThreads: [AppStateStore.ThreadRow] {
+        state.recentThreads
+    }
+
+    var visibleRecentThreads: [AppStateStore.ThreadRow] {
         state.visibleRecentThreads
     }
 
@@ -211,7 +246,10 @@ final class MenubarController {
     }
 
     func loadInitialThreads() async throws {
-        let threads = try await hydratedRecentThreads(limit: configuration.initialFetchLimit)
+        // Fetch the full tracked window up front so the first menu render can
+        // populate enough distinct projects even when one project dominates the
+        // most recent thread list.
+        let threads = try await hydratedRecentThreads(limit: configuration.maxTrackedThreads)
         projectCatalog = (try? loadProjectCatalog()) ?? .empty
         state.replaceRecentThreads(with: threads)
     }
@@ -234,10 +272,14 @@ final class MenubarController {
         let activityObservedAt = now()
         let update = await loadDesktopActivity(candidateSessionPaths, activityObservedAt)
         let recentThreadIDs = Set(trackedThreads.map(\.id))
+        let attentionThreadIDs = Set(update.runtimeSnapshot?.waitingForInputThreadIDs ?? [])
+            .union(update.runtimeSnapshot?.approvalThreadIDs ?? [])
+            .union(Set(update.runtimeSnapshot?.failedThreads.keys.map { $0 } ?? []))
         let discoveredThreadIDs = ThreadActivityRefreshPlanner.discoveredThreadIDsNeedingRefresh(
             recentThreadIDs: recentThreadIDs,
             latestViewedAtByThreadID: update.latestViewedAtByThreadID,
             recentActivityThreadIDs: update.runtimeSnapshot?.recentActivityThreadIDs ?? [],
+            attentionThreadIDs: attentionThreadIDs,
             now: activityObservedAt
         )
         let newlyDiscoveredThreadIDs = pendingDiscoveredThreads.observe(discoveredThreadIDs, now: activityObservedAt)
@@ -317,10 +359,11 @@ final class MenubarController {
             section.threads + section.threadGroups.flatMap(\.childThreads)
         }
         .contains(where: \.hasUnreadContent)
+        let displayOverallStatus = displayedOverallStatus(snapshotSections: snapshotSections)
 
         return MenubarPreparedSnapshot(
             snapshot: MenubarSnapshot(
-                overallStatus: state.overallStatus,
+                overallStatus: displayOverallStatus,
                 hasUnreadThreads: hasUnreadThreads,
                 projectSections: snapshotSections,
                 isWatchLatestThreadEnabled: !state.visibleRecentThreads.isEmpty
@@ -587,12 +630,29 @@ final class MenubarController {
         projectLimit: Int,
         visibleThreadLimit: Int
     ) -> [MenubarProjectSectionSnapshot] {
-        let limitedSections = Array(sections.prefix(max(0, projectLimit)))
+        let visibleProjectLimit = max(0, projectLimit)
+        let visibleThreadLimit = max(0, visibleThreadLimit)
+        let orderedSections: [MenubarProjectSectionSnapshot]
+
+        if sections.count > visibleProjectLimit {
+            orderedSections = sections.sorted(by: Self.isHigherPriorityProjectSection)
+        } else {
+            orderedSections = sections
+        }
+
+        let limitedSections = Array(orderedSections.prefix(visibleProjectLimit))
 
         return limitedSections.map { section in
-            let limitedThreads = Array(section.threads.prefix(max(0, visibleThreadLimit)))
-            let visibleThreadIDs = Set(limitedThreads.map(\.id))
-            let limitedThreadGroups = section.threadGroups.filter { visibleThreadIDs.contains($0.id) }
+            let orderedThreads: [MenubarThreadSnapshot]
+            if section.threads.count > visibleThreadLimit {
+                orderedThreads = Self.prioritizedThreads(in: section)
+            } else {
+                orderedThreads = section.threads
+            }
+
+            let limitedThreads = Array(orderedThreads.prefix(visibleThreadLimit))
+            let threadGroupsByID = Dictionary(uniqueKeysWithValues: section.threadGroups.map { ($0.id, $0) })
+            let limitedThreadGroups = limitedThreads.compactMap { threadGroupsByID[$0.id] }
 
             return MenubarProjectSectionSnapshot(
                 section: AppStateStore.ProjectSection(
@@ -607,6 +667,79 @@ final class MenubarController {
         }
     }
 
+    private static func isHigherPriorityProjectSection(
+        _ lhs: MenubarProjectSectionSnapshot,
+        _ rhs: MenubarProjectSectionSnapshot
+    ) -> Bool {
+        let lhsRank = visibilityPriority(for: lhs)
+        let rhsRank = visibilityPriority(for: rhs)
+
+        if lhsRank != rhsRank {
+            return lhsRank > rhsRank
+        }
+
+        if lhs.section.latestUpdatedAt == rhs.section.latestUpdatedAt {
+            return lhs.section.displayName.localizedCaseInsensitiveCompare(rhs.section.displayName) == .orderedAscending
+        }
+
+        return lhs.section.latestUpdatedAt > rhs.section.latestUpdatedAt
+    }
+
+    private static func prioritizedThreads(in section: MenubarProjectSectionSnapshot) -> [MenubarThreadSnapshot] {
+        let threadGroupsByID = Dictionary(uniqueKeysWithValues: section.threadGroups.map { ($0.id, $0) })
+
+        return section.threads.sorted { lhs, rhs in
+            let lhsRank = visibilityPriority(
+                for: lhs,
+                childThreads: threadGroupsByID[lhs.id]?.childThreads ?? []
+            )
+            let rhsRank = visibilityPriority(
+                for: rhs,
+                childThreads: threadGroupsByID[rhs.id]?.childThreads ?? []
+            )
+
+            if lhsRank != rhsRank {
+                return lhsRank > rhsRank
+            }
+
+            return isNewerThread(lhs.thread, rhs.thread)
+        }
+    }
+
+    private static func visibilityPriority(for section: MenubarProjectSectionSnapshot) -> Int {
+        let threadGroupsByID = Dictionary(uniqueKeysWithValues: section.threadGroups.map { ($0.id, $0) })
+
+        return section.threads.map { thread in
+            visibilityPriority(
+                for: thread,
+                childThreads: threadGroupsByID[thread.id]?.childThreads ?? []
+            )
+        }.max() ?? 0
+    }
+
+    private static func visibilityPriority(
+        for threadSnapshot: MenubarThreadSnapshot,
+        childThreads: [MenubarThreadSnapshot] = []
+    ) -> Int {
+        max(
+            visibilityPriority(for: threadSnapshot.thread),
+            childThreads.map { visibilityPriority(for: $0.thread) }.max() ?? 0
+        )
+    }
+
+    private static func visibilityPriority(for thread: AppStateStore.ThreadRow) -> Int {
+        switch thread.presentationStatus {
+        case .waitingForUser:
+            return 3
+        case .running:
+            return 2
+        case .failed:
+            return 1
+        case .idle, .notLoaded:
+            return 0
+        }
+    }
+
     private func makeThreadSnapshot(_ thread: AppStateStore.ThreadRow) -> MenubarThreadSnapshot {
         MenubarThreadSnapshot(
             thread: thread,
@@ -615,5 +748,36 @@ final class MenubarController {
                 lastTerminalActivityAt: thread.lastTerminalActivityAt
             )
         )
+    }
+
+    private func displayedOverallStatus(
+        snapshotSections: [MenubarProjectSectionSnapshot]
+    ) -> AppStateStore.OverallStatus {
+        if state.connection == .connecting {
+            return .connecting
+        }
+
+        let displayedMainThreads = snapshotSections
+            .flatMap(\.threads)
+            .map(\.thread)
+            .filter { !$0.isSubagent }
+
+        if displayedMainThreads.contains(where: { $0.presentationStatus == .waitingForUser }) {
+            return .waitingForUser
+        }
+
+        if displayedMainThreads.contains(where: { $0.presentationStatus == .running }) {
+            return .running
+        }
+
+        if state.connection.isFailed {
+            return .failed
+        }
+
+        if displayedMainThreads.contains(where: { $0.presentationStatus == .failed }) {
+            return .failed
+        }
+
+        return .idle
     }
 }

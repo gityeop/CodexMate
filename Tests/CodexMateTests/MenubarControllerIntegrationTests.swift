@@ -75,6 +75,102 @@ final class MenubarControllerIntegrationTests: XCTestCase {
         XCTAssertEqual(snapshot.projectSections.map(\.section.displayName), ["A"])
     }
 
+    func testRefreshDesktopActivityDiscoversAndSeedsUnknownApprovalSubagent() async throws {
+        let controller = makeController(
+            desktopUpdates: [
+                desktopUpdate(
+                    runtimeSnapshot: CodexDesktopRuntimeSnapshot(
+                        activeTurnCount: 0,
+                        runningThreadIDs: [],
+                        approvalThreadIDs: ["child-thread"]
+                    )
+                )
+            ],
+            recentThreadResponses: [
+                [thread(id: "parent-thread", updatedAt: 100, cwd: "/tmp/A/work")]
+            ],
+            metadataResponses: [
+                .success([
+                    thread(id: "parent-thread", updatedAt: 100, cwd: "/tmp/A/work")
+                ]),
+                .success([
+                    subagentThread(
+                        id: "child-thread",
+                        updatedAt: 200,
+                        cwd: "/tmp/A/work",
+                        parentThreadID: "parent-thread",
+                        status: .active(flags: [.waitingOnApproval])
+                    )
+                ])
+            ],
+            projectCatalog: .success(
+                CodexDesktopProjectCatalog(workspaceRoots: [
+                    .init(path: "/tmp/A", displayName: "A")
+                ])
+            )
+        )
+
+        try await controller.loadInitialThreads()
+        let effects = await controller.refreshDesktopActivity()
+        let snapshot = controller.prepareSnapshot().snapshot
+
+        XCTAssertTrue(effects.shouldRequestThreadRefresh)
+        XCTAssertTrue(effects.shouldRequestDesktopActivityRefresh)
+        XCTAssertEqual(snapshot.projectSections.first?.threads.map(\.id), ["parent-thread"])
+        XCTAssertEqual(snapshot.projectSections.first?.threadGroups.first?.childThreads.map(\.id), ["child-thread"])
+        XCTAssertEqual(snapshot.projectSections.first?.threadGroups.first?.childThreads.first?.thread.displayStatus, .needsApproval)
+    }
+
+
+    func testRefreshThreadsPreservesSeededApprovalSubagentOutsideAuthoritativeRecentList() async throws {
+        let controller = makeController(
+            desktopUpdates: [
+                desktopUpdate(
+                    runtimeSnapshot: CodexDesktopRuntimeSnapshot(
+                        activeTurnCount: 0,
+                        runningThreadIDs: [],
+                        approvalThreadIDs: ["child-thread"]
+                    )
+                )
+            ],
+            recentThreadResponses: [
+                [thread(id: "parent-thread", updatedAt: 100, cwd: "/tmp/A/work")],
+                [thread(id: "parent-thread", updatedAt: 250, cwd: "/tmp/A/work")]
+            ],
+            metadataResponses: [
+                .success([
+                    thread(id: "parent-thread", updatedAt: 100, cwd: "/tmp/A/work")
+                ]),
+                .success([
+                    subagentThread(
+                        id: "child-thread",
+                        updatedAt: 200,
+                        cwd: "/tmp/A/work",
+                        parentThreadID: "parent-thread",
+                        status: .active(flags: [.waitingOnApproval])
+                    )
+                ]),
+                .success([
+                    thread(id: "parent-thread", updatedAt: 250, cwd: "/tmp/A/work")
+                ])
+            ],
+            projectCatalog: .success(
+                CodexDesktopProjectCatalog(workspaceRoots: [
+                    .init(path: "/tmp/A", displayName: "A")
+                ])
+            )
+        )
+
+        try await controller.loadInitialThreads()
+        _ = await controller.refreshDesktopActivity()
+        _ = try await controller.refreshThreads()
+        let snapshot = controller.prepareSnapshot().snapshot
+
+        XCTAssertEqual(snapshot.projectSections.first?.threads.map(\.id), ["parent-thread"])
+        XCTAssertEqual(snapshot.projectSections.first?.threadGroups.first?.childThreads.map(\.id), ["child-thread"])
+        XCTAssertEqual(snapshot.projectSections.first?.threadGroups.first?.childThreads.first?.thread.displayStatus, .needsApproval)
+    }
+
     func testRefreshDesktopActivityKeepsPendingDiscoveryWhenMetadataIsMissingUntilThreadRefreshResolvesIt() async throws {
         let controller = makeController(
             desktopUpdates: [
@@ -302,7 +398,8 @@ final class MenubarControllerIntegrationTests: XCTestCase {
         try await controller.loadInitialThreads()
         let snapshot = controller.prepareSnapshot().snapshot
 
-        XCTAssertEqual(controller.recentThreads.map(\.id), ["main-thread"])
+        XCTAssertEqual(controller.recentThreads.map(\.id), ["subagent-thread", "main-thread"])
+        XCTAssertEqual(controller.visibleRecentThreads.map(\.id), ["main-thread"])
         XCTAssertEqual(snapshot.projectSections.first?.threads.map(\.id), ["subagent-thread", "main-thread"])
         XCTAssertTrue(snapshot.projectSections.first?.threadGroups.isEmpty ?? false)
         XCTAssertTrue(snapshot.isWatchLatestThreadEnabled)
@@ -343,6 +440,40 @@ final class MenubarControllerIntegrationTests: XCTestCase {
         XCTAssertEqual(snapshot.projectSections.first?.threadGroups.first?.childThreads.map(\.id), ["child-thread"])
     }
 
+    func testSnapshotOverallStatusIgnoresWaitingSubagentWhenMainThreadIsIdle() async throws {
+        let controller = makeController(
+            recentThreadResponses: [
+                [thread(id: "parent-thread", updatedAt: 100, cwd: "/tmp/A/work")]
+            ],
+            projectCatalog: .success(
+                CodexDesktopProjectCatalog(workspaceRoots: [
+                    .init(path: "/tmp/A", displayName: "A")
+                ])
+            )
+        )
+
+        try await controller.loadInitialThreads()
+        controller.apply(notification: .threadStarted(
+            ThreadStartedNotification(
+                thread: subagentThread(
+                    id: "child-thread",
+                    updatedAt: 200,
+                    cwd: "/tmp/A/work",
+                    parentThreadID: "parent-thread",
+                    status: .active(flags: [.waitingOnUserInput])
+                )
+            )
+        ))
+        let snapshot = controller.prepareSnapshot().snapshot
+
+        XCTAssertEqual(snapshot.overallStatus, .idle)
+        XCTAssertEqual(snapshot.projectSections.first?.threads.first?.thread.displayStatus, .idle)
+        XCTAssertEqual(
+            snapshot.projectSections.first?.threadGroups.first?.childThreads.first?.thread.displayStatus,
+            .waitingForInput
+        )
+    }
+
     func testThreadStartedNotificationKeepsOrphanSubagentVisibleInSnapshot() async throws {
         let controller = makeController(
             recentThreadResponses: [
@@ -362,7 +493,8 @@ final class MenubarControllerIntegrationTests: XCTestCase {
 
         let snapshot = controller.prepareSnapshot().snapshot
 
-        XCTAssertEqual(controller.recentThreads.map(\.id), ["main-thread"])
+        XCTAssertEqual(controller.recentThreads.map(\.id), ["subagent-thread", "main-thread"])
+        XCTAssertEqual(controller.visibleRecentThreads.map(\.id), ["main-thread"])
         XCTAssertEqual(snapshot.projectSections.first?.threads.map(\.id), ["subagent-thread", "main-thread"])
         XCTAssertTrue(snapshot.projectSections.first?.threadGroups.isEmpty ?? false)
     }
@@ -387,6 +519,70 @@ final class MenubarControllerIntegrationTests: XCTestCase {
         let snapshot = controller.prepareSnapshot(visibleThreadLimit: 2).snapshot
 
         XCTAssertEqual(snapshot.projectSections.first?.threads.map(\.id), ["thread-c", "thread-b"])
+    }
+
+    func testPrepareSnapshotPrioritizesWaitingSubagentGroupOverNewerIdleThreadsAtTightLimit() async throws {
+        let controller = makeController(
+            recentThreadResponses: [
+                [
+                    thread(id: "idle-newest", updatedAt: 400, cwd: "/tmp/A/work"),
+                    thread(id: "idle-middle", updatedAt: 300, cwd: "/tmp/A/work"),
+                    thread(id: "parent-thread", updatedAt: 100, cwd: "/tmp/A/work"),
+                    subagentThread(
+                        id: "child-thread",
+                        updatedAt: 110,
+                        cwd: "/tmp/A/work",
+                        parentThreadID: "parent-thread",
+                        status: .active(flags: [.waitingOnApproval])
+                    )
+                ]
+            ],
+            projectCatalog: .success(
+                CodexDesktopProjectCatalog(workspaceRoots: [
+                    .init(path: "/tmp/A", displayName: "A")
+                ])
+            )
+        )
+
+        try await controller.loadInitialThreads()
+        let snapshot = controller.prepareSnapshot(visibleThreadLimit: 2).snapshot
+
+        XCTAssertEqual(snapshot.projectSections.first?.threads.map(\.id), ["parent-thread", "idle-newest"])
+        XCTAssertEqual(snapshot.projectSections.first?.threadGroups.first?.id, "parent-thread")
+        XCTAssertEqual(snapshot.projectSections.first?.threadGroups.first?.childThreads.map(\.id), ["child-thread"])
+    }
+
+    func testPrepareSnapshotPrioritizesProjectsWithAttentionWhenProjectLimitIsTight() async throws {
+        let controller = makeController(
+            recentThreadResponses: [
+                [
+                    thread(id: "idle-c", updatedAt: 300, cwd: "/tmp/C/work"),
+                    thread(id: "idle-b", updatedAt: 200, cwd: "/tmp/B/work"),
+                    thread(id: "parent-a", updatedAt: 100, cwd: "/tmp/A/work"),
+                    subagentThread(
+                        id: "child-a",
+                        updatedAt: 110,
+                        cwd: "/tmp/A/work",
+                        parentThreadID: "parent-a",
+                        status: .active(flags: [.waitingOnApproval])
+                    )
+                ]
+            ],
+            projectCatalog: .success(
+                CodexDesktopProjectCatalog(workspaceRoots: [
+                    .init(path: "/tmp/A", displayName: "A"),
+                    .init(path: "/tmp/B", displayName: "B"),
+                    .init(path: "/tmp/C", displayName: "C")
+                ])
+            )
+        )
+
+        try await controller.loadInitialThreads()
+        let snapshot = controller.prepareSnapshot(projectLimit: 2, visibleThreadLimit: 1).snapshot
+
+        XCTAssertEqual(snapshot.projectSections.map(\.section.displayName), ["A", "C"])
+        XCTAssertEqual(snapshot.projectSections.first?.threads.map(\.id), ["parent-a"])
+        XCTAssertEqual(snapshot.projectSections.first?.threadGroups.first?.childThreads.map(\.id), ["child-a"])
     }
 
     func testPrepareSnapshotAppliesProjectLimitOverride() async throws {
@@ -438,6 +634,48 @@ final class MenubarControllerIntegrationTests: XCTestCase {
         XCTAssertEqual(snapshot.projectSections.map(\.section.displayName), ["A", "B"])
         XCTAssertEqual(snapshot.projectSections.first?.threads.map(\.id), ["thread-a-2"])
         XCTAssertEqual(snapshot.projectSections.dropFirst().first?.threads.map(\.id), ["thread-b-1"])
+    }
+
+    func testLoadInitialThreadsFetchesFullTrackedWindowForInitialProjectCoverage() async throws {
+        let recentThreadListing = RecordingRecentThreadListing(threads: [
+            thread(id: "thread-a", updatedAt: 500, cwd: "/tmp/A/work"),
+            thread(id: "thread-b", updatedAt: 400, cwd: "/tmp/B/work"),
+            thread(id: "thread-c", updatedAt: 300, cwd: "/tmp/C/work"),
+            thread(id: "thread-d", updatedAt: 200, cwd: "/tmp/D/work"),
+            thread(id: "thread-e", updatedAt: 100, cwd: "/tmp/E/work")
+        ])
+        let controller = MenubarController(
+            desktopActivityLoader: FakeDesktopActivityLoader(updates: []),
+            recentThreadListing: recentThreadListing,
+            threadMetadataReader: FakeThreadMetadataReader(results: []),
+            projectCatalogLoader: FakeProjectCatalogLoader(
+                result: .success(
+                    CodexDesktopProjectCatalog(workspaceRoots: [
+                        .init(path: "/tmp/A", displayName: "A"),
+                        .init(path: "/tmp/B", displayName: "B"),
+                        .init(path: "/tmp/C", displayName: "C"),
+                        .init(path: "/tmp/D", displayName: "D"),
+                        .init(path: "/tmp/E", displayName: "E")
+                    ])
+                )
+            ),
+            configuration: MenubarControllerConfiguration(
+                initialFetchLimit: 2,
+                maxTrackedThreads: 8,
+                projectLimit: 5,
+                visibleThreadLimit: 8,
+                maxPendingDiscoveredThreads: 64,
+                pendingDiscoveredThreadTTL: 120,
+                threadReadMarkerRetentionSeconds: 30 * 24 * 60 * 60
+            )
+        )
+
+        try await controller.loadInitialThreads()
+        let snapshot = controller.prepareSnapshot().snapshot
+        let requestedLimits = await recentThreadListing.requestedLimits()
+
+        XCTAssertEqual(requestedLimits, [8])
+        XCTAssertEqual(snapshot.projectSections.map(\.section.displayName), ["A", "B", "C", "D", "E"])
     }
 
     private func makeController(
@@ -503,11 +741,18 @@ final class MenubarControllerIntegrationTests: XCTestCase {
         )
     }
 
-    private func subagentThread(id: String, updatedAt: Int, cwd: String, parentThreadID: String = "parent-thread") -> CodexThread {
+    private func subagentThread(
+        id: String,
+        updatedAt: Int,
+        cwd: String,
+        parentThreadID: String = "parent-thread",
+        status: CodexThreadStatus = .idle
+    ) -> CodexThread {
         thread(
             id: id,
             updatedAt: updatedAt,
             cwd: cwd,
+            status: status,
             source: #"{"subagent":{"thread_spawn":{"parent_thread_id":"\#(parentThreadID)","depth":1,"agent_nickname":"Harvey","agent_role":"explorer"}}}"#,
             agentRole: "explorer",
             agentNickname: "Harvey"
@@ -549,6 +794,24 @@ private actor FakeRecentThreadListing: RecentThreadListing {
         }
 
         return responses.removeFirst()
+    }
+}
+
+private actor RecordingRecentThreadListing: RecentThreadListing {
+    private let threads: [CodexThread]
+    private var requested: [Int] = []
+
+    init(threads: [CodexThread]) {
+        self.threads = threads
+    }
+
+    func recentThreads(limit: Int) async throws -> [CodexThread] {
+        requested.append(limit)
+        return Array(threads.prefix(limit))
+    }
+
+    func requestedLimits() -> [Int] {
+        requested
     }
 }
 

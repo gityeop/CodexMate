@@ -207,6 +207,23 @@ final class NotchStatusOverlayKeyboardNavigationTests: XCTestCase {
         XCTAssertEqual(activationCount, 1)
     }
 
+    func testMenuItemsPassIndicatorTextToOverlayRows() throws {
+        let view = NotchStatusOverlayView(frame: NSRect(x: 0, y: 0, width: 520, height: 220))
+        view.setMenuItems([
+            .item(primaryText: "Ptolemy: Approval needed", indicatorText: "💬", indicatorImage: nil, onSelect: {}),
+        ])
+        view.menuExpansionProgress = 1
+        view.prepareForMenuOpen()
+        view.layoutSubtreeIfNeeded()
+
+        let row = try XCTUnwrap(allRowViews(in: view).first)
+        let labels = row.subviews.compactMap { $0 as? NSTextField }
+        XCTAssertTrue(labels.contains(where: { $0.stringValue == "💬" && !$0.isHidden }))
+
+        let imageView = try XCTUnwrap(row.subviews.compactMap { $0 as? NSImageView }.first)
+        XCTAssertTrue(imageView.isHidden)
+    }
+
     func testControllerKeyboardRoutingHandlesArrowNavigationAndReturnWithoutFirstResponder() throws {
         let expectation = expectation(description: "controller-selected row activates")
         var activationCount = 0
@@ -269,7 +286,7 @@ final class NotchStatusOverlayKeyboardNavigationTests: XCTestCase {
     }
 
 
-    func testManualScrollKeepsHoverSuppressedUntilScrollSettles() throws {
+    func testManualScrollRequiresPointerMovementAfterScrollSettlesToRestoreHover() throws {
         let view = NotchStatusOverlayView(frame: NSRect(x: 0, y: 0, width: 520, height: 220))
         view.setMenuItems([
             .item(primaryText: "Thread 1", onSelect: {}),
@@ -296,6 +313,9 @@ final class NotchStatusOverlayKeyboardNavigationTests: XCTestCase {
         let settleExpectation = expectation(description: "hover resumes after scroll settles")
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
             XCTAssertEqual(hoveredLabel.textColor, initialTextColor)
+            hoveredRow.mouseEntered(with: moveEvent)
+            XCTAssertEqual(hoveredLabel.textColor, initialTextColor)
+            view.resumeRowHoverAfterPointerMovement()
             hoveredRow.mouseMoved(with: moveEvent)
             XCTAssertNotEqual(hoveredLabel.textColor, initialTextColor)
             settleExpectation.fulfill()
@@ -451,7 +471,13 @@ final class NotchStatusOverlayKeyboardNavigationTests: XCTestCase {
             allRowViews(in: view).first(where: { $0.isHighlighted })
         )
         let titleLabel = try XCTUnwrap(
-            selectedRow.subviews.compactMap { $0 as? NSTextField }.first
+            selectedRow.subviews
+                .compactMap { $0 as? NSTextField }
+                .first(where: {
+                    !$0.isHidden &&
+                    !$0.stringValue.isEmpty &&
+                    !["💬", "🔵", "⏳", "⚠️"].contains($0.stringValue)
+                })
         )
         return titleLabel.stringValue
     }

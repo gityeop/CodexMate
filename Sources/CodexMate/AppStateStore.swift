@@ -3,12 +3,22 @@ import Foundation
 struct AppStateStore {
     private static let inferredActiveTurnID = "__inferred_active_turn__"
     private static let watchedRunningReconciliationGraceInterval: TimeInterval = 5
+    private static let watchedPendingReconciliationGraceInterval: TimeInterval = 5
+    private static let watchedFailedReconciliationGraceInterval: TimeInterval = 5
 
     enum ConnectionState: Equatable {
         case disconnected
         case connecting
         case connected(binaryPath: String)
         case failed(message: String)
+
+        var isFailed: Bool {
+            if case .failed = self {
+                return true
+            }
+
+            return false
+        }
     }
 
     enum OverallStatus: Equatable {
@@ -136,6 +146,7 @@ struct AppStateStore {
         var sessionPath: String? = nil
         var isSubagent = false
         var parentThreadID: String? = nil
+        var agentNickname: String? = nil
         var status: ThreadStatus
         var listedStatus: ThreadStatus
         var updatedAt: Date
@@ -247,13 +258,8 @@ struct AppStateStore {
     }
 
     var overallStatus: OverallStatus {
-        switch connection {
-        case .connecting:
+        if connection == .connecting {
             return .connecting
-        case .failed:
-            return .failed
-        case .disconnected, .connected:
-            break
         }
 
         let threads = recentThreads
@@ -272,6 +278,10 @@ struct AppStateStore {
 
         if desktopActiveTurnCount > 0 {
             return .running
+        }
+
+        if connection.isFailed {
+            return .failed
         }
 
         if threads.contains(where: {
@@ -363,6 +373,7 @@ struct AppStateStore {
             row.sessionPath = thread.path
             row.isSubagent = thread.isSubagent
             row.parentThreadID = thread.subagentParentThreadID
+            row.agentNickname = thread.agentNickname
 
             let newStatus = ThreadStatus(threadStatus: thread.status)
             row.listedStatus = newStatus
@@ -396,7 +407,11 @@ struct AppStateStore {
             updatedThreads[thread.id] = row
         }
 
-        for (threadID, row) in threadsByID where row.isWatched && updatedThreads[threadID] == nil {
+        for (threadID, row) in threadsByID where updatedThreads[threadID] == nil {
+            guard Self.shouldRetainThreadOutsideAuthoritativeList(row) else {
+                continue
+            }
+
             updatedThreads[threadID] = row
         }
 
@@ -415,6 +430,7 @@ struct AppStateStore {
         row.sessionPath = thread.path
         row.isSubagent = thread.isSubagent
         row.parentThreadID = thread.subagentParentThreadID
+        row.agentNickname = thread.agentNickname
         let newStatus = ThreadStatus(threadStatus: thread.status)
         if existingRow == nil {
             row.updatedAt = incomingUpdatedAt
@@ -451,6 +467,7 @@ struct AppStateStore {
         row.sessionPath = thread.path
         row.isSubagent = thread.isSubagent
         row.parentThreadID = thread.subagentParentThreadID
+        row.agentNickname = thread.agentNickname
 
         let newStatus = ThreadStatus(threadStatus: thread.status)
         row.listedStatus = newStatus
@@ -538,6 +555,10 @@ struct AppStateStore {
         reconcilePendingThreads(
             pendingThreadIDs: desktopSnapshot.waitingForInputThreadIDs.union(desktopSnapshot.approvalThreadIDs),
             runningThreadIDs: desktopSnapshot.runningThreadIDs,
+            observedAt: observedAt
+        )
+        reconcileFailedThreads(
+            failedThreadIDs: Set(desktopSnapshot.failedThreads.keys),
             observedAt: observedAt
         )
         overlayFailedThreads(desktopSnapshot.failedThreads)
@@ -638,7 +659,7 @@ struct AppStateStore {
                 continue
             }
 
-            guard Self.shouldAcceptDesktopPendingSync(for: row) else {
+            guard Self.shouldAcceptDesktopPendingReconciliation(for: row, observedAt: observedAt) else {
                 continue
             }
 
@@ -662,6 +683,49 @@ struct AppStateStore {
             threadsByID[threadID] = row
             recordDiagnostic("cleared stale pending thread=\(shortThreadID(threadID)) from=\(previousStatus.displayName) to=\(row.displayStatus.displayName) via desktop snapshot")
         }
+    }
+
+    private mutating func reconcileFailedThreads(
+        failedThreadIDs: Set<String>,
+        observedAt: Date = Date()
+    ) {
+        for threadID in threadsByID.keys.sorted() {
+            guard var row = threadsByID[threadID],
+                  row.presentationStatus == .failed,
+                  !failedThreadIDs.contains(threadID),
+                  Self.shouldAcceptDesktopFailedSync(for: row, observedAt: observedAt)
+            else {
+                continue
+            }
+
+            let previousStatus = row.displayStatus
+            row.status = row.listedStatus
+            row.pendingRequestKind = nil
+            row.pendingRequestReason = nil
+            row.runtimePhase = .none
+            row.lastRuntimeEventAt = max(row.lastRuntimeEventAt ?? .distantPast, observedAt)
+            row.statusUpdatedAt = max(row.statusUpdatedAt, observedAt)
+            threadsByID[threadID] = row
+
+            guard row.displayStatus != previousStatus else { continue }
+            recordDiagnostic("cleared stale failed thread=\(shortThreadID(threadID)) from=\(previousStatus.displayName) to=\(row.displayStatus.displayName) via desktop snapshot")
+        }
+    }
+
+    private static func shouldAcceptDesktopFailedSync(for row: ThreadRow, observedAt: Date) -> Bool {
+        guard observedAt >= (row.lastRuntimeEventAt ?? .distantPast) else {
+            return false
+        }
+
+        if case .failed = row.listedStatus {
+            return false
+        }
+
+        if row.isWatched {
+            return observedAt.timeIntervalSince(row.lastRuntimeEventAt ?? .distantPast) >= watchedFailedReconciliationGraceInterval
+        }
+
+        return true
     }
 
     private mutating func overlayPendingThreads(_ threadIDs: Set<String>, status: ThreadStatus, observedAt: Date = Date()) {
@@ -688,15 +752,37 @@ struct AppStateStore {
             return false
         }
 
-        return shouldAcceptDesktopPendingSync(for: row)
+        return shouldAcceptDesktopPendingOverlaySync(for: row)
     }
 
-    private static func shouldAcceptDesktopPendingSync(for row: ThreadRow) -> Bool {
+    private static func shouldAcceptDesktopPendingOverlaySync(for row: ThreadRow) -> Bool {
         guard row.isWatched else {
             return true
         }
 
         return row.sessionPath != nil
+    }
+
+    private static func shouldAcceptDesktopPendingReconciliation(for row: ThreadRow, observedAt: Date) -> Bool {
+        guard observedAt >= (row.lastRuntimeEventAt ?? .distantPast) else {
+            return false
+        }
+
+        guard row.isWatched else {
+            return true
+        }
+
+        if row.sessionPath != nil {
+            return true
+        }
+
+        guard !row.listedStatus.isPending else {
+            return false
+        }
+
+        // When a live resolution event is missed, desktop snapshots should eventually
+        // clear stale pending state even if the watched row lacks a session file path.
+        return observedAt.timeIntervalSince(row.lastRuntimeEventAt ?? .distantPast) >= watchedPendingReconciliationGraceInterval
     }
 
     private mutating func overlayFailedThreads(_ failures: [String: CodexDesktopRuntimeSnapshot.FailedThreadState]) {
@@ -790,6 +876,7 @@ struct AppStateStore {
             row.sessionPath = notification.thread.path
             row.isSubagent = notification.thread.isSubagent
             row.parentThreadID = notification.thread.subagentParentThreadID
+            row.agentNickname = notification.thread.agentNickname
             row.updatedAt = max(row.updatedAt, observedAt)
             row.statusUpdatedAt = max(row.statusUpdatedAt, observedAt)
             let runtimeStatus = ThreadStatus(threadStatus: notification.thread.status)
@@ -1123,6 +1210,19 @@ struct AppStateStore {
         }
     }
 
+    private static func shouldRetainThreadOutsideAuthoritativeList(_ row: ThreadRow) -> Bool {
+        guard !row.isWatched else {
+            return true
+        }
+
+        switch row.presentationStatus {
+        case .waitingForUser, .running, .failed:
+            return true
+        case .idle, .notLoaded:
+            return false
+        }
+    }
+
     private func maxProjectsExcludingPriority(maxProjects: Int, priorityProjectIDs: Set<String>) -> Int {
         guard maxProjects != .max else { return .max }
         return max(0, maxProjects - priorityProjectIDs.count)
@@ -1193,6 +1293,7 @@ private extension AppStateStore.ThreadRow {
         self.sessionPath = thread.path
         self.isSubagent = thread.isSubagent
         self.parentThreadID = thread.subagentParentThreadID
+        self.agentNickname = thread.agentNickname
         self.status = initialStatus
         self.listedStatus = initialStatus
         self.updatedAt = thread.updatedDate

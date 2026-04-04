@@ -175,6 +175,50 @@ final class ThreadDropdownMenuRowViewTests: XCTestCase {
         XCTAssertEqual(plainTitleLabel.frame.minX, imageTitleLabel.frame.minX)
     }
 
+
+    func testIndicatorTextDisplaysEmojiWithoutImage() throws {
+        let view = ThreadDropdownMenuRowView(frame: NSRect(x: 0, y: 0, width: 280, height: 22))
+        view.configure(
+            title: "Thread title",
+            indicatorText: "💬",
+            indicatorImage: nil,
+            indentationLevel: 0,
+            isExpandable: false,
+            isExpanded: false,
+            onOpen: {},
+            onToggle: nil
+        )
+        view.layoutSubtreeIfNeeded()
+
+        let labels = view.subviews.compactMap { $0 as? NSTextField }
+        XCTAssertTrue(labels.contains(where: { $0.stringValue == "💬" && !$0.isHidden }))
+
+        let imageView = try XCTUnwrap(view.subviews.compactMap { $0 as? NSImageView }.first)
+        XCTAssertTrue(imageView.isHidden)
+    }
+
+    func testIndicatorImageTakesPrecedenceOverTextFallback() throws {
+        let view = ThreadDropdownMenuRowView(frame: NSRect(x: 0, y: 0, width: 280, height: 22))
+        let indicatorImage = NSImage(size: NSSize(width: 8, height: 8))
+        view.configure(
+            title: "Thread title",
+            indicatorText: "💬",
+            indicatorImage: indicatorImage,
+            indentationLevel: 0,
+            isExpandable: false,
+            isExpanded: false,
+            onOpen: {},
+            onToggle: nil
+        )
+
+        let imageView = try XCTUnwrap(view.subviews.compactMap { $0 as? NSImageView }.first)
+        let labels = view.subviews.compactMap { $0 as? NSTextField }
+        let indicatorLabel = try XCTUnwrap(labels.first(where: { $0.stringValue == "💬" }))
+
+        XCTAssertFalse(imageView.isHidden)
+        XCTAssertTrue(indicatorLabel.isHidden)
+    }
+
     func testIndicatorSlotAndTitleStayVerticallyCentered() throws {
         let view = ThreadDropdownMenuRowView(frame: NSRect(x: 0, y: 0, width: 280, height: 22))
         view.configure(

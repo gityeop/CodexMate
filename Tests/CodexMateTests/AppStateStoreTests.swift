@@ -469,6 +469,32 @@ final class AppStateStoreTests: XCTestCase {
         XCTAssertEqual(store.recentThreads.first?.updatedAt, Date(timeIntervalSince1970: 250))
     }
 
+    func testReplaceRecentThreadsPreservesUnwatchedApprovalThreadOutsideAuthoritativeList() throws {
+        var store = AppStateStore()
+        store.replaceRecentThreads(with: [
+            thread(id: "parent-thread", updatedAt: 150, status: .idle, cwd: "/tmp/project"),
+            thread(id: "child-thread", updatedAt: 100, status: .idle, cwd: "/tmp/project", path: "/tmp/child-thread.jsonl")
+        ])
+
+        store.apply(
+            desktopSnapshot: CodexDesktopRuntimeSnapshot(
+                activeTurnCount: 0,
+                runningThreadIDs: [],
+                approvalThreadIDs: ["child-thread"]
+            ),
+            observedAt: Date(timeIntervalSince1970: 200)
+        )
+
+        store.replaceRecentThreads(with: [
+            thread(id: "parent-thread", updatedAt: 250, status: .idle, cwd: "/tmp/project")
+        ])
+
+        let child = try XCTUnwrap(store.recentThreads.first(where: { $0.id == "child-thread" }))
+        XCTAssertEqual(Set(store.recentThreads.map(\.id)), ["parent-thread", "child-thread"])
+        XCTAssertEqual(child.displayStatus, .needsApproval)
+        XCTAssertEqual(child.sessionPath, "/tmp/child-thread.jsonl")
+    }
+
     func testDesktopPendingOverlayUpdatesUnwatchedThreadFromNotLoaded() {
         var store = AppStateStore()
         store.replaceRecentThreads(with: [thread(id: "thread-1", updatedAt: 100, status: .notLoaded)])
@@ -530,6 +556,67 @@ final class AppStateStoreTests: XCTestCase {
         )
 
         XCTAssertEqual(store.recentThreads.first?.status, .running)
+    }
+
+    func testDesktopSnapshotClearsUnwatchedFailedWhenFailureDisappears() {
+        var store = AppStateStore()
+        store.replaceRecentThreads(with: [thread(id: "thread-1", updatedAt: 100, status: .notLoaded)])
+
+        store.apply(
+            desktopSnapshot: CodexDesktopRuntimeSnapshot(
+                activeTurnCount: 0,
+                runningThreadIDs: [],
+                failedThreads: [
+                    "thread-1": .init(
+                        message: "Turn error: stream disconnected before completion",
+                        loggedAt: Date(timeIntervalSince1970: 200)
+                    )
+                ]
+            ),
+            observedAt: Date(timeIntervalSince1970: 200)
+        )
+
+        XCTAssertEqual(store.overallStatus, .failed)
+        XCTAssertEqual(
+            store.recentThreads.first?.displayStatus,
+            .failed(message: "Turn error: stream disconnected before completion")
+        )
+
+        store.apply(
+            desktopSnapshot: CodexDesktopRuntimeSnapshot(
+                activeTurnCount: 0,
+                runningThreadIDs: []
+            ),
+            observedAt: Date(timeIntervalSince1970: 300)
+        )
+
+        XCTAssertEqual(store.overallStatus, .idle)
+        XCTAssertEqual(store.recentThreads.first?.displayStatus, .notLoaded)
+        XCTAssertEqual(store.lastDiagnostic, "cleared stale failed thread=thread-1 from=Failed to=Not loaded via desktop snapshot")
+    }
+
+    func testDesktopSnapshotClearsWatchedFailedWhenFailureDisappearsAfterGraceInterval() {
+        var store = AppStateStore()
+        store.replaceRecentThreads(with: [thread(id: "thread-1", updatedAt: 100, status: .idle)])
+        store.markWatched(thread: thread(id: "thread-1", updatedAt: 100, status: .idle))
+
+        store.apply(notification: .threadStatusChanged(
+            ThreadStatusChangedNotification(threadId: "thread-1", status: .systemError)
+        ))
+
+        XCTAssertEqual(store.recentThreads.first?.displayStatus, .failed(message: nil))
+
+        store.apply(
+            desktopSnapshot: CodexDesktopRuntimeSnapshot(
+                activeTurnCount: 0,
+                runningThreadIDs: []
+            ),
+            observedAt: Date().addingTimeInterval(10)
+        )
+
+        XCTAssertEqual(store.overallStatus, .idle)
+        XCTAssertEqual(store.recentThreads.first?.displayStatus, .idle)
+        XCTAssertEqual(store.lastDiagnostic, "cleared stale failed thread=thread-1 from=Failed to=Idle via desktop snapshot")
     }
 
     func testDesktopSnapshotClearsUnwatchedWaitingWhenPendingDisappears() {
@@ -1000,6 +1087,26 @@ final class AppStateStoreTests: XCTestCase {
         XCTAssertEqual(store.overallStatus, .waitingForUser)
     }
 
+    func testDesktopSnapshotClearsWatchedWaitingWithoutSessionPathAfterGraceWhenPendingDisappears() {
+        var store = AppStateStore()
+        store.markWatched(thread: thread(id: "thread-1", updatedAt: 100, status: .idle))
+        store.apply(serverRequest: .toolUserInput(
+            ToolRequestUserInputRequest(threadId: "thread-1", turnId: "turn-1", itemId: "item-1")
+        ))
+
+        store.apply(
+            desktopSnapshot: CodexDesktopRuntimeSnapshot(
+                activeTurnCount: 0,
+                runningThreadIDs: []
+            ),
+            observedAt: Date().addingTimeInterval(6)
+        )
+
+        XCTAssertEqual(store.overallStatus, .idle)
+        XCTAssertEqual(store.recentThreads.first?.displayStatus, .idle)
+        XCTAssertNil(store.recentThreads.first?.pendingRequestKind)
+    }
+
     func testDesktopSnapshotMarksWatchedThreadWaitingWhenSessionPathExists() {
         var store = AppStateStore()
         store.markWatched(thread: thread(
@@ -1325,6 +1432,26 @@ final class AppStateStoreTests: XCTestCase {
 
         XCTAssertEqual(store.overallStatus, .failed)
         XCTAssertEqual(store.recentThreads.first?.status, .failed(message: nil))
+    }
+
+    func testConnectionFailureDoesNotMaskRunningThreadStatus() {
+        var store = AppStateStore()
+        store.setConnection(.failed(message: "Codex app-server exited with status 1"))
+        store.replaceRecentThreads(with: [
+            thread(id: "thread-1", updatedAt: 100, status: .active(flags: []))
+        ])
+
+        XCTAssertEqual(store.overallStatus, .running)
+    }
+
+    func testConnectionFailureDoesNotMaskWaitingThreadStatus() {
+        var store = AppStateStore()
+        store.setConnection(.failed(message: "Codex app-server exited with status 1"))
+        store.replaceRecentThreads(with: [
+            thread(id: "thread-1", updatedAt: 100, status: .active(flags: [.waitingOnUserInput]))
+        ])
+
+        XCTAssertEqual(store.overallStatus, .waitingForUser)
     }
 
     func testFailedThreadsReturnsNewestFailuresFirst() {

@@ -17,6 +17,7 @@ struct NotchStatusOverlayMenuEntry {
     let primaryText: String
     let secondaryText: String?
     let identifier: String?
+    let indicatorText: String?
     let indicatorImage: NSImage?
     let projectIndex: Int?
     let indentationLevel: Int
@@ -27,6 +28,7 @@ struct NotchStatusOverlayMenuEntry {
         primaryText: String,
         secondaryText: String? = nil,
         identifier: String? = nil,
+        indicatorText: String? = nil,
         indicatorImage: NSImage? = nil,
         projectIndex: Int? = nil,
         indentationLevel: Int = 0,
@@ -38,6 +40,7 @@ struct NotchStatusOverlayMenuEntry {
             primaryText: primaryText,
             secondaryText: secondaryText,
             identifier: identifier,
+            indicatorText: indicatorText,
             indicatorImage: indicatorImage,
             projectIndex: projectIndex,
             indentationLevel: indentationLevel,
@@ -52,6 +55,7 @@ struct NotchStatusOverlayMenuEntry {
             primaryText: text,
             secondaryText: nil,
             identifier: nil,
+            indicatorText: nil,
             indicatorImage: nil,
             projectIndex: nil,
             indentationLevel: 0,
@@ -66,6 +70,7 @@ struct NotchStatusOverlayMenuEntry {
             primaryText: "",
             secondaryText: nil,
             identifier: nil,
+            indicatorText: nil,
             indicatorImage: nil,
             projectIndex: nil,
             indentationLevel: 0,
@@ -361,6 +366,9 @@ final class NotchStatusOverlayController {
 
         switch type {
         case .mouseMoved:
+            if isMenuExpanded, containsExpandedMenu(screenPoint: screenPoint) {
+                overlayView.resumeRowHoverAfterPointerMovement()
+            }
             updateCollapsedHoverState(screenPoint: screenPoint)
         case .leftMouseUp, .rightMouseUp, .otherMouseUp:
             updateCollapsedHoverState(screenPoint: screenPoint)
@@ -911,6 +919,7 @@ final class NotchStatusOverlayView: NSView {
                 rowView.configure(
                     title: item.primaryText,
                     secondaryText: item.secondaryText,
+                    indicatorText: item.indicatorText,
                     indicatorImage: item.indicatorImage,
                     indentationLevel: item.indentationLevel,
                     isExpandable: false,
@@ -1211,11 +1220,19 @@ final class NotchStatusOverlayView: NSView {
         let workItem = DispatchWorkItem { [weak self] in
             guard let self else { return }
             self.rowHoverResumeWorkItem = nil
-            self.suppressesRowHoverDuringScroll = false
-            self.applyRowHighlights()
         }
         rowHoverResumeWorkItem = workItem
         DispatchQueue.main.asyncAfter(deadline: .now() + HoverSuppressionPolicy.resumeDelay, execute: workItem)
+    }
+
+    func resumeRowHoverAfterPointerMovement() {
+        guard suppressesRowHoverDuringScroll,
+              rowHoverResumeWorkItem == nil else {
+            return
+        }
+
+        suppressesRowHoverDuringScroll = false
+        applyRowHighlights()
     }
 
     private func clearKeyboardSelectionForManualScroll() {

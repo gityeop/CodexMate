@@ -3,17 +3,6 @@ import Combine
 import KeyboardShortcuts
 import UserNotifications
 
-private struct ThreadMenuSection {
-    let displayName: String
-    let threadCount: Int
-    let threads: [ThreadMenuThread]
-}
-
-private struct ThreadMenuThread {
-    let thread: AppStateStore.ThreadRow
-    let children: [ThreadMenuThread]
-}
-
 private final class CodexHomeStore: @unchecked Sendable {
     private let lock = NSLock()
     private var codexDirectoryURL: URL
@@ -128,7 +117,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     )
     private lazy var recentThreadListing = FallbackRecentThreadListing(
         primary: appServerRecentThreadListing,
-        fallback: desktopStateReader
+        fallback: DesktopStateRecentThreadListing(reader: desktopStateReader)
     )
     private lazy var controller = MenubarController(
         desktopActivityLoader: desktopActivityService,
@@ -595,14 +584,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             requestDesktopActivityRefresh()
             requestInitialSubscriptionWarmup()
         } catch {
+            controller.recordDiagnostic("Initial app-server connection failed; continuing desktop-state refresh via fallback")
             controller.setConnection(.failed(message: error.localizedDescription))
             renderMenu()
+            scheduleRefreshTimerIfNeeded()
+            requestDesktopActivityRefresh()
+            requestThreadRefresh()
         }
     }
 
     private func refreshThreads() async throws {
         let effects = try await controller.refreshThreads()
-        markConnectionHealthy()
+        if await client.isConnected() {
+            markConnectionHealthy()
+        }
         applyControllerEffects(effects)
         await reconcileLiveSubscriptions()
         renderMenu()
@@ -610,24 +605,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func loadInitialThreads() async throws {
         try await controller.loadInitialThreads()
-        markConnectionHealthy()
+        if await client.isConnected() {
+            markConnectionHealthy()
+        }
         renderMenu()
     }
 
     private func watchLatestThread() async {
-        guard let thread = controller.recentThreads.first else { return }
+        guard let thread = controller.visibleRecentThreads.first ?? controller.recentThreads.first else { return }
 
         await resumeThreadSubscriptions([thread.id])
         renderMenu()
     }
 
     private func handleClientTermination(reason: String?) {
-        invalidateTimers()
         liveSubscribedThreadUpdatedAtByID.removeAll()
-        controller.clearLiveRuntimeState()
 
         let message = reason ?? "app-server process exited"
+        controller.recordDiagnostic("app-server terminated; continuing desktop-state refresh via fallback")
         controller.setConnection(.failed(message: message))
+        scheduleRefreshTimerIfNeeded()
+        requestDesktopActivityRefresh()
+        requestThreadRefresh()
         renderMenu()
     }
 
@@ -1015,10 +1014,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             visibleThreadLimit: preferences.threadsPerProjectLimit
         )
         let snapshot = preparedSnapshot.snapshot
-        let menuSections = buildThreadMenuSections(
+        let menuSections = ThreadMenuBuilder.build(
             snapshotSections: snapshot.projectSections,
             recentThreads: controller.recentThreads,
-            projectCatalog: controller.projectCatalog
+            projectCatalog: controller.projectCatalog,
+            projectLimit: preferences.projectLimit,
+            visibleThreadLimit: preferences.threadsPerProjectLimit
         )
         var threadProjectIndexByThreadID: [String: Int] = [:]
         for (index, section) in menuSections.enumerated() {
@@ -1153,6 +1154,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let action = item.action
         let target = item.target
         let indicatorImage = item.image
+        let indicatorText = overlayIndicatorText(for: indicatorImage)
         let indentationLevel = item.indentationLevel
         let isEnabled = item.isEnabled
         let representedThreadID = item.representedObject as? String
@@ -1197,6 +1199,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             primaryText: splitTitle.primary,
             secondaryText: splitTitle.secondary,
             identifier: representedThreadID,
+            indicatorText: indicatorText,
             indicatorImage: indicatorImage,
             projectIndex: projectIndex,
             indentationLevel: indentationLevel,
@@ -1240,179 +1243,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return item
     }
 
-    private func buildThreadMenuSections(
-        snapshotSections: [MenubarProjectSectionSnapshot],
-        recentThreads: [AppStateStore.ThreadRow],
-        projectCatalog: CodexDesktopProjectCatalog
-    ) -> [ThreadMenuSection] {
-        guard !recentThreads.isEmpty else {
-            return []
-        }
-
-        let threadByID = Dictionary(uniqueKeysWithValues: recentThreads.map { ($0.id, $0) })
-        let parentIDByThreadID: [String: String] = Dictionary(uniqueKeysWithValues: recentThreads.compactMap { thread in
-            guard let parentID = thread.parentThreadID else {
-                return nil
-            }
-
-            return (thread.id, parentID)
-        })
-
-        if snapshotSections.isEmpty {
-            let sectionsByProjectID = Dictionary(grouping: recentThreads) { thread in
-                projectCatalog.project(for: thread.cwd).id
-            }
-
-            return sectionsByProjectID.keys.sorted().compactMap { projectID -> ThreadMenuSection? in
-                guard let sectionThreads = sectionsByProjectID[projectID], !sectionThreads.isEmpty else {
-                    return nil
-                }
-
-                let displayName = projectCatalog.project(for: sectionThreads[0].cwd).displayName
-                let rootThreads = sectionRootThreads(
-                    allThreads: sectionThreads,
-                    visibleRootIDs: nil,
-                    parentIDByThreadID: parentIDByThreadID
-                )
-                let rootNodes = rootThreads.compactMap { thread in
-                    buildThreadMenuThread(
-                        thread: thread,
-                        threadByID: threadByID,
-                        parentIDByThreadID: parentIDByThreadID,
-                        visited: []
-                    )
-                }
-
-                return ThreadMenuSection(
-                    displayName: displayName,
-                    threadCount: flattenedThreadIDs(from: rootNodes).count,
-                    threads: rootNodes.sorted(by: Self.isNewerMenuThread)
-                )
-            }
-        }
-
-        return snapshotSections.compactMap { snapshotSection -> ThreadMenuSection? in
-            let sectionThreads = recentThreads.filter {
-                projectCatalog.project(for: $0.cwd).id == snapshotSection.section.id
-            }
-
-            guard !sectionThreads.isEmpty else {
-                return nil
-            }
-
-            let rootThreads = sectionRootThreads(
-                allThreads: sectionThreads,
-                visibleRootIDs: Set(snapshotSection.threads.map { $0.id }),
-                parentIDByThreadID: parentIDByThreadID
-            )
-            let rootNodes = rootThreads.compactMap { thread in
-                buildThreadMenuThread(
-                    thread: thread,
-                    threadByID: threadByID,
-                    parentIDByThreadID: parentIDByThreadID,
-                    visited: []
-                )
-            }
-
-            return ThreadMenuSection(
-                displayName: snapshotSection.section.displayName,
-                threadCount: flattenedThreadIDs(from: rootNodes).count,
-                threads: rootNodes.sorted(by: Self.isNewerMenuThread)
-            )
-        }
-    }
-
-    private func sectionRootThreads(
-        allThreads: [AppStateStore.ThreadRow],
-        visibleRootIDs: Set<String>?,
-        parentIDByThreadID: [String: String]
-    ) -> [AppStateStore.ThreadRow] {
-        let threadByID = Dictionary(uniqueKeysWithValues: allThreads.map { ($0.id, $0) })
-
-        if let visibleRootIDs, !visibleRootIDs.isEmpty {
-            var roots = allThreads.filter { visibleRootIDs.contains($0.id) }
-            let orphanThreads = allThreads.filter { thread in
-                thread.isSubagent && !threadHasAncestor(
-                    thread.id,
-                    in: visibleRootIDs,
-                    parentIDByThreadID: parentIDByThreadID
-                )
-            }
-            roots.append(contentsOf: orphanThreads.filter { !visibleRootIDs.contains($0.id) })
-            return roots.sorted(by: Self.isNewerThread)
-        }
-
-        return allThreads.filter { thread in
-            guard let parentID = parentIDByThreadID[thread.id] else {
-                return true
-            }
-
-            return threadByID[parentID] == nil
-        }
-        .sorted(by: Self.isNewerThread)
-    }
-
-    private func buildThreadMenuThread(
-        thread: AppStateStore.ThreadRow,
-        threadByID: [String: AppStateStore.ThreadRow],
-        parentIDByThreadID: [String: String],
-        visited: Set<String>
-    ) -> ThreadMenuThread? {
-        guard !visited.contains(thread.id) else {
-            return nil
-        }
-
-        let childIDs = parentIDByThreadID
-            .filter { $0.value == thread.id }
-            .map(\.key)
-            .sorted { lhs, rhs in
-                guard let lhsThread = threadByID[lhs], let rhsThread = threadByID[rhs] else {
-                    return lhs < rhs
-                }
-
-                return Self.isNewerThread(lhsThread, rhsThread)
-            }
-
-        let nextVisited = visited.union([thread.id])
-        let children: [ThreadMenuThread] = childIDs.compactMap { childID in
-            guard let childThread = threadByID[childID] else {
-                return nil
-            }
-
-            return buildThreadMenuThread(
-                thread: childThread,
-                threadByID: threadByID,
-                parentIDByThreadID: parentIDByThreadID,
-                visited: nextVisited
-            )
-        }
-
-        return ThreadMenuThread(thread: thread, children: children)
-    }
-
-    private func threadHasAncestor(
-        _ threadID: String,
-        in ancestorIDs: Set<String>,
-        parentIDByThreadID: [String: String]
-    ) -> Bool {
-        var currentThreadID = parentIDByThreadID[threadID]
-        var visited: Set<String> = [threadID]
-
-        while let parentThreadID = currentThreadID {
-            if !visited.insert(parentThreadID).inserted {
-                return false
-            }
-
-            if ancestorIDs.contains(parentThreadID) {
-                return true
-            }
-
-            currentThreadID = parentIDByThreadID[parentThreadID]
-        }
-
-        return false
-    }
-
     private func flattenedThreadIDs(from threads: [ThreadMenuThread]) -> [String] {
         threads.flatMap { thread in
             [thread.thread.id] + flattenedThreadIDs(from: thread.children)
@@ -1427,6 +1257,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return true
         }
 
+        if thread.hiddenDescendantThreads.contains(where: { hiddenThread in
+            controller.threadReadMarkers.hasUnreadContent(
+                threadID: hiddenThread.id,
+                lastTerminalActivityAt: hiddenThread.lastTerminalActivityAt
+            )
+        }) {
+            return true
+        }
+
         return thread.children.contains(where: hasUnreadContent(in:))
     }
 
@@ -1437,12 +1276,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hoverTooltipContentsByThreadID: inout [String: MenubarStatusPresentation.ThreadTooltipContent],
         keyEquivalent: String? = nil
     ) {
-        let hasUnreadContent = controller.threadReadMarkers.hasUnreadContent(
-            threadID: thread.thread.id,
-            lastTerminalActivityAt: thread.thread.lastTerminalActivityAt
-        )
+        let hasUnreadContent = hasUnreadContent(in: thread)
         let threadSnapshot = MenubarThreadSnapshot(thread: thread.thread, hasUnreadContent: hasUnreadContent)
-        let title = menuTitle(for: thread.thread)
+        let title = menuTitle(for: thread)
         let tooltipContent = MenubarStatusPresentation.threadTooltipContent(
             worktreeDisplayName: worktreeDisplayName,
             thread: thread.thread,
@@ -1455,7 +1291,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         item.representedObject = thread.thread.id
         item.toolTip = nil
         item.indentationLevel = level
-        item.image = indicatorImage(for: threadSnapshot)
+        item.image = indicatorImage(for: thread, threadSnapshot: threadSnapshot)
         if keyEquivalent != nil {
             item.keyEquivalentModifierMask = NSEvent.ModifierFlags.command
         }
@@ -1473,24 +1309,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    private static func isNewerThread(_ lhs: AppStateStore.ThreadRow, _ rhs: AppStateStore.ThreadRow) -> Bool {
-        if lhs.activityUpdatedAt == rhs.activityUpdatedAt {
-            return lhs.displayTitle.localizedCaseInsensitiveCompare(rhs.displayTitle) == .orderedAscending
-        }
-
-        return lhs.activityUpdatedAt > rhs.activityUpdatedAt
-    }
-
-    private static func isNewerMenuThread(_ lhs: ThreadMenuThread, _ rhs: ThreadMenuThread) -> Bool {
-        isNewerThread(lhs.thread, rhs.thread)
-    }
-
-    private func menuTitle(for thread: AppStateStore.ThreadRow) -> String {
-        let relativeDate = relativeDateFormatter.localizedString(for: thread.activityUpdatedAt, relativeTo: Date())
+    private func menuTitle(for thread: ThreadMenuThread) -> String {
+        let relativeDate = relativeDateFormatter.localizedString(for: thread.thread.activityUpdatedAt, relativeTo: Date())
         return MenubarStatusPresentation.threadTitle(
-            for: thread,
+            for: thread.thread,
             relativeDate: relativeDate,
-            maxDisplayTitleLength: ThreadListDisplay.maxThreadDisplayTitleLength
+            hiddenSubagentSummary: thread.hiddenSubagentSummary,
+            maxDisplayTitleLength: ThreadListDisplay.maxThreadDisplayTitleLength,
+            strings: strings,
+            language: preferences.language
         )
     }
 
@@ -1504,8 +1331,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
     }
 
-    private func indicatorImage(for thread: MenubarThreadSnapshot) -> NSImage? {
-        switch MenubarStatusPresentation.threadIndicator(for: thread.thread, hasUnreadContent: thread.hasUnreadContent) {
+    private func overlayIndicatorText(for indicatorImage: NSImage?) -> String? {
+        if indicatorImage === unreadIndicatorImage {
+            return MenubarStatusPresentation.threadIndicatorText(for: .unread)
+        }
+
+        if indicatorImage === runningIndicatorImage {
+            return MenubarStatusPresentation.threadIndicatorText(for: .running)
+        }
+
+        if indicatorImage === waitingForUserIndicatorImage {
+            return MenubarStatusPresentation.threadIndicatorText(for: .waitingForUser)
+        }
+
+        if indicatorImage === failedIndicatorImage {
+            return MenubarStatusPresentation.threadIndicatorText(for: .failed)
+        }
+
+        return nil
+    }
+
+    private func indicatorImage(
+        for thread: ThreadMenuThread,
+        threadSnapshot: MenubarThreadSnapshot
+    ) -> NSImage? {
+        let indicator = MenubarStatusPresentation.threadIndicator(
+            for: threadSnapshot.thread,
+            hasUnreadContent: threadSnapshot.hasUnreadContent
+        ) ?? indicator(forHiddenSubagentSummary: thread.hiddenSubagentSummary)
+
+        switch indicator {
         case .unread:
             return unreadIndicatorImage
         case .running:
@@ -1517,6 +1372,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case nil:
             return nil
         }
+    }
+
+    private func indicator(
+        forHiddenSubagentSummary summary: MenubarStatusPresentation.SubagentSummary?
+    ) -> MenubarStatusPresentation.ThreadIndicator? {
+        guard let summary else { return nil }
+
+        if summary.failedCount > 0 {
+            return .failed
+        }
+
+        if summary.approvalCount > 0 || summary.waitingCount > 0 {
+            return .waitingForUser
+        }
+
+        if summary.runningCount > 0 {
+            return .running
+        }
+
+        return nil
     }
 
     private func updateHoverTooltip(for item: NSMenuItem?) {
