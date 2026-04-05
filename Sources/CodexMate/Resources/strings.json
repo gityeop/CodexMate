@@ -1,6 +1,7 @@
 {
   "en": {
     "menu.noRecentThreads": "No recent threads",
+    "menu.loadingRecentThreads": "Loading recent threads…",
     "menu.settings": "Settings…",
     "menu.quit": "Quit",
     "menu.projectSection.one": "%@ | %lld thread",
@@ -54,6 +55,7 @@
   },
   "ko": {
     "menu.noRecentThreads": "최근 스레드가 없습니다",
+    "menu.loadingRecentThreads": "최근 스레드를 불러오는 중…",
     "menu.settings": "설정…",
     "menu.quit": "종료",
     "menu.projectSection.one": "%@ | 스레드 %lld개",

@@ -56,6 +56,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         static let minimumInterval: TimeInterval = 1
     }
 
+    private enum ThreadDiscoveryBoostPolicy {
+        static let duration: TimeInterval = 10
+        static let desktopActivityInterval: TimeInterval = 1
+    }
+
     private enum StatusAnimation {
         static let frameInterval: TimeInterval = 0.12
     }
@@ -90,17 +95,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let strings = AppStrings.shared
     private let client = CodexAppServerClient()
     private let codexHomeStore = CodexHomeStore()
-    private lazy var desktopStateReader = CodexDesktopStateReader(
-        codexDirectoryURLProvider: { [codexHomeStore] in
-            codexHomeStore.currentDirectoryURL
-        }
-    )
     private lazy var desktopActivityService = DesktopActivityService(
-        codexDirectoryURLProvider: { [codexHomeStore] in
-            codexHomeStore.currentDirectoryURL
-        }
-    )
-    private lazy var projectCatalogReader = CodexDesktopProjectCatalogReader(
         codexDirectoryURLProvider: { [codexHomeStore] in
             codexHomeStore.currentDirectoryURL
         }
@@ -121,13 +116,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     )
     private lazy var recentThreadListing = FallbackRecentThreadListing(
         primary: appServerRecentThreadListing,
-        fallback: DesktopStateRecentThreadListing(reader: desktopStateReader)
+        fallback: DesktopStateRecentThreadListing(
+            codexDirectoryURLProvider: { [codexHomeStore] in
+                codexHomeStore.currentDirectoryURL
+            }
+        )
+    )
+    private lazy var desktopThreadMetadataReader = DesktopStateThreadMetadataReader(
+        codexDirectoryURLProvider: { [codexHomeStore] in
+            codexHomeStore.currentDirectoryURL
+        }
+    )
+    private lazy var asyncProjectCatalogLoader = DesktopProjectCatalogLoader(
+        codexDirectoryURLProvider: { [codexHomeStore] in
+            codexHomeStore.currentDirectoryURL
+        }
     )
     private lazy var controller = MenubarController(
         desktopActivityLoader: desktopActivityService,
         recentThreadListing: recentThreadListing,
-        threadMetadataReader: desktopStateReader,
-        projectCatalogLoader: projectCatalogReader,
+        threadMetadataReader: desktopThreadMetadataReader,
+        projectCatalogLoader: asyncProjectCatalogLoader,
         initialThreadReadMarkers: AppDelegate.loadThreadReadMarkers(),
         configuration: MenubarControllerConfiguration(
             initialFetchLimit: ThreadListDisplay.initialFetchLimit,
@@ -151,6 +160,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var currentEffectiveDisplayMode: AppDisplayMode?
     private var isMenuOpen = false
     private var isSettingsWindowVisible = false
+    private var isInitialThreadBootstrapInProgress = false
+    private var pendingThreadRefreshAfterBootstrap = false
+    private var fastThreadDiscoveryRefreshUntil: Date?
     private var lastDesktopActivityRefreshRequestAt: Date?
     private var lastThreadRefreshRequestAt: Date?
     private var desktopActivityRefreshGate = RefreshRequestGate()
@@ -570,6 +582,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func connectAndLoad() async {
+        isInitialThreadBootstrapInProgress = true
         controller.setConnection(.connecting)
         renderMenu()
 
@@ -584,19 +597,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             do {
                 try await loadInitialThreads()
             } catch {
+                completeInitialThreadBootstrap(requestBackfill: false)
                 controller.recordDiagnostic("Initial thread load failed: \(error.localizedDescription)")
                 renderMenu()
                 scheduleRefreshTimerIfNeeded()
+                armFastThreadDiscoveryRefreshWindow()
                 requestDesktopActivityRefresh()
                 requestThreadRefresh()
                 requestInitialSubscriptionWarmup()
                 return
             }
 
+            armFastThreadDiscoveryRefreshWindow()
             scheduleRefreshTimerIfNeeded()
             requestDesktopActivityRefresh()
             requestInitialSubscriptionWarmup()
         } catch {
+            completeInitialThreadBootstrap(requestBackfill: false)
             controller.recordDiagnostic("Initial app-server connection failed; continuing desktop-state refresh via fallback")
             controller.setConnection(.failed(message: error.localizedDescription))
             renderMenu()
@@ -622,10 +639,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             markConnectionHealthy()
         }
         renderMenu()
+        completeInitialThreadBootstrap(requestBackfill: true)
     }
 
     private func handleClientTermination(reason: String?) {
         liveSubscribedThreadUpdatedAtByID.removeAll()
+        completeInitialThreadBootstrap(requestBackfill: false)
 
         let message = reason ?? "app-server process exited"
         controller.recordDiagnostic("app-server terminated; continuing desktop-state refresh via fallback")
@@ -837,6 +856,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         controller.recordDiagnostic("foreground refresh via \(name.rawValue)")
+        armFastThreadDiscoveryRefreshWindow(now: now)
         scheduleRefreshTimerIfNeeded()
         requestDesktopActivityRefresh(now: now)
         requestThreadRefresh(now: now)
@@ -891,10 +911,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func refreshSchedulingPolicy() -> RefreshSchedulingPolicy {
-        RefreshSchedulingPolicy.current(
+        let basePolicy = RefreshSchedulingPolicy.current(
             isMenuOpen: isMenuOpen,
             overallStatus: controller.overallStatus,
             hasRecentThreads: !controller.recentThreads.isEmpty
+        )
+
+        let now = Date()
+        guard let fastThreadDiscoveryRefreshUntil,
+              fastThreadDiscoveryRefreshUntil > now
+        else {
+            self.fastThreadDiscoveryRefreshUntil = nil
+            return basePolicy
+        }
+
+        return RefreshSchedulingPolicy(
+            desktopActivityInterval: min(
+                basePolicy.desktopActivityInterval,
+                ThreadDiscoveryBoostPolicy.desktopActivityInterval
+            ),
+            threadListInterval: basePolicy.threadListInterval
         )
     }
 
@@ -1054,8 +1090,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         var hoverTooltipContentsByThreadID: [String: MenubarStatusPresentation.ThreadTooltipContent] = [:]
         menu.removeAllItems()
+        let isShowingLoadingPlaceholder = isInitialThreadBootstrapInProgress && controller.recentThreads.isEmpty
 
-        if menuSections.isEmpty {
+        if isShowingLoadingPlaceholder {
+            menu.addItem(makeStaticItem(title: strings.text("menu.loadingRecentThreads", language: preferences.language)))
+        } else if menuSections.isEmpty {
             menu.addItem(makeStaticItem(title: strings.text("menu.noRecentThreads", language: preferences.language)))
         } else {
             for (index, section) in menuSections.enumerated() {
@@ -1120,7 +1159,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 modifierMask: [.option]
             )
         )
-        if currentEffectiveDisplayMode == .notch {
+        if currentEffectiveDisplayMode == .notch, isMenuOpen {
             notchStatusOverlay.setMenuItems(overlayMenuEntries(from: menu.items))
         }
         scheduleRefreshTimerIfNeeded()
@@ -1498,6 +1537,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func requestThreadRefresh(force: Bool = true, now: Date = Date()) {
+        if isInitialThreadBootstrapInProgress {
+            pendingThreadRefreshAfterBootstrap = true
+            return
+        }
+
         if !force {
             let policy = refreshSchedulingPolicy()
             guard policy.shouldRefreshThreadList(now: now, lastRequestedAt: lastThreadRefreshRequestAt) else {
@@ -1720,12 +1764,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
             debugLog("openMenu mode=notch screen=\(screen.localizedName)")
             hideHoverTooltip()
-            renderMenu()
             isMenuOpen = true
+            armFastThreadDiscoveryRefreshWindow()
             KeyboardShortcuts.disable(.toggleMenuBarDropdown)
             installMenuShortcutEventMonitor()
             installMenuDismissEventMonitors()
             menuToggleController.menuWillOpen()
+            renderMenu()
             scheduleRefreshTimerIfNeeded()
             requestDesktopActivityRefresh()
             requestThreadRefresh()
@@ -2132,6 +2177,7 @@ extension AppDelegate: NSMenuDelegate {
         debugLog("menuWillOpen")
         hideHoverTooltip()
         isMenuOpen = true
+        armFastThreadDiscoveryRefreshWindow()
         if skipNextMenuBarMenuWillOpenRender {
             skipNextMenuBarMenuWillOpenRender = false
         } else {
@@ -2143,6 +2189,28 @@ extension AppDelegate: NSMenuDelegate {
         scheduleRefreshTimerIfNeeded()
         requestDesktopActivityRefresh()
         requestThreadRefresh()
+    }
+
+    private func completeInitialThreadBootstrap(requestBackfill: Bool) {
+        let shouldRequestBackfill = pendingThreadRefreshAfterBootstrap || requestBackfill
+        isInitialThreadBootstrapInProgress = false
+        pendingThreadRefreshAfterBootstrap = false
+
+        guard shouldRequestBackfill else {
+            return
+        }
+
+        requestThreadRefresh()
+    }
+
+    private func armFastThreadDiscoveryRefreshWindow(now: Date = Date()) {
+        let boostedUntil = now.addingTimeInterval(ThreadDiscoveryBoostPolicy.duration)
+        if let fastThreadDiscoveryRefreshUntil, fastThreadDiscoveryRefreshUntil >= boostedUntil {
+            return
+        }
+
+        fastThreadDiscoveryRefreshUntil = boostedUntil
+        scheduleRefreshTimerIfNeeded()
     }
 
     func menu(_ menu: NSMenu, willHighlight item: NSMenuItem?) {

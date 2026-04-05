@@ -872,17 +872,7 @@ final class NotchStatusOverlayView: NSView {
     }
 
     private func rebuildMenuRows(_ menuItems: [NotchStatusOverlayMenuEntry]) {
-        let summary = menuItems.map { item -> String in
-            switch item.kind {
-            case .separator:
-                return "separator"
-            case .header:
-                return "header:\(item.primaryText)"
-            case .item:
-                return "item:\(item.primaryText)"
-            }
-        }.joined(separator: ", ")
-        DebugTraceLogger.log("overlay rebuildMenuRows count=\(menuItems.count) entries=[\(summary)]")
+        DebugTraceLogger.log("overlay rebuildMenuRows count=\(menuItems.count)")
 
         let previouslySelectedSelectionKey = selectedMenuSelectionKey
         menuRows.forEach { $0.view.removeFromSuperview() }

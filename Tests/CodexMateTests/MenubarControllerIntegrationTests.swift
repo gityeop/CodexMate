@@ -636,7 +636,7 @@ final class MenubarControllerIntegrationTests: XCTestCase {
         XCTAssertEqual(snapshot.projectSections.dropFirst().first?.threads.map(\.id), ["thread-b-1"])
     }
 
-    func testLoadInitialThreadsFetchesFullTrackedWindowForInitialProjectCoverage() async throws {
+    func testLoadInitialThreadsUsesInitialFetchLimitForFastBootstrapThenRefreshBackfillsTrackedWindow() async throws {
         let recentThreadListing = RecordingRecentThreadListing(threads: [
             thread(id: "thread-a", updatedAt: 500, cwd: "/tmp/A/work"),
             thread(id: "thread-b", updatedAt: 400, cwd: "/tmp/B/work"),
@@ -671,11 +671,18 @@ final class MenubarControllerIntegrationTests: XCTestCase {
         )
 
         try await controller.loadInitialThreads()
-        let snapshot = controller.prepareSnapshot().snapshot
-        let requestedLimits = await recentThreadListing.requestedLimits()
+        let initialSnapshot = controller.prepareSnapshot().snapshot
+        let initialRequestedLimits = await recentThreadListing.requestedLimits()
 
-        XCTAssertEqual(requestedLimits, [8])
-        XCTAssertEqual(snapshot.projectSections.map(\.section.displayName), ["A", "B", "C", "D", "E"])
+        XCTAssertEqual(initialRequestedLimits, [2])
+        XCTAssertEqual(initialSnapshot.projectSections.map(\.section.displayName), ["A", "B"])
+
+        _ = try await controller.refreshThreads()
+        let refreshedSnapshot = controller.prepareSnapshot().snapshot
+        let refreshedRequestedLimits = await recentThreadListing.requestedLimits()
+
+        XCTAssertEqual(refreshedRequestedLimits, [2, 8])
+        XCTAssertEqual(refreshedSnapshot.projectSections.map(\.section.displayName), ["A", "B", "C", "D", "E"])
     }
 
     private func makeController(
@@ -815,14 +822,14 @@ private actor RecordingRecentThreadListing: RecentThreadListing {
     }
 }
 
-private final class FakeThreadMetadataReader: ThreadMetadataReading {
+private final class FakeThreadMetadataReader: ThreadMetadataReading, @unchecked Sendable {
     private var results: [Result<[CodexThread], Error>]
 
     init(results: [Result<[CodexThread], Error>]) {
         self.results = results
     }
 
-    func threads(threadIDs: Set<String>) throws -> [CodexThread] {
+    func threads(threadIDs: Set<String>) async throws -> [CodexThread] {
         guard !results.isEmpty else {
             return []
         }
@@ -831,14 +838,14 @@ private final class FakeThreadMetadataReader: ThreadMetadataReading {
     }
 }
 
-private final class FakeProjectCatalogLoader: ProjectCatalogLoading {
+private final class FakeProjectCatalogLoader: ProjectCatalogLoading, @unchecked Sendable {
     private let result: Result<CodexDesktopProjectCatalog, Error>
 
     init(result: Result<CodexDesktopProjectCatalog, Error>) {
         self.result = result
     }
 
-    func loadProjectCatalog() throws -> CodexDesktopProjectCatalog {
+    func loadProjectCatalog() async throws -> CodexDesktopProjectCatalog {
         try result.get()
     }
 }

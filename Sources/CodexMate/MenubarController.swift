@@ -8,28 +8,49 @@ protocol RecentThreadListing: Sendable {
     func recentThreads(limit: Int) async throws -> [CodexThread]
 }
 
-protocol ThreadMetadataReading {
-    func threads(threadIDs: Set<String>) throws -> [CodexThread]
+protocol ThreadMetadataReading: Sendable {
+    func threads(threadIDs: Set<String>) async throws -> [CodexThread]
 }
 
-protocol ProjectCatalogLoading {
-    func loadProjectCatalog() throws -> CodexDesktopProjectCatalog
+protocol ProjectCatalogLoading: Sendable {
+    func loadProjectCatalog() async throws -> CodexDesktopProjectCatalog
 }
 
 extension DesktopActivityService: DesktopActivityLoading {}
-extension CodexDesktopStateReader: ThreadMetadataReading {}
 
-extension CodexDesktopProjectCatalogReader: ProjectCatalogLoading {
-    func loadProjectCatalog() throws -> CodexDesktopProjectCatalog {
-        try load()
+actor DesktopStateRecentThreadListing: RecentThreadListing {
+    private let reader: CodexDesktopStateReader
+
+    init(codexDirectoryURLProvider: @escaping @Sendable () -> URL) {
+        reader = CodexDesktopStateReader(codexDirectoryURLProvider: codexDirectoryURLProvider)
     }
-}
-
-struct DesktopStateRecentThreadListing: RecentThreadListing, @unchecked Sendable {
-    let reader: CodexDesktopStateReader
 
     func recentThreads(limit: Int) async throws -> [CodexThread] {
         try reader.recentThreads(limit: limit)
+    }
+}
+
+actor DesktopStateThreadMetadataReader: ThreadMetadataReading {
+    private let reader: CodexDesktopStateReader
+
+    init(codexDirectoryURLProvider: @escaping @Sendable () -> URL) {
+        reader = CodexDesktopStateReader(codexDirectoryURLProvider: codexDirectoryURLProvider)
+    }
+
+    func threads(threadIDs: Set<String>) async throws -> [CodexThread] {
+        try reader.threads(threadIDs: threadIDs)
+    }
+}
+
+actor DesktopProjectCatalogLoader: ProjectCatalogLoading {
+    private let reader: CodexDesktopProjectCatalogReader
+
+    init(codexDirectoryURLProvider: @escaping @Sendable () -> URL) {
+        reader = CodexDesktopProjectCatalogReader(codexDirectoryURLProvider: codexDirectoryURLProvider)
+    }
+
+    func loadProjectCatalog() async throws -> CodexDesktopProjectCatalog {
+        try reader.load()
     }
 }
 
@@ -76,17 +97,32 @@ final class FallbackRecentThreadListing: RecentThreadListing, @unchecked Sendabl
     }
 
     func recentThreads(limit: Int) async throws -> [CodexThread] {
-        do {
-            let primaryThreads = try await primary.recentThreads(limit: limit)
-            let fallbackThreads = try await fallback.recentThreads(limit: limit)
-            return mergeRecentThreads(primary: primaryThreads, fallback: fallbackThreads, limit: limit)
-        } catch {
-            let fallbackThreads = try await fallback.recentThreads(limit: limit)
-            if !fallbackThreads.isEmpty {
-                return Array(fallbackThreads.prefix(limit))
-            }
+        async let primaryResult = fetchRecentThreadsResult(using: primary, limit: limit)
+        async let fallbackResult = fetchRecentThreadsResult(using: fallback, limit: limit)
 
-            throw error
+        let primaryOutcome = await primaryResult
+        let fallbackOutcome = await fallbackResult
+
+        switch (primaryOutcome, fallbackOutcome) {
+        case let (.success(primaryThreads), .success(fallbackThreads)):
+            return mergeRecentThreads(primary: primaryThreads, fallback: fallbackThreads, limit: limit)
+        case let (.success(primaryThreads), .failure):
+            return Array(primaryThreads.prefix(limit))
+        case let (.failure, .success(fallbackThreads)):
+            return Array(fallbackThreads.prefix(limit))
+        case let (.failure(primaryError), .failure):
+            throw primaryError
+        }
+    }
+
+    private func fetchRecentThreadsResult(
+        using listing: any RecentThreadListing,
+        limit: Int
+    ) async -> Result<[CodexThread], Error> {
+        do {
+            return .success(try await listing.recentThreads(limit: limit))
+        } catch {
+            return .failure(error)
         }
     }
 
@@ -177,8 +213,8 @@ struct MenubarPreparedSnapshot: Equatable {
 final class MenubarController {
     private let loadDesktopActivity: @Sendable ([String: String?], Date) async -> DesktopActivityUpdate
     private let loadRecentThreads: @Sendable (Int) async throws -> [CodexThread]
-    private let loadThreadsByID: (Set<String>) throws -> [CodexThread]
-    private let loadProjectCatalog: () throws -> CodexDesktopProjectCatalog
+    private let loadThreadsByID: (Set<String>) async throws -> [CodexThread]
+    private let loadProjectCatalog: () async throws -> CodexDesktopProjectCatalog
     private let configuration: MenubarControllerConfiguration
     private let now: () -> Date
 
@@ -203,10 +239,10 @@ final class MenubarController {
             try await recentThreadListing.recentThreads(limit: limit)
         }
         self.loadThreadsByID = { threadIDs in
-            try threadMetadataReader.threads(threadIDs: threadIDs)
+            try await threadMetadataReader.threads(threadIDs: threadIDs)
         }
         self.loadProjectCatalog = {
-            try projectCatalogLoader.loadProjectCatalog()
+            try await projectCatalogLoader.loadProjectCatalog()
         }
         self.threadReadMarkers = ThreadReadMarkerStore(lastReadTerminalAtByThreadID: initialThreadReadMarkers)
         self.pendingDiscoveredThreads = PendingDiscoveredThreadStore(
@@ -246,18 +282,16 @@ final class MenubarController {
     }
 
     func loadInitialThreads() async throws {
-        // Fetch the full tracked window up front so the first menu render can
-        // populate enough distinct projects even when one project dominates the
-        // most recent thread list.
-        let threads = try await hydratedRecentThreads(limit: configuration.maxTrackedThreads)
-        projectCatalog = (try? loadProjectCatalog()) ?? .empty
+        let initialLimit = min(configuration.initialFetchLimit, configuration.maxTrackedThreads)
+        let threads = try await hydratedRecentThreads(limit: initialLimit)
+        projectCatalog = (try? await loadProjectCatalog()) ?? .empty
         state.replaceRecentThreads(with: threads)
     }
 
     func refreshThreads() async throws -> MenubarControllerEffects {
         let threads = try await hydratedRecentThreads(limit: configuration.maxTrackedThreads)
         let effects = recordDiscoveredThreadRefreshResult(threads: threads)
-        projectCatalog = (try? loadProjectCatalog()) ?? .empty
+        projectCatalog = (try? await loadProjectCatalog()) ?? .empty
         state.replaceRecentThreads(with: threads)
         return effects
     }
@@ -298,7 +332,7 @@ final class MenubarController {
         synchronizeThreadReadMarkers(from: update.latestViewedAtByThreadID)
 
         if !newlyDiscoveredThreadIDs.isEmpty {
-            let seedEffects = seedDiscoveredThreads(newlyDiscoveredThreadIDs)
+            let seedEffects = await seedDiscoveredThreads(newlyDiscoveredThreadIDs)
             effects.diagnostics.append(contentsOf: seedEffects.diagnostics)
             effects.shouldRequestDesktopActivityRefresh = seedEffects.shouldRequestDesktopActivityRefresh
             effects.shouldRequestThreadRefresh = true
@@ -424,13 +458,13 @@ final class MenubarController {
         return MenubarControllerEffects(diagnostics: [diagnostic])
     }
 
-    private func seedDiscoveredThreads(_ threadIDs: Set<String>) -> MenubarControllerEffects {
+    private func seedDiscoveredThreads(_ threadIDs: Set<String>) async -> MenubarControllerEffects {
         guard !threadIDs.isEmpty else {
             return MenubarControllerEffects()
         }
 
         do {
-            let threads = try loadThreadsByID(threadIDs)
+            let threads = try await loadThreadsByID(threadIDs)
             guard !threads.isEmpty else {
                 let diagnostic = "state db had no discovered threads=\(debugThreadIDs(threadIDs))"
                 state.recordDiagnostic(diagnostic)
@@ -496,7 +530,7 @@ final class MenubarController {
         }
 
         let metadataByID = Dictionary(
-            uniqueKeysWithValues: (try? loadThreadsByID(Set(threads.map(\.id))))?.map { ($0.id, $0) } ?? []
+            uniqueKeysWithValues: (try? await loadThreadsByID(Set(threads.map(\.id))))?.map { ($0.id, $0) } ?? []
         )
 
         return threads.map { thread in

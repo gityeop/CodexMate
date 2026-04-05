@@ -20,7 +20,7 @@ enum DebugTraceLogger {
 
         let line = "[\(String(format: "%.3f", Date().timeIntervalSince1970))] \(compact)\n"
 
-        queue.sync {
+        queue.async {
             let fileManager = FileManager.default
             let directoryURL = logFileURL.deletingLastPathComponent()
             try? fileManager.createDirectory(
