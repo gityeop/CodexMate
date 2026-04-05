@@ -3,20 +3,20 @@
     <channel>
         <title>CodexMate</title>
         <item>
-            <title>0.0.6</title>
-            <pubDate>Sun, 05 Apr 2026 21:57:29 +0900</pubDate>
-            <link>https://github.com/gityeop/CodexMate/releases/tag/v0.0.6</link>
-            <sparkle:version>6</sparkle:version>
-            <sparkle:shortVersionString>0.0.6</sparkle:shortVersionString>
+            <title>0.0.7</title>
+            <pubDate>Mon, 06 Apr 2026 01:38:36 +0900</pubDate>
+            <link>https://github.com/gityeop/CodexMate/releases/tag/v0.0.7</link>
+            <sparkle:version>7</sparkle:version>
+            <sparkle:shortVersionString>0.0.7</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description sparkle:format="markdown"><![CDATA[# CodexMate 0.0.6
+            <description sparkle:format="markdown"><![CDATA[# CodexMate 0.0.7
 
-- Reworked recent thread presentation so projects and subagent threads stay visible and grouped more consistently in the menu.
-- Hardened reconnect and desktop-state fallback handling so active work recovers more cleanly after app-server interruptions.
-- Simplified the menu footer and improved keyboard navigation, including smoother Option-arrow movement and a slightly higher notch sprite position.
+- Kept notch mode active on Macs without a hardware notch by rendering a centered fake-notch overlay instead of falling back to the menu bar.
+- Adjusted the collapsed pixel sprite to scale down with smaller notch heights so the character no longer clips in compact overlays.
+- Fixed hover expansion so the fake notch grows downward without cutting off the top edge of the notch or sprite animation.
 ]]></description>
-            <enclosure url="https://github.com/gityeop/CodexMate/releases/latest/download/CodexMate-0.0.6.zip" length="4409464" type="application/octet-stream" sparkle:edSignature="Zlu2Y2aliqoHUiLTCxcFKSPOI6Lql7JaYHCgFcTJbeZE043WhpEHqLxCKWe+RBHQ2Lu/B0Ema1tL5sWkc4TjBw=="/>
+            <enclosure url="https://github.com/gityeop/CodexMate/releases/latest/download/CodexMate-0.0.7.zip" length="4411540" type="application/octet-stream" sparkle:edSignature="LbXC03WWGAXhdy3ImcOI1h1aNJuBbuN462uhnQdVFHZaM4UPmOq+YeUpdrGc9iQ1VkZwePLFPrBWh+M+8BzODg=="/>
         </item>
     </channel>
 </rss>
