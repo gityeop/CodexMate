@@ -19,7 +19,7 @@ struct NotchStatusOverlayMenuEntry {
     let identifier: String?
     let indicatorText: String?
     let indicatorImage: NSImage?
-    let projectIndex: Int?
+    let navigationIndex: Int?
     let indentationLevel: Int
     let isEnabled: Bool
     let onSelect: (() -> Void)?
@@ -30,7 +30,7 @@ struct NotchStatusOverlayMenuEntry {
         identifier: String? = nil,
         indicatorText: String? = nil,
         indicatorImage: NSImage? = nil,
-        projectIndex: Int? = nil,
+        navigationIndex: Int? = nil,
         indentationLevel: Int = 0,
         isEnabled: Bool = true,
         onSelect: (() -> Void)? = nil
@@ -42,7 +42,7 @@ struct NotchStatusOverlayMenuEntry {
             identifier: identifier,
             indicatorText: indicatorText,
             indicatorImage: indicatorImage,
-            projectIndex: projectIndex,
+            navigationIndex: navigationIndex,
             indentationLevel: indentationLevel,
             isEnabled: isEnabled,
             onSelect: onSelect
@@ -57,7 +57,7 @@ struct NotchStatusOverlayMenuEntry {
             identifier: nil,
             indicatorText: nil,
             indicatorImage: nil,
-            projectIndex: nil,
+            navigationIndex: nil,
             indentationLevel: 0,
             isEnabled: false,
             onSelect: nil
@@ -72,7 +72,7 @@ struct NotchStatusOverlayMenuEntry {
             identifier: nil,
             indicatorText: nil,
             indicatorImage: nil,
-            projectIndex: nil,
+            navigationIndex: nil,
             indentationLevel: 0,
             isEnabled: false,
             onSelect: nil
@@ -290,12 +290,12 @@ final class NotchStatusOverlayController {
         return overlayView.handleMenuNavigationKeyDown(event)
     }
 
-    func moveExpandedMenuSelectionByProject(_ delta: Int) -> Bool {
+    func moveExpandedMenuPrimarySelection(_ delta: Int) -> Bool {
         guard isMenuExpanded else {
             return false
         }
 
-        return overlayView.moveKeyboardSelectionByProject(delta)
+        return overlayView.moveKeyboardSelectionByPrimaryTarget(delta)
     }
 
     func showMenu(on screen: NSScreen) {
@@ -555,6 +555,7 @@ final class NotchStatusOverlayView: NSView {
         static let notchSpriteOffsetFromHardwareNotch: CGFloat = 12
         static let notchSpriteTrailingInset: CGFloat = 18
         static let notchSpriteBottomInset: CGFloat = 1
+        static let spriteVerticalLift: CGFloat = 2
         static let expandedMenuSpriteHorizontalShift: CGFloat = 16
         static let notchTopCornerRadius: CGFloat = 6
         static let notchBottomCornerRadius: CGFloat = 14
@@ -613,7 +614,7 @@ final class NotchStatusOverlayView: NSView {
         let kind: MenuRowKind
         let identifier: String?
         let selectionKey: String?
-        let projectIndex: Int?
+        let navigationIndex: Int?
         let isEnabled: Bool
     }
 
@@ -893,7 +894,7 @@ final class NotchStatusOverlayView: NSView {
                         kind: .separator,
                         identifier: nil,
                         selectionKey: nil,
-                        projectIndex: nil,
+                        navigationIndex: nil,
                         isEnabled: false
                     )
                 )
@@ -910,7 +911,7 @@ final class NotchStatusOverlayView: NSView {
                         kind: .header,
                         identifier: nil,
                         selectionKey: nil,
-                        projectIndex: nil,
+                        navigationIndex: nil,
                         isEnabled: false
                     )
                 )
@@ -947,7 +948,7 @@ final class NotchStatusOverlayView: NSView {
                         kind: .item,
                         identifier: item.identifier,
                         selectionKey: item.identifier.map { "id:\($0)" } ?? "title:\(item.primaryText)",
-                        projectIndex: item.projectIndex,
+                        navigationIndex: item.navigationIndex,
                         isEnabled: item.isEnabled
                     )
                 )
@@ -1033,9 +1034,9 @@ final class NotchStatusOverlayView: NSView {
         if modifierFlags == .option {
             switch event.keyCode {
             case 125:
-                return moveKeyboardSelectionByProject(1)
+                return moveKeyboardSelectionByPrimaryTarget(1)
             case 126:
-                return moveKeyboardSelectionByProject(-1)
+                return moveKeyboardSelectionByPrimaryTarget(-1)
             default:
                 return false
             }
@@ -1066,8 +1067,8 @@ final class NotchStatusOverlayView: NSView {
         return true
     }
 
-    func moveKeyboardSelectionByProject(_ delta: Int) -> Bool {
-        guard let nextIndex = nextProjectSelectableMenuRowIndex(from: selectedMenuRowIndex, delta: delta) else {
+    func moveKeyboardSelectionByPrimaryTarget(_ delta: Int) -> Bool {
+        guard let nextIndex = nextPrimarySelectableMenuRowIndex(from: selectedMenuRowIndex, delta: delta) else {
             return false
         }
 
@@ -1121,45 +1122,45 @@ final class NotchStatusOverlayView: NSView {
         return delta > 0 ? selectableIndices.first : selectableIndices.last
     }
 
-    private func nextProjectSelectableMenuRowIndex(from currentIndex: Int?, delta: Int) -> Int? {
-        var firstSelectableIndexByProject: [Int: Int] = [:]
-        var orderedProjectIndices: [Int] = []
+    private func nextPrimarySelectableMenuRowIndex(from currentIndex: Int?, delta: Int) -> Int? {
+        var firstSelectableIndexByNavigation: [Int: Int] = [:]
+        var orderedNavigationIndices: [Int] = []
 
         for (index, row) in menuRows.enumerated() {
             guard row.kind == .item,
                   row.isEnabled,
-                  let projectIndex = row.projectIndex,
-                  firstSelectableIndexByProject[projectIndex] == nil else {
+                  let navigationIndex = row.navigationIndex,
+                  firstSelectableIndexByNavigation[navigationIndex] == nil else {
                 continue
             }
 
-            firstSelectableIndexByProject[projectIndex] = index
-            orderedProjectIndices.append(projectIndex)
+            firstSelectableIndexByNavigation[navigationIndex] = index
+            orderedNavigationIndices.append(navigationIndex)
         }
 
-        guard !orderedProjectIndices.isEmpty else {
+        guard !orderedNavigationIndices.isEmpty else {
             return nil
         }
 
         let selectableIndices = menuRows.indices.filter { menuRows[$0].kind == .item && menuRows[$0].isEnabled }
         if let currentIndex,
            menuRows.indices.contains(currentIndex),
-           let currentProjectIndex = menuRows[currentIndex].projectIndex,
-           let currentPosition = orderedProjectIndices.firstIndex(of: currentProjectIndex) {
-            let nextPosition = (currentPosition + delta + orderedProjectIndices.count) % orderedProjectIndices.count
-            return firstSelectableIndexByProject[orderedProjectIndices[nextPosition]]
+           let currentNavigationIndex = menuRows[currentIndex].navigationIndex,
+           let currentPosition = orderedNavigationIndices.firstIndex(of: currentNavigationIndex) {
+            let nextPosition = (currentPosition + delta + orderedNavigationIndices.count) % orderedNavigationIndices.count
+            return firstSelectableIndexByNavigation[orderedNavigationIndices[nextPosition]]
         }
 
         if let currentIndex = contextualSelectionAnchorIndex(delta: delta, selectableIndices: selectableIndices),
            menuRows.indices.contains(currentIndex),
-           let currentProjectIndex = menuRows[currentIndex].projectIndex,
-           let currentPosition = orderedProjectIndices.firstIndex(of: currentProjectIndex) {
-            let nextPosition = (currentPosition + delta + orderedProjectIndices.count) % orderedProjectIndices.count
-            return firstSelectableIndexByProject[orderedProjectIndices[nextPosition]]
+           let currentNavigationIndex = menuRows[currentIndex].navigationIndex,
+           let currentPosition = orderedNavigationIndices.firstIndex(of: currentNavigationIndex) {
+            let nextPosition = (currentPosition + delta + orderedNavigationIndices.count) % orderedNavigationIndices.count
+            return firstSelectableIndexByNavigation[orderedNavigationIndices[nextPosition]]
         }
 
-        let boundaryPosition = delta > 0 ? 0 : orderedProjectIndices.count - 1
-        return firstSelectableIndexByProject[orderedProjectIndices[boundaryPosition]]
+        let boundaryPosition = delta > 0 ? 0 : orderedNavigationIndices.count - 1
+        return firstSelectableIndexByNavigation[orderedNavigationIndices[boundaryPosition]]
     }
 
     private func contextualSelectionAnchorIndex(delta: Int, selectableIndices: [Int]) -> Int? {
@@ -1390,7 +1391,7 @@ final class NotchStatusOverlayView: NSView {
             )
             return CGRect(
                 x: islandFrame.midX - (size.width / 2),
-                y: islandFrame.minY + 8 + bobOffset + islandEmphasisProgress,
+                y: islandFrame.minY + 8 + bobOffset + islandEmphasisProgress + Layout.spriteVerticalLift,
                 width: size.width,
                 height: size.height
             )
@@ -1408,7 +1409,7 @@ final class NotchStatusOverlayView: NSView {
         let baseX = min(hardwareFrame.maxX + Layout.notchSpriteOffsetFromHardwareNotch, collapsedMaxX)
         return CGRect(
             x: min(baseX + (menuExpansionProgress * Layout.expandedMenuSpriteHorizontalShift), expandedMaxX),
-            y: islandFrame.minY - Layout.notchSpriteBottomInset + bobOffset + islandEmphasisProgress,
+            y: islandFrame.minY - Layout.notchSpriteBottomInset + bobOffset + islandEmphasisProgress + Layout.spriteVerticalLift,
             width: size.width,
             height: size.height
         )

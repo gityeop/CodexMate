@@ -1,9 +1,9 @@
 import AppKit
 
 enum ThreadMenuKeyboardShortcutAction: Equatable {
-    case openHighlightedThread
+    case openHighlightedItem
     case openProjectThread(Int)
-    case moveProjectSelection(Int)
+    case movePrimarySelection(Int)
 }
 
 final class ThreadMenu: NSMenu {
@@ -28,15 +28,15 @@ final class ThreadMenu: NSMenu {
             .subtracting([.numericPad, .function])
 
         if modifierFlags.isEmpty && (event.keyCode == 36 || event.keyCode == 76) {
-            return .openHighlightedThread
+            return .openHighlightedItem
         }
 
         if modifierFlags == .option {
             switch event.keyCode {
             case 125:
-                return .moveProjectSelection(1)
+                return .movePrimarySelection(1)
             case 126:
-                return .moveProjectSelection(-1)
+                return .movePrimarySelection(-1)
             default:
                 return nil
             }

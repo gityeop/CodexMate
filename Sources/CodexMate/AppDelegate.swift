@@ -76,6 +76,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         static let hasCompletedFirstLaunch = "hasCompletedFirstLaunch"
     }
 
+    private enum MenuNavigationIdentifier {
+        static let settings = "__codexmate_settings__"
+    }
+
     private let openSettingsOnLaunch: Bool
 
     private var statusItem: NSStatusItem?
@@ -157,6 +161,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var hoverTooltipWorkItem: DispatchWorkItem?
     private var highlightedThreadID: String?
     private var projectShortcutThreadIDs: [String] = []
+    private var optionShortcutTargetIDs: [String] = []
     private var threadProjectIndexByThreadID: [String: Int] = [:]
     private var pendingMenuBarPositionedThreadID: String?
     private var skipNextMenuBarMenuWillOpenRender = false
@@ -611,13 +616,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         renderMenu()
     }
 
-    private func watchLatestThread() async {
-        guard let thread = controller.visibleRecentThreads.first ?? controller.recentThreads.first else { return }
-
-        await resumeThreadSubscriptions([thread.id])
-        renderMenu()
-    }
-
     private func handleClientTermination(reason: String?) {
         liveSubscribedThreadUpdatedAtByID.removeAll()
 
@@ -1028,8 +1026,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
-        self.threadProjectIndexByThreadID = threadProjectIndexByThreadID
         projectShortcutThreadIDs = menuSections.compactMap { $0.threads.first?.thread.id }
+        optionShortcutTargetIDs = projectShortcutThreadIDs + [MenuNavigationIdentifier.settings]
+        threadProjectIndexByThreadID[MenuNavigationIdentifier.settings] = projectShortcutThreadIDs.count
+        self.threadProjectIndexByThreadID = threadProjectIndexByThreadID
         let renderThreadIDs = Set(flattenedThreadIDs(from: menuSections.flatMap(\.threads)))
         let hasUnreadThreads = menuSections.flatMap(\.threads).contains(where: hasUnreadContent(in:))
         let statusOverride = debugStatusOverride
@@ -1085,25 +1085,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             hideHoverTooltip()
         }
         menu.addItem(.separator())
-        menu.addItem(
-            makeActionItem(
-                title: strings.text("menu.refreshThreads", language: preferences.language),
-                action: #selector(refreshThreadsAction)
-            )
-        )
-
-        let watchItem = makeActionItem(
-            title: strings.text("menu.watchLatestThread", language: preferences.language),
-            action: #selector(watchLatestThreadAction)
-        )
-        watchItem.isEnabled = !controller.recentThreads.isEmpty
-        menu.addItem(watchItem)
-
-        menu.addItem(.separator())
         let settingsItem = makeActionItem(
             title: strings.text("menu.settings", language: preferences.language),
             action: #selector(openSettingsAction)
         )
+        settingsItem.representedObject = MenuNavigationIdentifier.settings
         settingsItem.keyEquivalent = ","
         settingsItem.keyEquivalentModifierMask = [.command]
         menu.addItem(settingsItem)
@@ -1157,8 +1143,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let indicatorText = overlayIndicatorText(for: indicatorImage)
         let indentationLevel = item.indentationLevel
         let isEnabled = item.isEnabled
-        let representedThreadID = item.representedObject as? String
-        let projectIndex = representedThreadID.flatMap { threadProjectIndexByThreadID[$0] }
+        let representedIdentifier = item.representedObject as? String
+        let projectIndex = representedIdentifier.flatMap { threadProjectIndexByThreadID[$0] }
 
         let onSelect: (() -> Void)? = { [weak self] in
             guard let self else { return }
@@ -1170,17 +1156,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
             switch action {
             case #selector(openThread(_:)):
-                guard let representedThreadID else { return }
+                guard let representedThreadID = representedIdentifier else { return }
                 self.debugLog("overlay entry openThread thread=\(representedThreadID)")
                 self.openThread(threadID: representedThreadID)
-            case #selector(refreshThreadsAction):
-                self.debugLog("overlay entry refreshThreads")
-                self.closeMenu()
-                self.refreshThreadsAction()
-            case #selector(watchLatestThreadAction):
-                self.debugLog("overlay entry watchLatestThread")
-                self.closeMenu()
-                self.watchLatestThreadAction()
             case #selector(openSettingsAction):
                 self.debugLog("overlay entry openSettings")
                 self.closeMenu()
@@ -1198,10 +1176,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return .item(
             primaryText: splitTitle.primary,
             secondaryText: splitTitle.secondary,
-            identifier: representedThreadID,
+            identifier: representedIdentifier,
             indicatorText: indicatorText,
             indicatorImage: indicatorImage,
-            projectIndex: projectIndex,
+            navigationIndex: projectIndex,
             indentationLevel: indentationLevel,
             isEnabled: isEnabled,
             onSelect: onSelect
@@ -1770,7 +1748,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
-        highlightedThreadID = positioningThreadID
+        highlightedThreadID = hoverTooltipContentsByThreadID[positioningThreadID] == nil ? nil : positioningThreadID
         skipNextMenuBarMenuWillOpenRender = true
         menu.popUp(positioning: positioningItem, at: NSPoint(x: button.bounds.midX, y: button.bounds.minY), in: button)
     }
@@ -1823,14 +1801,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func handleMenuKeyboardShortcut(_ action: ThreadMenuKeyboardShortcutAction) -> Bool {
         switch action {
-        case .openHighlightedThread:
-            let threadID = highlightedThreadID ?? (menu.highlightedItem?.representedObject as? String)
-            guard let threadID else {
-                return false
-            }
-
-            openThread(threadID: threadID)
-            return true
+        case .openHighlightedItem:
+            return activateHighlightedMenuItem()
         case let .openProjectThread(index):
             guard projectShortcutThreadIDs.indices.contains(index) else {
                 return false
@@ -1842,9 +1814,48 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.openThread(threadID: threadID)
             }
             return true
-        case let .moveProjectSelection(delta):
+        case let .movePrimarySelection(delta):
             return moveProjectSelection(by: delta)
         }
+    }
+
+    private func activateHighlightedMenuItem() -> Bool {
+        guard let item = highlightedMenuItem(),
+              let action = item.action else {
+            return false
+        }
+
+        switch action {
+        case #selector(openThread(_:)):
+            guard let threadID = item.representedObject as? String else {
+                return false
+            }
+
+            openThread(threadID: threadID)
+            return true
+        case #selector(openSettingsAction):
+            openSettingsAction()
+            return true
+        case #selector(quit):
+            quit()
+            return true
+        default:
+            return NSApp.sendAction(action, to: item.target, from: item)
+        }
+    }
+
+    private func highlightedMenuItem() -> NSMenuItem? {
+        if let highlightedItem = menu.highlightedItem,
+           highlightedItem.isEnabled,
+           highlightedItem.action != nil {
+            return highlightedItem
+        }
+
+        guard let highlightedThreadID else {
+            return nil
+        }
+
+        return menu.items.first(where: { ($0.representedObject as? String) == highlightedThreadID })
     }
 
     private func moveProjectSelection(by delta: Int) -> Bool {
@@ -1852,14 +1863,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .menuBar:
             return moveMenuBarProjectSelection(by: delta)
         case .notch:
-            return notchStatusOverlay.moveExpandedMenuSelectionByProject(delta)
+            return notchStatusOverlay.moveExpandedMenuPrimarySelection(delta)
         case nil:
             return false
         }
     }
 
     private func moveMenuBarProjectSelection(by delta: Int) -> Bool {
-        guard isMenuOpen, !projectShortcutThreadIDs.isEmpty else {
+        guard isMenuOpen, !optionShortcutTargetIDs.isEmpty else {
             return false
         }
 
@@ -1869,7 +1880,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         if targetThreadID == currentThreadID {
-            highlightedThreadID = targetThreadID
             return true
         }
 
@@ -1879,23 +1889,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func menuBarProjectTargetThreadID(from currentThreadID: String?, delta: Int) -> String? {
-        guard !projectShortcutThreadIDs.isEmpty else {
+        guard !optionShortcutTargetIDs.isEmpty else {
             return nil
         }
 
         let targetProjectIndex: Int
         if let currentThreadID,
            let currentProjectIndex = threadProjectIndexByThreadID[currentThreadID] {
-            targetProjectIndex = (currentProjectIndex + delta + projectShortcutThreadIDs.count) % projectShortcutThreadIDs.count
+            targetProjectIndex = (currentProjectIndex + delta + optionShortcutTargetIDs.count) % optionShortcutTargetIDs.count
         } else {
-            targetProjectIndex = delta > 0 ? 0 : projectShortcutThreadIDs.count - 1
+            targetProjectIndex = delta > 0 ? 0 : optionShortcutTargetIDs.count - 1
         }
 
-        guard projectShortcutThreadIDs.indices.contains(targetProjectIndex) else {
+        guard optionShortcutTargetIDs.indices.contains(targetProjectIndex) else {
             return nil
         }
 
-        return projectShortcutThreadIDs[targetProjectIndex]
+        return optionShortcutTargetIDs[targetProjectIndex]
     }
 
     @objc
@@ -2012,21 +2022,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func toggleStatusPanelAction() {
         debugLog("toggleStatusPanelAction event=\(debugEventSummary(NSApp.currentEvent))")
         menuToggleController.toggleMenu()
-    }
-
-    @objc
-    private func refreshThreadsAction() {
-        debugLog("refreshThreadsAction")
-        requestDesktopActivityRefresh()
-        requestThreadRefresh()
-    }
-
-    @objc
-    private func watchLatestThreadAction() {
-        debugLog("watchLatestThreadAction")
-        Task {
-            await watchLatestThread()
-        }
     }
 
     @objc
