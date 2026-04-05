@@ -3,20 +3,22 @@
     <channel>
         <title>CodexMate</title>
         <item>
-            <title>0.0.7</title>
-            <pubDate>Mon, 06 Apr 2026 01:38:36 +0900</pubDate>
-            <link>https://github.com/gityeop/CodexMate/releases/tag/v0.0.7</link>
-            <sparkle:version>7</sparkle:version>
-            <sparkle:shortVersionString>0.0.7</sparkle:shortVersionString>
+            <title>0.0.8</title>
+            <pubDate>Mon, 06 Apr 2026 04:10:04 +0900</pubDate>
+            <link>https://github.com/gityeop/CodexMate/releases/tag/v0.0.8</link>
+            <sparkle:version>8</sparkle:version>
+            <sparkle:shortVersionString>0.0.8</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description sparkle:format="markdown"><![CDATA[# CodexMate 0.0.7
+            <description sparkle:format="markdown"><![CDATA[# CodexMate 0.0.8
 
-- Kept notch mode active on Macs without a hardware notch by rendering a centered fake-notch overlay instead of falling back to the menu bar.
-- Adjusted the collapsed pixel sprite to scale down with smaller notch heights so the character no longer clips in compact overlays.
-- Fixed hover expansion so the fake notch grows downward without cutting off the top edge of the notch or sprite animation.
+- Reduced startup latency by showing a smaller recent-thread snapshot first and backfilling the full tracked list immediately after bootstrap.
+- Made new thread discovery feel faster by boosting refresh cadence briefly when the app starts, returns to the foreground, or opens the menu.
+- Avoided duplicate thread-list refreshes during bootstrap so the menu and notch no longer stall behind overlapping loads.
+- Added a loading placeholder for recent threads and reduced notch overlay rebuild work while the menu is closed.
+- Updated settings language refresh handling so localized titles change immediately, and restored the standard Command-W shortcut to close the settings window.
 ]]></description>
-            <enclosure url="https://github.com/gityeop/CodexMate/releases/latest/download/CodexMate-0.0.7.zip" length="4411540" type="application/octet-stream" sparkle:edSignature="LbXC03WWGAXhdy3ImcOI1h1aNJuBbuN462uhnQdVFHZaM4UPmOq+YeUpdrGc9iQ1VkZwePLFPrBWh+M+8BzODg=="/>
+            <enclosure url="https://github.com/gityeop/CodexMate/releases/latest/download/CodexMate-0.0.8.zip" length="4416752" type="application/octet-stream" sparkle:edSignature="O3LrNgW2UMjxYkixY0TIkWfkzG5uwfLNaVdFVIwEuNAliOEqYDBjl+gzRvKCWdviIVhHumXUujP8791pQxT2CA=="/>
         </item>
     </channel>
 </rss>
