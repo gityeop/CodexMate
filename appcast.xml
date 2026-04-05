@@ -3,20 +3,20 @@
     <channel>
         <title>CodexMate</title>
         <item>
-            <title>0.0.5</title>
-            <pubDate>Wed, 01 Apr 2026 11:15:09 +0900</pubDate>
-            <link>https://github.com/gityeop/CodexMate/releases/tag/v0.0.5</link>
-            <sparkle:version>5</sparkle:version>
-            <sparkle:shortVersionString>0.0.5</sparkle:shortVersionString>
+            <title>0.0.6</title>
+            <pubDate>Sun, 05 Apr 2026 21:57:29 +0900</pubDate>
+            <link>https://github.com/gityeop/CodexMate/releases/tag/v0.0.6</link>
+            <sparkle:version>6</sparkle:version>
+            <sparkle:shortVersionString>0.0.6</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description sparkle:format="markdown"><![CDATA[# CodexMate 0.0.5
+            <description sparkle:format="markdown"><![CDATA[# CodexMate 0.0.6
 
-- Improved command approval fallback handling so pending `exec_command` approvals show the correct waiting state more reliably.
-- Added launch options and first-run behavior that make the packaged app easier to spot in UTM and other VM setups.
-- Refined shortcut recording, resource loading, and packaging so local builds and signed app bundles behave more predictably.
+- Reworked recent thread presentation so projects and subagent threads stay visible and grouped more consistently in the menu.
+- Hardened reconnect and desktop-state fallback handling so active work recovers more cleanly after app-server interruptions.
+- Simplified the menu footer and improved keyboard navigation, including smoother Option-arrow movement and a slightly higher notch sprite position.
 ]]></description>
-            <enclosure url="https://github.com/gityeop/CodexMate/releases/latest/download/CodexMate-0.0.5.zip" length="4378604" type="application/octet-stream" sparkle:edSignature="MSiqZ0O/AnM61nvX+/yAAk7MTenQ9X6OO3pxigU71jlyPMjjif1E9ZEATk6Q35GNRuiEVHLBqg1PYTl/FvVLAg=="/>
+            <enclosure url="https://github.com/gityeop/CodexMate/releases/latest/download/CodexMate-0.0.6.zip" length="4409464" type="application/octet-stream" sparkle:edSignature="Zlu2Y2aliqoHUiLTCxcFKSPOI6Lql7JaYHCgFcTJbeZE043WhpEHqLxCKWe+RBHQ2Lu/B0Ema1tL5sWkc4TjBw=="/>
         </item>
     </channel>
 </rss>
