@@ -2,6 +2,22 @@ import XCTest
 @testable import CodexMate
 
 @MainActor
+private final class LanguageChangeObserver: NSObject {
+    let defaults: UserDefaults
+    private(set) var notificationCount = 0
+
+    init(defaults: UserDefaults) {
+        self.defaults = defaults
+    }
+
+    @objc
+    func handleLanguageChange(_ notification: Notification) {
+        notificationCount += 1
+        XCTAssertEqual(defaults.string(forKey: "appLanguage"), AppLanguage.korean.rawValue)
+    }
+}
+
+@MainActor
 final class AppPreferencesStoreTests: XCTestCase {
     func testDefaultsUseSystemLanguageAndEnableNotifications() {
         let defaults = makeDefaults()
@@ -45,6 +61,25 @@ final class AppPreferencesStoreTests: XCTestCase {
         XCTAssertFalse(reloaded.failureNotificationsEnabled)
         XCTAssertEqual(reloaded.projectLimit, 7)
         XCTAssertEqual(reloaded.threadsPerProjectLimit, 12)
+    }
+
+    func testLanguageChangePostsNotificationOnceAfterPersisting() {
+        let defaults = makeDefaults()
+        let store = AppPreferencesStore(defaults: defaults)
+        let observer = LanguageChangeObserver(defaults: defaults)
+        NotificationCenter.default.addObserver(
+            observer,
+            selector: #selector(LanguageChangeObserver.handleLanguageChange(_:)),
+            name: .appLanguageDidChange,
+            object: store
+        )
+        defer {
+            NotificationCenter.default.removeObserver(observer)
+        }
+
+        store.language = .korean
+
+        XCTAssertEqual(observer.notificationCount, 1)
     }
 
     func testInvalidStoredDisplayModeFallsBackToNotch() {

@@ -1,4 +1,5 @@
 import AppKit
+import Carbon.HIToolbox
 import XCTest
 @testable import CodexMate
 
@@ -10,7 +11,7 @@ final class SettingsWindowControllerTests: XCTestCase {
     }
 
     func testVisibilityCallbackTracksShowAndClose() throws {
-        let controller = makeController()
+        let controller = makeController().controller
         var visibilityChanges: [Bool] = []
         controller.onVisibilityChanged = { visibilityChanges.append($0) }
 
@@ -22,7 +23,39 @@ final class SettingsWindowControllerTests: XCTestCase {
         XCTAssertEqual(visibilityChanges, [true, false])
     }
 
-    private func makeController() -> SettingsWindowController {
+    func testWindowTitleUpdatesImmediatelyWhenLanguageChanges() throws {
+        let dependencies = makeController()
+        let controller = dependencies.controller
+        dependencies.preferences.language = .english
+        controller.showWindow(nil)
+
+        XCTAssertEqual(controller.window?.title, "Settings")
+
+        dependencies.preferences.language = .korean
+
+        XCTAssertEqual(controller.window?.title, "설정")
+    }
+
+    func testCommandWClosesWindow() throws {
+        let controller = makeController().controller
+        var visibilityChanges: [Bool] = []
+        controller.onVisibilityChanged = { visibilityChanges.append($0) }
+
+        controller.showWindow(nil)
+        XCTAssertTrue(controller.isWindowVisible)
+
+        let event = try makeKeyEvent(
+            keyCode: UInt16(kVK_ANSI_W),
+            modifierFlags: [.command],
+            characters: "w"
+        )
+        XCTAssertTrue(controller.window?.performKeyEquivalent(with: event) == true)
+
+        XCTAssertFalse(controller.isWindowVisible)
+        XCTAssertEqual(visibilityChanges, [true, false])
+    }
+
+    private func makeController() -> (controller: SettingsWindowController, preferences: AppPreferencesStore) {
         let defaultsSuiteName = "SettingsWindowControllerTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: defaultsSuiteName)!
         defaults.removePersistentDomain(forName: defaultsSuiteName)
@@ -48,6 +81,27 @@ final class SettingsWindowControllerTests: XCTestCase {
             )
         )
 
-        return SettingsWindowController(viewModel: viewModel)
+        return (SettingsWindowController(viewModel: viewModel), preferences)
+    }
+
+    private func makeKeyEvent(
+        keyCode: UInt16,
+        modifierFlags: NSEvent.ModifierFlags = [],
+        characters: String
+    ) throws -> NSEvent {
+        try XCTUnwrap(
+            NSEvent.keyEvent(
+                with: .keyDown,
+                location: .zero,
+                modifierFlags: modifierFlags,
+                timestamp: 0,
+                windowNumber: 0,
+                context: nil,
+                characters: characters,
+                charactersIgnoringModifiers: characters,
+                isARepeat: false,
+                keyCode: keyCode
+            )
+        )
     }
 }

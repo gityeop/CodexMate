@@ -4,6 +4,20 @@ import Combine
 import SwiftUI
 import KeyboardShortcuts
 
+private final class SettingsWindow: NSWindow {
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        if event.type == .keyDown,
+           modifiers == [.command],
+           event.charactersIgnoringModifiers?.lowercased() == "w" {
+            performClose(nil)
+            return true
+        }
+
+        return super.performKeyEquivalent(with: event)
+    }
+}
+
 @MainActor
 final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private let viewModel: SettingsViewModel
@@ -16,7 +30,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
 
         let contentView = SettingsView(viewModel: viewModel)
         let hostingController = NSHostingController(rootView: contentView)
-        let window = NSWindow(contentViewController: hostingController)
+        let window = SettingsWindow(contentViewController: hostingController)
         window.styleMask = [.titled, .closable, .miniaturizable]
         window.titleVisibility = .visible
         window.setContentSize(NSSize(width: 520, height: 500))
@@ -28,7 +42,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
 
         updateWindowTitle()
 
-        viewModel.objectWillChange
+        NotificationCenter.default.publisher(for: .appLanguageDidChange, object: viewModel.preferences)
             .sink { [weak self] _ in
                 self?.updateWindowTitle()
             }

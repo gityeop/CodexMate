@@ -2,6 +2,7 @@ import Combine
 import Foundation
 
 extension Notification.Name {
+    static let appLanguageDidChange = Notification.Name("AppPreferencesStore.languageDidChange")
     static let appDisplayModeDidChange = Notification.Name("AppPreferencesStore.displayModeDidChange")
 }
 
@@ -25,6 +26,11 @@ final class AppPreferencesStore: ObservableObject {
     @Published var language: AppLanguage {
         didSet {
             defaults.set(language.rawValue, forKey: DefaultsKey.language)
+            guard language != oldValue else {
+                return
+            }
+
+            NotificationCenter.default.post(name: .appLanguageDidChange, object: self)
         }
     }
 

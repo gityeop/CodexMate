@@ -465,7 +465,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func configurePreferencesObservers() {
-        preferences.$language
+        NotificationCenter.default.publisher(for: .appLanguageDidChange, object: preferences)
             .sink { [weak self] _ in
                 guard let self else { return }
                 self.relativeDateFormatter.locale = self.preferences.locale
