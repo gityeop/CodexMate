@@ -16,12 +16,7 @@ enum AppDisplayMode: String, CaseIterable, Identifiable {
         return mode
     }
 
-    func resolved(hasHardwareNotch: Bool) -> AppDisplayMode {
-        switch self {
-        case .menuBar:
-            return .menuBar
-        case .notch:
-            return hasHardwareNotch ? .notch : .menuBar
-        }
+    func resolved(hasHardwareNotch _: Bool) -> AppDisplayMode {
+        self
     }
 }

@@ -12,7 +12,7 @@ final class ThreadMenuTests: XCTestCase {
 
         XCTAssertEqual(
             ThreadMenu.shortcutAction(for: event),
-            .openHighlightedThread
+            .openHighlightedItem
         )
     }
 
@@ -25,7 +25,7 @@ final class ThreadMenuTests: XCTestCase {
 
         XCTAssertEqual(
             ThreadMenu.shortcutAction(for: event),
-            .openHighlightedThread
+            .openHighlightedItem
         )
     }
 
@@ -88,11 +88,11 @@ final class ThreadMenuTests: XCTestCase {
 
         XCTAssertEqual(
             ThreadMenu.shortcutAction(for: downEvent),
-            .moveProjectSelection(1)
+            .movePrimarySelection(1)
         )
         XCTAssertEqual(
             ThreadMenu.shortcutAction(for: upEvent),
-            .moveProjectSelection(-1)
+            .movePrimarySelection(-1)
         )
     }
 

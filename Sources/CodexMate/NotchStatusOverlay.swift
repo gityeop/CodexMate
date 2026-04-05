@@ -97,12 +97,26 @@ private func interpolate(_ start: CGRect, _ end: CGRect, progress: CGFloat) -> C
     )
 }
 
-private func scaledRect(_ rect: CGRect, scaleX: CGFloat, scaleY: CGFloat, yOffset: CGFloat = 0) -> CGRect {
+private func scaledRect(
+    _ rect: CGRect,
+    scaleX: CGFloat,
+    scaleY: CGFloat,
+    yOffset: CGFloat = 0,
+    anchorTop: Bool = false
+) -> CGRect {
     let width = rect.width * scaleX
     let height = rect.height * scaleY
+    let originY: CGFloat
+
+    if anchorTop {
+        originY = rect.maxY - height + yOffset
+    } else {
+        originY = rect.midY - (height / 2) + yOffset
+    }
+
     return CGRect(
         x: rect.midX - (width / 2),
-        y: rect.midY - (height / 2) + yOffset,
+        y: originY,
         width: width,
         height: height
     )
@@ -253,15 +267,14 @@ final class NotchStatusOverlayController {
         spriteImage: NSImage?,
         statusSprite: MenubarStatusPresentation.StatusSprite,
         statusText: String,
-        frameIndex: Int,
-        hasNotch: Bool
+        frameIndex: Int
     ) {
         overlayView.spriteImage = spriteImage
         overlayView.statusSprite = statusSprite
         overlayView.statusText = statusText
         overlayView.frameIndex = frameIndex
-        overlayView.usesCompactLayout = !hasNotch
-        overlayView.spritePointSize = hasNotch ? Metrics.spritePointSize : Metrics.compactSpritePointSize
+        overlayView.usesCompactLayout = false
+        overlayView.spritePointSize = Metrics.spritePointSize
         currentScreen = panel.screen ?? currentScreen
 
         if panel.isVisible {
@@ -554,6 +567,7 @@ final class NotchStatusOverlayView: NSView {
     private enum Layout {
         static let notchSpriteOffsetFromHardwareNotch: CGFloat = 12
         static let notchSpriteTrailingInset: CGFloat = 18
+        static let notchSpriteTopInset: CGFloat = 2
         static let notchSpriteBottomInset: CGFloat = 1
         static let spriteVerticalLift: CGFloat = 2
         static let expandedMenuSpriteHorizontalShift: CGFloat = 16
@@ -1381,6 +1395,19 @@ final class NotchStatusOverlayView: NSView {
 
     }
 
+    private func fittedCollapsedSpriteSize(baseSize: NSSize, in islandFrame: CGRect) -> NSSize {
+        let availableHeight = max(
+            12,
+            islandFrame.height - Layout.notchSpriteTopInset - Layout.notchSpriteBottomInset - abs(Layout.spriteVerticalLift)
+        )
+        let scale = min(1, availableHeight / max(baseSize.height, 1))
+
+        return NSSize(
+            width: floor(baseSize.width * scale),
+            height: floor(baseSize.height * scale)
+        )
+    }
+
     private func collapsedSpriteFrame(bobOffset: CGFloat) -> CGRect {
         if usesCompactLayout {
             let islandFrame = compactIslandFrame
@@ -1400,16 +1427,21 @@ final class NotchStatusOverlayView: NSView {
         let islandFrame = collapsedNotchFrame
         let hardwareFrame = hardwareNotchFrame
         let spriteScale = 1 + (islandEmphasisProgress * 0.03)
-        let size = NSSize(
+        let baseSize = NSSize(
             width: spritePointSize.width * spriteScale,
             height: spritePointSize.height * spriteScale
         )
+        let size = fittedCollapsedSpriteSize(baseSize: baseSize, in: islandFrame)
         let collapsedMaxX = islandFrame.maxX - Layout.notchSpriteTrailingInset - size.width
         let expandedMaxX = expandedSurfaceFrame.maxX - Layout.expandedContentHorizontalInset - size.width
         let baseX = min(hardwareFrame.maxX + Layout.notchSpriteOffsetFromHardwareNotch, collapsedMaxX)
+        let minY = islandFrame.minY + Layout.notchSpriteBottomInset
+        let maxY = islandFrame.maxY - Layout.notchSpriteTopInset - size.height
+        let desiredY = islandFrame.minY - Layout.notchSpriteBottomInset + bobOffset + islandEmphasisProgress + Layout.spriteVerticalLift
+
         return CGRect(
             x: min(baseX + (menuExpansionProgress * Layout.expandedMenuSpriteHorizontalShift), expandedMaxX),
-            y: islandFrame.minY - Layout.notchSpriteBottomInset + bobOffset + islandEmphasisProgress + Layout.spriteVerticalLift,
+            y: max(minY, min(desiredY, maxY)),
             width: size.width,
             height: size.height
         )
@@ -1420,7 +1452,7 @@ final class NotchStatusOverlayView: NSView {
             compactIslandBaseFrame,
             scaleX: 1 + (islandEmphasisProgress * 0.035),
             scaleY: 1 + (islandEmphasisProgress * 0.12),
-            yOffset: islandEmphasisProgress * 2
+            anchorTop: true
         )
     }
 
@@ -1429,7 +1461,7 @@ final class NotchStatusOverlayView: NSView {
             collapsedNotchBaseFrame,
             scaleX: 1 + (islandEmphasisProgress * 0.03),
             scaleY: 1 + (islandEmphasisProgress * 0.16),
-            yOffset: islandEmphasisProgress * 1.5
+            anchorTop: true
         )
     }
 

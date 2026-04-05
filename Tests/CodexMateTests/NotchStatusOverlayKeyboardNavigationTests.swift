@@ -365,12 +365,12 @@ final class NotchStatusOverlayKeyboardNavigationTests: XCTestCase {
     private func makeSectionedMenuItems() -> [NotchStatusOverlayMenuEntry] {
         [
             .header("Project A | 스레드 2개"),
-            .item(primaryText: "Project A Thread 1", projectIndex: 0, onSelect: {}),
-            .item(primaryText: "Project A Thread 2", projectIndex: 0, onSelect: {}),
+            .item(primaryText: "Project A Thread 1", navigationIndex: 0, onSelect: {}),
+            .item(primaryText: "Project A Thread 2", navigationIndex: 0, onSelect: {}),
             .separator(),
             .header("Project B | 스레드 2개"),
-            .item(primaryText: "Project B Thread 1", projectIndex: 1, onSelect: {}),
-            .item(primaryText: "Project B Thread 2", projectIndex: 1, onSelect: {}),
+            .item(primaryText: "Project B Thread 1", navigationIndex: 1, onSelect: {}),
+            .item(primaryText: "Project B Thread 2", navigationIndex: 1, onSelect: {}),
         ]
     }
 

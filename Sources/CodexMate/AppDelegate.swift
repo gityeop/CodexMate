@@ -278,7 +278,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func applyPresentationMode(force: Bool = false) {
-        let nextMode = preferences.displayMode.resolved(hasHardwareNotch: preferredNotchScreen() != nil)
+        let nextMode = preferences.displayMode.resolved(hasHardwareNotch: preferredOverlayScreen() != nil)
         let previousMode = currentEffectiveDisplayMode
 
         debugLog(
@@ -398,7 +398,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
-        guard let screen = preferredNotchScreen() else {
+        guard let screen = preferredOverlayScreen() else {
             notchStatusOverlay.hide()
             return
         }
@@ -410,8 +410,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    private func preferredNotchScreen() -> NSScreen? {
-        NSScreen.screens.first(where: \.hasCameraHousing)
+    private func preferredOverlayScreen() -> NSScreen? {
+        if let hardwareNotchScreen = NSScreen.screens.first(where: \.hasCameraHousing) {
+            return hardwareNotchScreen
+        }
+
+        if let builtInDisplay = NSScreen.screens.first(where: \.isBuiltInDisplay) {
+            return builtInDisplay
+        }
+
+        return NSScreen.main ?? NSScreen.screens.first
     }
 
     private func configureMainMenu() {
@@ -484,7 +492,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .sink { [weak self] _ in
                 guard let self else { return }
                 self.debugLog(
-                    "displayModeChanged requested=\(self.preferences.displayMode.rawValue) effective=\(self.preferences.displayMode.resolved(hasHardwareNotch: self.preferredNotchScreen() != nil).rawValue)"
+                    "displayModeChanged requested=\(self.preferences.displayMode.rawValue) effective=\(self.preferences.displayMode.resolved(hasHardwareNotch: self.preferredOverlayScreen() != nil).rawValue)"
                 )
                 self.applyPresentationMode()
                 self.renderMenu()
@@ -980,7 +988,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
-        guard let overlayScreen = preferredNotchScreen() else {
+        guard let overlayScreen = preferredOverlayScreen() else {
             notchStatusOverlay.hide()
             return
         }
@@ -994,8 +1002,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             ),
             statusSprite: currentStatusSprite,
             statusText: currentStatusDisplayName,
-            frameIndex: statusAnimationFrameIndex,
-            hasNotch: overlayScreen.hasCameraHousing
+            frameIndex: statusAnimationFrameIndex
         )
         if !notchStatusOverlay.isVisible {
             notchStatusOverlay.show(on: overlayScreen)
@@ -1699,7 +1706,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .menuBar:
             openMenuBarMenu(positioningThreadID: nil, requestRefresh: true)
         case .notch:
-            guard let screen = preferredNotchScreen() else {
+            guard let screen = preferredOverlayScreen() else {
                 applyPresentationMode()
                 return
             }

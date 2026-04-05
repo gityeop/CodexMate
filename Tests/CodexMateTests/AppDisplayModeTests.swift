@@ -10,7 +10,7 @@ final class AppDisplayModeTests: XCTestCase {
         XCTAssertEqual(AppDisplayMode.notch.resolved(hasHardwareNotch: true), .notch)
     }
 
-    func testNotchFallsBackToMenuBarWithoutHardwareNotch() {
-        XCTAssertEqual(AppDisplayMode.notch.resolved(hasHardwareNotch: false), .menuBar)
+    func testNotchRemainsNotchWithoutHardwareNotch() {
+        XCTAssertEqual(AppDisplayMode.notch.resolved(hasHardwareNotch: false), .notch)
     }
 }
