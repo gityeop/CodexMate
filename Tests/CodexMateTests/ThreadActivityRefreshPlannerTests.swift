@@ -26,6 +26,16 @@ final class ThreadActivityRefreshPlannerTests: XCTestCase {
         XCTAssertTrue(shouldRefresh)
     }
 
+    func testShouldRefreshThreadsWhenStateSnapshotIncludesUnknownApprovalThread() {
+        let shouldRefresh = ThreadActivityRefreshPlanner.shouldRefreshThreads(
+            recentThreadIDs: ["thread-1", "thread-2"],
+            latestViewedAtByThreadID: [:],
+            attentionThreadIDs: ["thread-3"]
+        )
+
+        XCTAssertTrue(shouldRefresh)
+    }
+
     func testShouldNotRefreshThreadsWhenConversationActivityOnlyIncludesKnownThreads() {
         let shouldRefresh = ThreadActivityRefreshPlanner.shouldRefreshThreads(
             recentThreadIDs: ["thread-1", "thread-2"],

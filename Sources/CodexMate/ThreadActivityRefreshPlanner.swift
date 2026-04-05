@@ -5,17 +5,20 @@ struct ThreadActivityRefreshPlanner {
         recentThreadIDs: Set<String>,
         latestViewedAtByThreadID: [String: Date],
         recentActivityThreadIDs: Set<String> = [],
+        attentionThreadIDs: Set<String> = [],
         now: Date = Date(),
         discoveryLookbackInterval: TimeInterval = 90
     ) -> Set<String> {
-        let stateDiscoveredThreadIDs = recentActivityThreadIDs.subtracting(recentThreadIDs)
-        return stateDiscoveredThreadIDs
+        recentActivityThreadIDs
+            .union(attentionThreadIDs)
+            .subtracting(recentThreadIDs)
     }
 
     static func shouldRefreshThreads(
         recentThreadIDs: Set<String>,
         latestViewedAtByThreadID: [String: Date],
         recentActivityThreadIDs: Set<String> = [],
+        attentionThreadIDs: Set<String> = [],
         now: Date = Date(),
         discoveryLookbackInterval: TimeInterval = 90
     ) -> Bool {
@@ -23,6 +26,7 @@ struct ThreadActivityRefreshPlanner {
             recentThreadIDs: recentThreadIDs,
             latestViewedAtByThreadID: latestViewedAtByThreadID,
             recentActivityThreadIDs: recentActivityThreadIDs,
+            attentionThreadIDs: attentionThreadIDs,
             now: now,
             discoveryLookbackInterval: discoveryLookbackInterval
         ).isEmpty

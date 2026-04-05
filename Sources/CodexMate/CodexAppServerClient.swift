@@ -36,6 +36,8 @@ actor CodexAppServerClient {
     typealias MessageHandler = @Sendable (ClientMessage) -> Void
     typealias TerminationHandler = @Sendable (String?) -> Void
 
+    private typealias ConnectionID = UUID
+
     private var process: Process?
     private var stdinHandle: FileHandle?
     private var stdoutHandle: FileHandle?
@@ -45,6 +47,8 @@ actor CodexAppServerClient {
     private var nextRequestID = 1
     private var pendingResponses: [Int: CheckedContinuation<Data, Error>] = [:]
     private var initializeResponse: InitializeResponse?
+    private var activeConnectionID: ConnectionID?
+    private var stoppingConnectionIDs: Set<ConnectionID> = []
 
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
@@ -66,6 +70,7 @@ actor CodexAppServerClient {
             throw CodexAppServerClientError.notConnected
         }
 
+        let connectionID = ConnectionID()
         let newProcess = Process()
         let stdinPipe = Pipe()
         let stdoutPipe = Pipe()
@@ -80,7 +85,7 @@ actor CodexAppServerClient {
             guard let self else { return }
 
             Task {
-                await self.handleTermination(status: process.terminationStatus)
+                await self.handleTermination(status: process.terminationStatus, connectionID: connectionID)
             }
         }
 
@@ -92,7 +97,7 @@ actor CodexAppServerClient {
             }
 
             Task {
-                await self.handleStandardOutput(data)
+                await self.handleStandardOutput(data, connectionID: connectionID)
             }
         }
 
@@ -104,12 +109,13 @@ actor CodexAppServerClient {
             }
 
             Task {
-                await self.handleStandardError(data)
+                await self.handleStandardError(data, connectionID: connectionID)
             }
         }
 
         try newProcess.run()
 
+        activeConnectionID = connectionID
         process = newProcess
         stdinHandle = stdinPipe.fileHandleForWriting
         stdoutHandle = stdoutPipe.fileHandleForReading
@@ -129,31 +135,26 @@ actor CodexAppServerClient {
     }
 
     func stop() {
-        stdoutHandle?.readabilityHandler = nil
-        stderrHandle?.readabilityHandler = nil
-        stdinHandle?.closeFile()
-        stdoutHandle?.closeFile()
-        stderrHandle?.closeFile()
+        let currentConnectionID = activeConnectionID
+        let currentProcess = process
+        if let currentConnectionID {
+            stoppingConnectionIDs.insert(currentConnectionID)
+        }
+        resetConnectionState(expectedConnectionID: currentConnectionID)
 
-        process?.standardOutput = nil
-        process?.standardError = nil
-        process?.terminationHandler = nil
-        process?.interrupt()
-        process?.terminate()
-
-        process = nil
-        stdinHandle = nil
-        stdoutHandle = nil
-        stderrHandle = nil
-        stdoutBuffer.removeAll(keepingCapacity: false)
-        stderrBuffer.removeAll(keepingCapacity: false)
-        initializeResponse = nil
-
-        for (_, continuation) in pendingResponses {
-            continuation.resume(throwing: CodexAppServerClientError.notConnected)
+        guard let currentProcess, currentProcess.isRunning else {
+            if let currentConnectionID {
+                stoppingConnectionIDs.remove(currentConnectionID)
+            }
+            return
         }
 
-        pendingResponses.removeAll()
+        currentProcess.interrupt()
+        currentProcess.terminate()
+    }
+
+    func isConnected() -> Bool {
+        process != nil && initializeResponse != nil
     }
 
     func call<Result: Decodable, Params: Encodable>(method: String, params: Params) async throws -> Result {
@@ -217,19 +218,54 @@ actor CodexAppServerClient {
         return try decoder.decode(Result.self, from: resultData)
     }
 
-    private func handleTermination(status: Int32) {
+    private func handleTermination(status: Int32, connectionID: ConnectionID) {
         let terminationHandler = onTermination
-        stop()
+        let stoppedDeliberately = stoppingConnectionIDs.remove(connectionID) != nil
+        resetConnectionState(expectedConnectionID: connectionID)
+
+        guard !stoppedDeliberately else {
+            return
+        }
+
         terminationHandler?("Codex app-server exited with status \(status)")
     }
 
-    private func handleStandardOutput(_ data: Data) {
+    private func resetConnectionState(expectedConnectionID: ConnectionID? = nil) {
+        if let expectedConnectionID, activeConnectionID != expectedConnectionID {
+            return
+        }
+
+        stdoutHandle?.readabilityHandler = nil
+        stderrHandle?.readabilityHandler = nil
+        stdinHandle?.closeFile()
+        stdoutHandle?.closeFile()
+        stderrHandle?.closeFile()
+
+        activeConnectionID = nil
+        process = nil
+        stdinHandle = nil
+        stdoutHandle = nil
+        stderrHandle = nil
+        stdoutBuffer.removeAll(keepingCapacity: false)
+        stderrBuffer.removeAll(keepingCapacity: false)
+        initializeResponse = nil
+
+        for (_, continuation) in pendingResponses {
+            continuation.resume(throwing: CodexAppServerClientError.notConnected)
+        }
+
+        pendingResponses.removeAll()
+    }
+
+    private func handleStandardOutput(_ data: Data, connectionID: ConnectionID) {
+        guard activeConnectionID == connectionID else { return }
         guard !data.isEmpty else { return }
         stdoutBuffer.append(data)
         drainBuffer(&stdoutBuffer, source: .stdout)
     }
 
-    private func handleStandardError(_ data: Data) {
+    private func handleStandardError(_ data: Data, connectionID: ConnectionID) {
+        guard activeConnectionID == connectionID else { return }
         guard !data.isEmpty else { return }
         stderrBuffer.append(data)
         drainBuffer(&stderrBuffer, source: .stderr)
