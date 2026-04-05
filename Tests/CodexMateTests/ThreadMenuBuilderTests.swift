@@ -2,7 +2,7 @@ import XCTest
 @testable import CodexMate
 
 final class ThreadMenuBuilderTests: XCTestCase {
-    func testBuildHidesNonAttentionSubagentsByDefaultAndAddsRunningSummary() {
+    func testBuildHidesNonAttentionSubagentsByDefaultAndKeepsParentOnly() {
         let parent = threadRow(id: "parent-thread", title: "Main task", updatedAt: 100)
         let runningChild = threadRow(
             id: "running-child",
@@ -31,16 +31,6 @@ final class ThreadMenuBuilderTests: XCTestCase {
 
         XCTAssertEqual(sections.first?.threads.map(\.thread.id), ["parent-thread"])
         XCTAssertTrue(sections.first?.threads.first?.children.isEmpty ?? false)
-        XCTAssertEqual(
-            sections.first?.threads.first?.hiddenSubagentSummary,
-            MenubarStatusPresentation.SubagentSummary(
-                hiddenCount: 2,
-                runningCount: 1,
-                waitingCount: 0,
-                approvalCount: 0,
-                failedCount: 0
-            )
-        )
         XCTAssertEqual(sections.first?.threadCount, 1)
     }
 
@@ -97,7 +87,6 @@ final class ThreadMenuBuilderTests: XCTestCase {
         )
 
         XCTAssertEqual(sections.first?.threads.map(\.thread.id), ["orphan-child", "parent-thread"])
-        XCTAssertNil(sections.first?.threads.first?.hiddenSubagentSummary)
     }
 
     func testBuildDoesNotPromoteSubagentOfHiddenRootAsSeparateRootByDefault() {

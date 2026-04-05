@@ -1257,15 +1257,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return true
         }
 
-        if thread.hiddenDescendantThreads.contains(where: { hiddenThread in
-            controller.threadReadMarkers.hasUnreadContent(
-                threadID: hiddenThread.id,
-                lastTerminalActivityAt: hiddenThread.lastTerminalActivityAt
-            )
-        }) {
-            return true
-        }
-
         return thread.children.contains(where: hasUnreadContent(in:))
     }
 
@@ -1314,7 +1305,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return MenubarStatusPresentation.threadTitle(
             for: thread.thread,
             relativeDate: relativeDate,
-            hiddenSubagentSummary: thread.hiddenSubagentSummary,
             maxDisplayTitleLength: ThreadListDisplay.maxThreadDisplayTitleLength,
             strings: strings,
             language: preferences.language
@@ -1358,7 +1348,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let indicator = MenubarStatusPresentation.threadIndicator(
             for: threadSnapshot.thread,
             hasUnreadContent: threadSnapshot.hasUnreadContent
-        ) ?? indicator(forHiddenSubagentSummary: thread.hiddenSubagentSummary)
+        )
 
         switch indicator {
         case .unread:
@@ -1372,26 +1362,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case nil:
             return nil
         }
-    }
-
-    private func indicator(
-        forHiddenSubagentSummary summary: MenubarStatusPresentation.SubagentSummary?
-    ) -> MenubarStatusPresentation.ThreadIndicator? {
-        guard let summary else { return nil }
-
-        if summary.failedCount > 0 {
-            return .failed
-        }
-
-        if summary.approvalCount > 0 || summary.waitingCount > 0 {
-            return .waitingForUser
-        }
-
-        if summary.runningCount > 0 {
-            return .running
-        }
-
-        return nil
     }
 
     private func updateHoverTooltip(for item: NSMenuItem?) {

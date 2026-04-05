@@ -9,20 +9,6 @@ struct ThreadMenuSection: Equatable {
 struct ThreadMenuThread: Equatable {
     let thread: AppStateStore.ThreadRow
     let children: [ThreadMenuThread]
-    let hiddenSubagentSummary: MenubarStatusPresentation.SubagentSummary?
-    let hiddenDescendantThreads: [AppStateStore.ThreadRow]
-
-    init(
-        thread: AppStateStore.ThreadRow,
-        children: [ThreadMenuThread],
-        hiddenSubagentSummary: MenubarStatusPresentation.SubagentSummary? = nil,
-        hiddenDescendantThreads: [AppStateStore.ThreadRow] = []
-    ) {
-        self.thread = thread
-        self.children = children
-        self.hiddenSubagentSummary = hiddenSubagentSummary
-        self.hiddenDescendantThreads = hiddenDescendantThreads
-    }
 }
 
 enum ThreadMenuBuilder {
@@ -122,7 +108,7 @@ enum ThreadMenuBuilder {
                 childrenByParentID: childrenByParentID,
                 isRoot: true,
                 visited: []
-            ).node
+            )
         }
         .sorted(by: isHigherPriorityMenuThread)
         let visibleRootNodes: [ThreadMenuThread]
@@ -139,63 +125,35 @@ enum ThreadMenuBuilder {
         )
     }
 
-    private struct BuildOutcome {
-        let node: ThreadMenuThread?
-        let allDescendants: [AppStateStore.ThreadRow]
-    }
-
     private static func buildThread(
         thread: AppStateStore.ThreadRow,
         childrenByParentID: [String?: [AppStateStore.ThreadRow]],
         isRoot: Bool,
         visited: Set<String>
-    ) -> BuildOutcome {
+    ) -> ThreadMenuThread? {
         guard !visited.contains(thread.id) else {
-            return BuildOutcome(node: nil, allDescendants: [])
+            return nil
         }
 
         let childThreads = (childrenByParentID[thread.id] ?? []).sorted(by: isNewerThread)
         let nextVisited = visited.union([thread.id])
 
-        var visibleChildren: [ThreadMenuThread] = []
-        var hiddenDescendants: [AppStateStore.ThreadRow] = []
-        var allDescendants: [AppStateStore.ThreadRow] = []
-
-        for child in childThreads {
-            let outcome = buildThread(
+        let visibleChildren = childThreads.compactMap { child in
+            buildThread(
                 thread: child,
                 childrenByParentID: childrenByParentID,
                 isRoot: false,
                 visited: nextVisited
             )
-            allDescendants.append(child)
-            allDescendants.append(contentsOf: outcome.allDescendants)
-
-            if let node = outcome.node {
-                visibleChildren.append(node)
-                hiddenDescendants.append(contentsOf: node.hiddenDescendantThreads)
-            } else {
-                hiddenDescendants.append(child)
-                hiddenDescendants.append(contentsOf: outcome.allDescendants)
-            }
         }
 
         let shouldShow = isRoot || isAttentionThread(thread) || !visibleChildren.isEmpty
         guard shouldShow else {
-            return BuildOutcome(node: nil, allDescendants: allDescendants)
+            return nil
         }
 
         let sortedVisibleChildren = visibleChildren.sorted(by: isHigherPriorityMenuThread)
-
-        return BuildOutcome(
-            node: ThreadMenuThread(
-                thread: thread,
-                children: sortedVisibleChildren,
-                hiddenSubagentSummary: MenubarStatusPresentation.SubagentSummary(hiddenThreads: hiddenDescendants),
-                hiddenDescendantThreads: hiddenDescendants
-            ),
-            allDescendants: allDescendants
-        )
+        return ThreadMenuThread(thread: thread, children: sortedVisibleChildren)
     }
 
     private static func sectionRootThreads(
@@ -260,12 +218,6 @@ enum ThreadMenuBuilder {
         return false
     }
 
-    private static func flattenedThreadIDs(from threads: [ThreadMenuThread]) -> [String] {
-        threads.flatMap { thread in
-            [thread.thread.id] + flattenedThreadIDs(from: thread.children)
-        }
-    }
-
     private static func isAttentionThread(_ thread: AppStateStore.ThreadRow) -> Bool {
         switch thread.presentationStatus {
         case .waitingForUser, .failed:
@@ -289,8 +241,7 @@ enum ThreadMenuBuilder {
     private static func menuVisibilityPriority(for thread: ThreadMenuThread) -> Int {
         max(
             visibilityPriority(for: thread.thread),
-            thread.children.map(menuVisibilityPriority).max() ?? 0,
-            visibilityPriority(for: thread.hiddenSubagentSummary)
+            thread.children.map(menuVisibilityPriority).max() ?? 0
         )
     }
 
@@ -305,26 +256,6 @@ enum ThreadMenuBuilder {
         case .notLoaded, .idle:
             return 0
         }
-    }
-
-    private static func visibilityPriority(
-        for summary: MenubarStatusPresentation.SubagentSummary?
-    ) -> Int {
-        guard let summary else { return 0 }
-
-        if summary.approvalCount > 0 || summary.waitingCount > 0 {
-            return 3
-        }
-
-        if summary.runningCount > 0 {
-            return 2
-        }
-
-        if summary.failedCount > 0 {
-            return 1
-        }
-
-        return 0
     }
 
     private static func isNewerThread(_ lhs: AppStateStore.ThreadRow, _ rhs: AppStateStore.ThreadRow) -> Bool {

@@ -52,17 +52,7 @@
     "notification.needsInput.title": "CodexMate needs input",
     "notification.needsInput.bodyFallback": "A watched thread is waiting for user input.",
     "notification.approval.title": "CodexMate approval required",
-    "notification.approval.bodyFallback": "A watched thread is waiting for approval.",
-    "menu.threadSummary.generic.one": "%lld subagent",
-    "menu.threadSummary.generic.other": "%lld subagents",
-    "menu.threadSummary.running.one": "%lld subagent running",
-    "menu.threadSummary.running.other": "%lld subagents running",
-    "menu.threadSummary.waiting.one": "%lld subagent waiting for input",
-    "menu.threadSummary.waiting.other": "%lld subagents waiting for input",
-    "menu.threadSummary.approval.one": "%lld subagent needs approval",
-    "menu.threadSummary.approval.other": "%lld subagents need approval",
-    "menu.threadSummary.failed.one": "%lld subagent failed",
-    "menu.threadSummary.failed.other": "%lld subagents failed"
+    "notification.approval.bodyFallback": "A watched thread is waiting for approval."
   },
   "ko": {
     "menu.noRecentThreads": "최근 스레드가 없습니다",
@@ -118,15 +108,6 @@
     "notification.needsInput.bodyFallback": "감시 중인 스레드가 사용자 입력을 기다리고 있습니다.",
     "notification.approval.title": "CodexMate 승인 필요",
     "notification.approval.bodyFallback": "감시 중인 스레드가 승인을 기다리고 있습니다.",
-    "menu.threadSummary.generic.one": "하위 작업 %lld개",
-    "menu.threadSummary.generic.other": "하위 작업 %lld개",
-    "menu.threadSummary.running.one": "하위 작업 %lld개 실행 중",
-    "menu.threadSummary.running.other": "하위 작업 %lld개 실행 중",
-    "menu.threadSummary.waiting.one": "하위 작업 %lld개 입력 대기 중",
-    "menu.threadSummary.waiting.other": "하위 작업 %lld개 입력 대기 중",
-    "menu.threadSummary.approval.one": "하위 작업 %lld개 승인 필요",
-    "menu.threadSummary.approval.other": "하위 작업 %lld개 승인 필요",
-    "menu.threadSummary.failed.one": "하위 작업 %lld개 실패",
-    "menu.threadSummary.failed.other": "하위 작업 %lld개 실패"
+    "notification.approval.bodyFallback": "감시 중인 스레드가 승인을 기다리고 있습니다."
   }
 }

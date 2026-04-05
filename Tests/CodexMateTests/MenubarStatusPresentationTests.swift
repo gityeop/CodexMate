@@ -32,6 +32,14 @@ final class MenubarStatusPresentationTests: XCTestCase {
         )
     }
 
+
+    func testThreadIndicatorTextMapsKnownIndicators() {
+        XCTAssertEqual(MenubarStatusPresentation.threadIndicatorText(for: .waitingForUser), "💬")
+        XCTAssertEqual(MenubarStatusPresentation.threadIndicatorText(for: .running), "⏳")
+        XCTAssertEqual(MenubarStatusPresentation.threadIndicatorText(for: .failed), "⚠️")
+        XCTAssertNil(MenubarStatusPresentation.threadIndicatorText(for: nil))
+    }
+
     @MainActor
     func testStatusSpriteCatalogLoadsFramesFromProcessedResources() {
         let catalog = MenubarStatusSpriteCatalog()
@@ -163,6 +171,20 @@ final class MenubarStatusPresentationTests: XCTestCase {
         )
 
         XCTAssertEqual(title, "This is a very long… | 1m ago")
+    }
+
+    func testThreadTitlePrefixesSubagentNickname() {
+        let title = MenubarStatusPresentation.threadTitle(
+            for: threadRow(
+                status: .idle,
+                displayTitle: "Investigate parser warning",
+                agentNickname: "Mendel",
+                isSubagent: true
+            ),
+            relativeDate: "2m ago"
+        )
+
+        XCTAssertEqual(title, "Mendel: Investigate parser warning | 2m ago")
     }
 
     func testProjectSectionTitleTruncatesDisplayNameButKeepsThreadCount() {
@@ -316,13 +338,18 @@ final class MenubarStatusPresentationTests: XCTestCase {
         cwd: String = "/tmp/thread-1",
         pendingRequestKind: AppStateStore.PendingRequestKind? = nil,
         pendingRequestReason: String? = nil,
-        activeTurnID: String? = nil
+        activeTurnID: String? = nil,
+        agentNickname: String? = nil,
+        isSubagent: Bool = false
     ) -> AppStateStore.ThreadRow {
         AppStateStore.ThreadRow(
             id: "thread-1",
             displayTitle: displayTitle,
             preview: preview,
             cwd: cwd,
+            isSubagent: isSubagent,
+            parentThreadID: isSubagent ? "parent-thread" : nil,
+            agentNickname: agentNickname,
             status: status,
             listedStatus: status,
             updatedAt: Date(timeIntervalSince1970: 100),
@@ -341,7 +368,9 @@ final class MenubarStatusPresentationTests: XCTestCase {
         cwd: String = "/tmp/thread-1",
         pendingRequestKind: AppStateStore.PendingRequestKind? = nil,
         pendingRequestReason: String? = nil,
-        activeTurnID: String? = nil
+        activeTurnID: String? = nil,
+        agentNickname: String? = nil,
+        isSubagent: Bool = false
     ) -> AppStateStore.ThreadRow {
         Self.threadRow(
             status: status,
@@ -350,7 +379,9 @@ final class MenubarStatusPresentationTests: XCTestCase {
             cwd: cwd,
             pendingRequestKind: pendingRequestKind,
             pendingRequestReason: pendingRequestReason,
-            activeTurnID: activeTurnID
+            activeTurnID: activeTurnID,
+            agentNickname: agentNickname,
+            isSubagent: isSubagent
         )
     }
 }

@@ -105,9 +105,14 @@ struct MenubarStatusPresentation {
     static func threadTitle(
         for thread: AppStateStore.ThreadRow,
         relativeDate: String,
-        maxDisplayTitleLength: Int? = nil
+        maxDisplayTitleLength: Int? = nil,
+        strings: AppStrings = .shared,
+        language: AppLanguage = .english
     ) -> String {
-        "\(truncated(thread.displayTitle, maxLength: maxDisplayTitleLength)) | \(relativeDate)"
+        var parts = [truncated(formattedDisplayTitle(for: thread), maxLength: maxDisplayTitleLength)]
+
+        parts.append(relativeDate)
+        return parts.joined(separator: " | ")
     }
 
     static func projectSectionTitle(
@@ -132,7 +137,7 @@ struct MenubarStatusPresentation {
         strings: AppStrings = .shared,
         language: AppLanguage = .english
     ) -> ThreadTooltipContent {
-        let title = normalizedLine(thread.displayTitle)
+        let title = normalizedLine(formattedDisplayTitle(for: thread))
         let preview = normalizedLine(thread.preview)
         var details: [ThreadTooltipContent.Detail] = []
 
@@ -193,6 +198,37 @@ struct MenubarStatusPresentation {
         case .idle, .notLoaded:
             return hasUnreadContent ? .unread : nil
         }
+    }
+
+
+    static func threadIndicatorText(for indicator: ThreadIndicator?) -> String? {
+        switch indicator {
+        case .unread:
+            return "🔵"
+        case .running:
+            return "⏳"
+        case .waitingForUser:
+            return "💬"
+        case .failed:
+            return "⚠️"
+        case nil:
+            return nil
+        }
+    }
+
+    private static func formattedDisplayTitle(for thread: AppStateStore.ThreadRow) -> String {
+        guard thread.isSubagent,
+              let nickname = normalizedLine(thread.agentNickname),
+              !nickname.isEmpty else {
+            return thread.displayTitle
+        }
+
+        let prefix = "\(nickname): "
+        if thread.displayTitle.hasPrefix(prefix) {
+            return thread.displayTitle
+        }
+
+        return prefix + thread.displayTitle
     }
 
     private static func truncated(_ text: String, maxLength: Int?) -> String {
