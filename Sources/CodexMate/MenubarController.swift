@@ -281,10 +281,18 @@ final class MenubarController {
         state.recordDiagnostic(diagnostic)
     }
 
-    func loadInitialThreads() async throws {
-        let initialLimit = min(configuration.initialFetchLimit, configuration.maxTrackedThreads)
-        let threads = try await hydratedRecentThreads(limit: initialLimit)
+    func loadInitialThreads(
+        projectLimit: Int? = nil,
+        visibleThreadLimit: Int? = nil
+    ) async throws {
+        let effectiveProjectLimit = max(1, projectLimit ?? configuration.projectLimit)
+        let effectiveVisibleThreadLimit = max(1, visibleThreadLimit ?? configuration.visibleThreadLimit)
         projectCatalog = (try? await loadProjectCatalog()) ?? .empty
+
+        let threads = try await bootstrapRecentThreads(
+            projectLimit: effectiveProjectLimit,
+            visibleThreadLimit: effectiveVisibleThreadLimit
+        )
         state.replaceRecentThreads(with: threads)
     }
 
@@ -525,6 +533,10 @@ final class MenubarController {
 
     private func hydratedRecentThreads(limit: Int) async throws -> [CodexThread] {
         let threads = try await loadRecentThreads(limit)
+        return try await hydrateThreads(threads)
+    }
+
+    private func hydrateThreads(_ threads: [CodexThread]) async throws -> [CodexThread] {
         guard !threads.isEmpty else {
             return []
         }
@@ -540,6 +552,54 @@ final class MenubarController {
 
             return thread.mergingMetadata(from: metadata)
         }
+    }
+
+    private func bootstrapRecentThreads(
+        projectLimit: Int,
+        visibleThreadLimit: Int
+    ) async throws -> [CodexThread] {
+        let initialLimit = min(
+            configuration.maxTrackedThreads,
+            max(configuration.initialFetchLimit, projectLimit * visibleThreadLimit)
+        )
+        var limit = max(1, initialLimit)
+        var threads = try await loadRecentThreads(limit)
+
+        while shouldExpandBootstrapThreads(
+            threads,
+            desiredProjectCount: projectLimit,
+            loadedLimit: limit
+        ) {
+            let nextLimit = min(configuration.maxTrackedThreads, max(limit + 1, limit * 2))
+            guard nextLimit > limit else {
+                break
+            }
+
+            limit = nextLimit
+            threads = try await loadRecentThreads(limit)
+        }
+
+        return try await hydrateThreads(threads)
+    }
+
+    private func shouldExpandBootstrapThreads(
+        _ threads: [CodexThread],
+        desiredProjectCount: Int,
+        loadedLimit: Int
+    ) -> Bool {
+        guard loadedLimit < configuration.maxTrackedThreads else {
+            return false
+        }
+
+        guard threads.count >= loadedLimit else {
+            return false
+        }
+
+        return bootstrapProjectCount(in: threads) < desiredProjectCount
+    }
+
+    private func bootstrapProjectCount(in threads: [CodexThread]) -> Int {
+        Set(threads.map { projectCatalog.project(for: $0.cwd).id }).count
     }
 
     private func debugThreadIDs<S: Sequence>(_ threadIDs: S) -> String where S.Element == String {

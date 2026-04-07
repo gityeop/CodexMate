@@ -489,14 +489,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         preferences.$threadsPerProjectLimit
             .dropFirst()
             .sink { [weak self] _ in
-                self?.renderMenu()
+                guard let self else { return }
+                self.renderMenu()
+                self.requestThreadRefresh()
             }
             .store(in: &cancellables)
 
         preferences.$projectLimit
             .dropFirst()
             .sink { [weak self] _ in
-                self?.renderMenu()
+                guard let self else { return }
+                self.renderMenu()
+                self.requestThreadRefresh()
             }
             .store(in: &cancellables)
 
@@ -634,7 +638,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func loadInitialThreads() async throws {
-        try await controller.loadInitialThreads()
+        try await controller.loadInitialThreads(
+            projectLimit: preferences.projectLimit,
+            visibleThreadLimit: preferences.threadsPerProjectLimit
+        )
         if await client.isConnected() {
             markConnectionHealthy()
         }

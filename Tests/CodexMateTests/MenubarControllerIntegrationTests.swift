@@ -636,18 +636,25 @@ final class MenubarControllerIntegrationTests: XCTestCase {
         XCTAssertEqual(snapshot.projectSections.dropFirst().first?.threads.map(\.id), ["thread-b-1"])
     }
 
-    func testLoadInitialThreadsUsesInitialFetchLimitForFastBootstrapThenRefreshBackfillsTrackedWindow() async throws {
+    func testLoadInitialThreadsExpandsBootstrapWindowUntilConfiguredProjectCountIsAvailable() async throws {
         let recentThreadListing = RecordingRecentThreadListing(threads: [
-            thread(id: "thread-a", updatedAt: 500, cwd: "/tmp/A/work"),
-            thread(id: "thread-b", updatedAt: 400, cwd: "/tmp/B/work"),
-            thread(id: "thread-c", updatedAt: 300, cwd: "/tmp/C/work"),
-            thread(id: "thread-d", updatedAt: 200, cwd: "/tmp/D/work"),
-            thread(id: "thread-e", updatedAt: 100, cwd: "/tmp/E/work")
+            thread(id: "thread-a-1", updatedAt: 500, cwd: "/tmp/A/work"),
+            thread(id: "thread-a-2", updatedAt: 490, cwd: "/tmp/A/work"),
+            thread(id: "thread-a-3", updatedAt: 480, cwd: "/tmp/A/work"),
+            thread(id: "thread-a-4", updatedAt: 470, cwd: "/tmp/A/work"),
+            thread(id: "thread-b-1", updatedAt: 460, cwd: "/tmp/B/work"),
+            thread(id: "thread-b-2", updatedAt: 450, cwd: "/tmp/B/work"),
+            thread(id: "thread-c-1", updatedAt: 440, cwd: "/tmp/C/work"),
+            thread(id: "thread-c-2", updatedAt: 430, cwd: "/tmp/C/work"),
+            thread(id: "thread-d-1", updatedAt: 420, cwd: "/tmp/D/work"),
+            thread(id: "thread-d-2", updatedAt: 410, cwd: "/tmp/D/work"),
+            thread(id: "thread-e-1", updatedAt: 400, cwd: "/tmp/E/work")
         ])
+        let threadMetadataReader = RecordingThreadMetadataReader()
         let controller = MenubarController(
             desktopActivityLoader: FakeDesktopActivityLoader(updates: []),
             recentThreadListing: recentThreadListing,
-            threadMetadataReader: FakeThreadMetadataReader(results: []),
+            threadMetadataReader: threadMetadataReader,
             projectCatalogLoader: FakeProjectCatalogLoader(
                 result: .success(
                     CodexDesktopProjectCatalog(workspaceRoots: [
@@ -661,9 +668,9 @@ final class MenubarControllerIntegrationTests: XCTestCase {
             ),
             configuration: MenubarControllerConfiguration(
                 initialFetchLimit: 2,
-                maxTrackedThreads: 8,
+                maxTrackedThreads: 12,
                 projectLimit: 5,
-                visibleThreadLimit: 8,
+                visibleThreadLimit: 2,
                 maxPendingDiscoveredThreads: 64,
                 pendingDiscoveredThreadTTL: 120,
                 threadReadMarkerRetentionSeconds: 30 * 24 * 60 * 60
@@ -673,15 +680,18 @@ final class MenubarControllerIntegrationTests: XCTestCase {
         try await controller.loadInitialThreads()
         let initialSnapshot = controller.prepareSnapshot().snapshot
         let initialRequestedLimits = await recentThreadListing.requestedLimits()
+        let metadataRequests = await threadMetadataReader.requestedThreadIDs()
 
-        XCTAssertEqual(initialRequestedLimits, [2])
-        XCTAssertEqual(initialSnapshot.projectSections.map(\.section.displayName), ["A", "B"])
+        XCTAssertEqual(initialRequestedLimits, [10, 12])
+        XCTAssertEqual(metadataRequests.count, 1)
+        XCTAssertEqual(metadataRequests.first?.count, 11)
+        XCTAssertEqual(initialSnapshot.projectSections.map(\.section.displayName), ["A", "B", "C", "D", "E"])
 
         _ = try await controller.refreshThreads()
         let refreshedSnapshot = controller.prepareSnapshot().snapshot
         let refreshedRequestedLimits = await recentThreadListing.requestedLimits()
 
-        XCTAssertEqual(refreshedRequestedLimits, [2, 8])
+        XCTAssertEqual(refreshedRequestedLimits, [10, 12, 12])
         XCTAssertEqual(refreshedSnapshot.projectSections.map(\.section.displayName), ["A", "B", "C", "D", "E"])
     }
 
@@ -818,6 +828,19 @@ private actor RecordingRecentThreadListing: RecentThreadListing {
     }
 
     func requestedLimits() -> [Int] {
+        requested
+    }
+}
+
+private actor RecordingThreadMetadataReader: ThreadMetadataReading {
+    private var requested: [Set<String>] = []
+
+    func threads(threadIDs: Set<String>) async throws -> [CodexThread] {
+        requested.append(threadIDs)
+        return []
+    }
+
+    func requestedThreadIDs() -> [Set<String>] {
         requested
     }
 }
