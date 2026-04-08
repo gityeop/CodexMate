@@ -269,12 +269,33 @@ final class NotchStatusOverlayController {
         statusText: String,
         frameIndex: Int
     ) {
-        overlayView.spriteImage = spriteImage
-        overlayView.statusSprite = statusSprite
-        overlayView.statusText = statusText
-        overlayView.frameIndex = frameIndex
-        overlayView.usesCompactLayout = false
-        overlayView.spritePointSize = Metrics.spritePointSize
+        if let spriteImage {
+            if overlayView.spriteImage !== spriteImage {
+                overlayView.spriteImage = spriteImage
+            }
+        } else if overlayView.spriteImage != nil {
+            overlayView.spriteImage = nil
+        }
+
+        if overlayView.statusSprite != statusSprite {
+            overlayView.statusSprite = statusSprite
+        }
+
+        if overlayView.statusText != statusText {
+            overlayView.statusText = statusText
+        }
+
+        if overlayView.frameIndex != frameIndex {
+            overlayView.frameIndex = frameIndex
+        }
+
+        if overlayView.usesCompactLayout {
+            overlayView.usesCompactLayout = false
+        }
+
+        if overlayView.spritePointSize != Metrics.spritePointSize {
+            overlayView.spritePointSize = Metrics.spritePointSize
+        }
         currentScreen = panel.screen ?? currentScreen
 
         if panel.isVisible {
@@ -638,23 +659,28 @@ final class NotchStatusOverlayView: NSView {
 
     var statusText = "" {
         didSet {
+            guard statusText != oldValue else { return }
             needsDisplay = true
         }
     }
 
     var statusSprite: MenubarStatusPresentation.StatusSprite = .idle {
-        didSet { needsLayout = true }
+        didSet {
+            guard statusSprite != oldValue else { return }
+            needsLayout = true
+        }
     }
 
     var frameIndex = 0 {
         didSet {
+            guard frameIndex != oldValue else { return }
             needsLayout = true
-            needsDisplay = true
         }
     }
 
     var usesCompactLayout = false {
         didSet {
+            guard usesCompactLayout != oldValue else { return }
             syncMenuBackgrounds()
             lastLaidOutMenuContentWidth = -1
             needsLayout = true
@@ -663,11 +689,15 @@ final class NotchStatusOverlayView: NSView {
     }
 
     var spritePointSize = NSSize(width: 64, height: 64) {
-        didSet { needsLayout = true }
+        didSet {
+            guard spritePointSize != oldValue else { return }
+            needsLayout = true
+        }
     }
 
     var menuExpansionProgress: CGFloat = 0 {
         didSet {
+            guard menuExpansionProgress != oldValue else { return }
             let revealProgress = expandedRevealProgress
             menuScrollView.isHidden = revealProgress < 0.01
             menuScrollView.alphaValue = revealProgress
@@ -678,6 +708,7 @@ final class NotchStatusOverlayView: NSView {
 
     var hoverProgress: CGFloat = 0 {
         didSet {
+            guard hoverProgress != oldValue else { return }
             needsLayout = true
             needsDisplay = true
         }

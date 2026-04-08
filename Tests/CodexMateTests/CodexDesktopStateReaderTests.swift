@@ -49,6 +49,101 @@ final class CodexDesktopStateReaderTests: XCTestCase {
         XCTAssertTrue(snapshot.runningThreadIDs.isEmpty)
     }
 
+    func testDefaultSnapshotKeepsUnknownRecentThreadVisibleAcrossIdleRefreshWindow() throws {
+        let tempDirectoryURL = FileManager.default.temporaryDirectory
+            .appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: tempDirectoryURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDirectoryURL) }
+
+        let databaseURL = tempDirectoryURL.appending(path: "state.sqlite")
+        try createStateDatabase(
+            at: databaseURL,
+            sql: """
+            CREATE TABLE threads (
+                id TEXT PRIMARY KEY,
+                first_user_message TEXT NOT NULL DEFAULT '',
+                title TEXT NOT NULL DEFAULT '',
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                cwd TEXT NOT NULL,
+                rollout_path TEXT,
+                archived INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE TABLE logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                process_uuid TEXT,
+                target TEXT,
+                message TEXT,
+                ts INTEGER NOT NULL,
+                ts_nanos INTEGER NOT NULL DEFAULT 0,
+                thread_id TEXT
+            );
+            INSERT INTO threads (id, first_user_message, title, created_at, updated_at, cwd, rollout_path, archived)
+            VALUES ('thread-1', 'Preview', 'Thread 1', 150, 170, '/tmp/project', NULL, 0);
+            """
+        )
+
+        let reader = CodexDesktopStateReader(
+            now: { Date(timeIntervalSince1970: 200) },
+            stateDatabaseURLOverride: databaseURL
+        )
+
+        let snapshot = try reader.snapshot(candidateSessionPaths: [:])
+
+        XCTAssertEqual(snapshot.recentActivityThreadIDs, ["thread-1"])
+    }
+
+    func testSnapshotIncludesMoreThanThirtyTwoRecentUpdatedThreadsWithoutKnownCandidates() throws {
+        let tempDirectoryURL = FileManager.default.temporaryDirectory
+            .appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: tempDirectoryURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDirectoryURL) }
+
+        let databaseURL = tempDirectoryURL.appending(path: "state.sqlite")
+        let values = (1...40).map { index in
+            "('thread-\(index)', 'Preview \(index)', 'Thread \(index)', \(100 + index), \(200 + index), '/tmp/project', NULL, 0)"
+        }.joined(separator: ",\n")
+        try createStateDatabase(
+            at: databaseURL,
+            sql: """
+            CREATE TABLE threads (
+                id TEXT PRIMARY KEY,
+                first_user_message TEXT NOT NULL DEFAULT '',
+                title TEXT NOT NULL DEFAULT '',
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                cwd TEXT NOT NULL,
+                rollout_path TEXT,
+                archived INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE TABLE logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                process_uuid TEXT,
+                target TEXT,
+                message TEXT,
+                ts INTEGER NOT NULL,
+                ts_nanos INTEGER NOT NULL DEFAULT 0,
+                thread_id TEXT
+            );
+            INSERT INTO threads (id, first_user_message, title, created_at, updated_at, cwd, rollout_path, archived)
+            VALUES
+            \(values);
+            """
+        )
+
+        let reader = CodexDesktopStateReader(
+            now: { Date(timeIntervalSince1970: 260) },
+            recentThreadUpdateInterval: 60,
+            stateDatabaseURLOverride: databaseURL
+        )
+
+        let snapshot = try reader.snapshot(candidateSessionPaths: [:])
+
+        XCTAssertEqual(snapshot.recentActivityThreadIDs.count, 40)
+        XCTAssertTrue(snapshot.recentActivityThreadIDs.contains("thread-1"))
+        XCTAssertTrue(snapshot.recentActivityThreadIDs.contains("thread-40"))
+    }
+
     func testParseSessionPendingStateMarksUnresolvedRequestUserInputAsWaiting() {
         let contents = """
         {"timestamp":"2026-03-11T12:25:24.936Z","type":"response_item","payload":{"type":"function_call","name":"request_user_input","arguments":"{}","call_id":"call_waiting"}}
@@ -134,14 +229,14 @@ final class CodexDesktopStateReaderTests: XCTestCase {
         XCTAssertEqual(state, .init(waitingForInput: false, needsApproval: false, hasActiveTask: true))
     }
 
-    func testSQLiteDatabaseArgumentUsesReadOnlyImmutableFileURI() {
+    func testSQLiteDatabaseArgumentUsesReadOnlyFileURI() {
         let url = URL(fileURLWithPath: "/tmp/Codex State/state 5.sqlite")
 
         let argument = CodexDesktopStateReader.sqliteDatabaseArgument(for: url)
 
         XCTAssertTrue(argument.hasPrefix("file://"))
         XCTAssertTrue(argument.contains("mode=ro"))
-        XCTAssertTrue(argument.contains("immutable=1"))
+        XCTAssertFalse(argument.contains("immutable=1"))
         XCTAssertTrue(argument.contains("Codex%20State"))
         XCTAssertTrue(argument.contains("state%205.sqlite"))
     }

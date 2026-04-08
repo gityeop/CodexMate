@@ -25,6 +25,22 @@ enum ThreadMenuBuilder {
             }
         )
 
+        struct ProjectBucket {
+            let project: CodexDesktopProjectCatalog.ProjectReference
+            var threads: [AppStateStore.ThreadRow]
+        }
+
+        var projectBucketsByID: [String: ProjectBucket] = [:]
+        for thread in recentThreads {
+            let project = projectCatalog.project(for: thread.cwd)
+            if var bucket = projectBucketsByID[project.id] {
+                bucket.threads.append(thread)
+                projectBucketsByID[project.id] = bucket
+            } else {
+                projectBucketsByID[project.id] = ProjectBucket(project: project, threads: [thread])
+            }
+        }
+
         if snapshotSections.isEmpty {
             struct FallbackSection {
                 let displayName: String
@@ -32,16 +48,12 @@ enum ThreadMenuBuilder {
                 let threads: [AppStateStore.ThreadRow]
             }
 
-            let sectionsByProjectID = Dictionary(grouping: recentThreads) { thread in
-                projectCatalog.project(for: thread.cwd).id
-            }
-            let fallbackSections = sectionsByProjectID.values.compactMap { sectionThreads -> FallbackSection? in
-                guard let firstThread = sectionThreads.first else { return nil }
-                let project = projectCatalog.project(for: firstThread.cwd)
+            let fallbackSections = projectBucketsByID.values.compactMap { bucket -> FallbackSection? in
+                guard !bucket.threads.isEmpty else { return nil }
                 return FallbackSection(
-                    displayName: project.displayName,
-                    latestUpdatedAt: sectionThreads.map(\.activityUpdatedAt).max() ?? .distantPast,
-                    threads: sectionThreads
+                    displayName: bucket.project.displayName,
+                    latestUpdatedAt: bucket.threads.map(\.activityUpdatedAt).max() ?? .distantPast,
+                    threads: bucket.threads
                 )
             }
             .sorted { lhs, rhs in
@@ -71,17 +83,14 @@ enum ThreadMenuBuilder {
         }
 
         return snapshotSections.compactMap { snapshotSection -> ThreadMenuSection? in
-            let sectionThreads = recentThreads.filter {
-                projectCatalog.project(for: $0.cwd).id == snapshotSection.section.id
-            }
-
-            guard !sectionThreads.isEmpty else {
+            guard let bucket = projectBucketsByID[snapshotSection.section.id],
+                  !bucket.threads.isEmpty else {
                 return nil
             }
 
             return buildSection(
                 displayName: snapshotSection.section.displayName,
-                sectionThreads: sectionThreads,
+                sectionThreads: bucket.threads,
                 visibleRootIDs: Set(snapshotSection.threads.map(\.id)),
                 parentIDByThreadID: parentIDByThreadID,
                 visibleRootLimit: nil

@@ -17,7 +17,16 @@ final class MenubarStatusSpriteCatalog {
         }
     }
 
+    private struct RenderedFrameKey: Hashable {
+        let sprite: MenubarStatusPresentation.StatusSprite
+        let frameIndex: Int
+        let renderedPixelSize: Int
+        let renderedPointWidth: Int
+        let renderedPointHeight: Int
+    }
+
     private var cachedSourceFramesBySprite: [MenubarStatusPresentation.StatusSprite: [CGImage]] = [:]
+    private var cachedRenderedFramesByKey: [RenderedFrameKey: NSImage] = [:]
 
     func frame(
         for sprite: MenubarStatusPresentation.StatusSprite,
@@ -44,11 +53,28 @@ final class MenubarStatusSpriteCatalog {
     ) -> NSImage? {
         let sourceFrames = sourceFrames(for: sprite)
         guard !sourceFrames.isEmpty else { return nil }
-        return renderOriginalFrame(
-            sourceFrames[index % sourceFrames.count],
+        let normalizedIndex = index % sourceFrames.count
+        let cacheKey = RenderedFrameKey(
+            sprite: sprite,
+            frameIndex: normalizedIndex,
+            renderedPixelSize: renderedPixelSize,
+            renderedPointWidth: Int(renderedPointSize.width.rounded()),
+            renderedPointHeight: Int(renderedPointSize.height.rounded())
+        )
+        if let cachedFrame = cachedRenderedFramesByKey[cacheKey] {
+            return cachedFrame
+        }
+
+        let renderedFrame = renderOriginalFrame(
+            sourceFrames[normalizedIndex],
             renderedPixelSize: renderedPixelSize,
             renderedPointSize: renderedPointSize
         )
+        if let renderedFrame {
+            cachedRenderedFramesByKey[cacheKey] = renderedFrame
+        }
+
+        return renderedFrame
     }
 
     func frameCount(for sprite: MenubarStatusPresentation.StatusSprite) -> Int {

@@ -64,6 +64,7 @@ struct CodexDesktopProjectCatalogReader {
     private let fileManager: FileManager
     private let codexDirectoryURLOverride: URL?
     private let codexDirectoryURLProvider: @Sendable () -> URL
+    private let cache = ProjectCatalogCache()
 
     init(
         fileManager: FileManager = .default,
@@ -80,6 +81,17 @@ struct CodexDesktopProjectCatalogReader {
     func load() throws -> CodexDesktopProjectCatalog {
         let fileURL = (codexDirectoryURLOverride ?? codexDirectoryURLProvider()).standardizedFileURL
             .appendingPathComponent(".codex-global-state.json", isDirectory: false)
+        let resourceValues = try fileURL.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
+        let modificationDate = resourceValues.contentModificationDate
+        let fileSize = resourceValues.fileSize
+
+        if let cachedCatalog = cache.value(
+            for: fileURL.path,
+            modificationDate: modificationDate,
+            fileSize: fileSize
+        ) {
+            return cachedCatalog
+        }
 
         let data = try Data(contentsOf: fileURL)
         let state = try JSONDecoder().decode(GlobalStateFile.self, from: data)
@@ -103,7 +115,14 @@ struct CodexDesktopProjectCatalogReader {
             )
         }
 
-        return CodexDesktopProjectCatalog(workspaceRoots: roots)
+        let catalog = CodexDesktopProjectCatalog(workspaceRoots: roots)
+        cache.store(
+            catalog,
+            for: fileURL.path,
+            modificationDate: modificationDate,
+            fileSize: fileSize
+        )
+        return catalog
     }
 }
 
@@ -114,5 +133,37 @@ private struct GlobalStateFile: Decodable {
     enum CodingKeys: String, CodingKey {
         case savedWorkspaceRoots = "electron-saved-workspace-roots"
         case workspaceRootLabels = "electron-workspace-root-labels"
+    }
+}
+
+private final class ProjectCatalogCache {
+    private struct Entry {
+        let path: String
+        let modificationDate: Date?
+        let fileSize: Int?
+        let catalog: CodexDesktopProjectCatalog
+    }
+
+    private var entry: Entry?
+
+    func value(for path: String, modificationDate: Date?, fileSize: Int?) -> CodexDesktopProjectCatalog? {
+        guard let entry,
+              entry.path == path,
+              entry.modificationDate == modificationDate,
+              entry.fileSize == fileSize
+        else {
+            return nil
+        }
+
+        return entry.catalog
+    }
+
+    func store(_ catalog: CodexDesktopProjectCatalog, for path: String, modificationDate: Date?, fileSize: Int?) {
+        entry = Entry(
+            path: path,
+            modificationDate: modificationDate,
+            fileSize: fileSize,
+            catalog: catalog
+        )
     }
 }

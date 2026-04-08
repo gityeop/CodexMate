@@ -177,6 +177,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var threadProjectIndexByThreadID: [String: Int] = [:]
     private var pendingMenuBarPositionedThreadID: String?
     private var skipNextMenuBarMenuWillOpenRender = false
+    private var skipNextMenuBarMenuWillOpenRefresh = false
     private var foregroundRefreshObserverTokens: [NSObjectProtocol] = []
     private var cancellables: Set<AnyCancellable> = []
     private var loggedUnhandledServerRequestMethods: Set<String> = []
@@ -681,6 +682,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 guard let self else { return }
                 controller.apply(notification: .threadStarted(notification))
                 debugLog("received thread/started thread=\(shortThreadID(notification.thread.id))")
+                if isMenuOpen {
+                    renderMenu()
+                }
                 requestThreadRefresh()
             }
         case "thread/status/changed":
@@ -1795,6 +1799,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hideHoverTooltip()
         renderMenu()
         if requestRefresh {
+            skipNextMenuBarMenuWillOpenRefresh = true
             requestDesktopActivityRefresh()
             requestThreadRefresh()
         }
@@ -2194,8 +2199,12 @@ extension AppDelegate: NSMenuDelegate {
         installMenuShortcutEventMonitor()
         menuToggleController.menuWillOpen()
         scheduleRefreshTimerIfNeeded()
-        requestDesktopActivityRefresh()
-        requestThreadRefresh()
+        if skipNextMenuBarMenuWillOpenRefresh {
+            skipNextMenuBarMenuWillOpenRefresh = false
+        } else {
+            requestDesktopActivityRefresh()
+            requestThreadRefresh()
+        }
     }
 
     private func completeInitialThreadBootstrap(requestBackfill: Bool) {

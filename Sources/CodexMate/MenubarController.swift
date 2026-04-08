@@ -68,11 +68,12 @@ actor AppServerRecentThreadListing: RecentThreadListing {
         var cursor: String?
 
         repeat {
+            let remaining = max(0, limit - threads.count)
             let response: ThreadListResponse = try await client.call(
                 method: "thread/list",
                 params: ThreadListParams(
                     cursor: cursor,
-                    limit: fetchPageLimit,
+                    limit: remaining == 0 ? fetchPageLimit : min(fetchPageLimit, remaining),
                     sortKey: .updatedAt,
                     archived: false
                 )
@@ -330,6 +331,16 @@ final class MenubarController {
 
         if let runtimeSnapshot = update.runtimeSnapshot {
             state.apply(desktopSnapshot: runtimeSnapshot, observedAt: activityObservedAt)
+
+            if runtimeSnapshot.activeTurnCount > 0,
+               !state.recentThreads.contains(where: { $0.presentationStatus == .running }) {
+                effects.shouldRequestThreadRefresh = true
+
+                let diagnostic = "desktop observed active turn without tracked running thread "
+                    + "activeTurns=\(runtimeSnapshot.activeTurnCount) recent=\(trackedThreads.count)"
+                state.recordDiagnostic(diagnostic)
+                effects.diagnostics.append(diagnostic)
+            }
         } else if let runtimeErrorMessage = update.runtimeErrorMessage {
             let diagnostic = "Desktop activity unavailable: \(runtimeErrorMessage)"
             state.recordDiagnostic(diagnostic)
@@ -541,8 +552,17 @@ final class MenubarController {
             return []
         }
 
+        let threadIDsNeedingMetadata = Set(
+            threads.compactMap { thread in
+                requiresMetadataHydration(for: thread) ? thread.id : nil
+            }
+        )
+        guard !threadIDsNeedingMetadata.isEmpty else {
+            return threads
+        }
+
         let metadataByID = Dictionary(
-            uniqueKeysWithValues: (try? await loadThreadsByID(Set(threads.map(\.id))))?.map { ($0.id, $0) } ?? []
+            uniqueKeysWithValues: (try? await loadThreadsByID(threadIDsNeedingMetadata))?.map { ($0.id, $0) } ?? []
         )
 
         return threads.map { thread in
@@ -552,6 +572,13 @@ final class MenubarController {
 
             return thread.mergingMetadata(from: metadata)
         }
+    }
+
+    private func requiresMetadataHydration(for thread: CodexThread) -> Bool {
+        thread.path == nil
+            || thread.source == nil
+            || thread.agentRole == nil
+            || thread.agentNickname == nil
     }
 
     private func bootstrapRecentThreads(
@@ -861,6 +888,10 @@ final class MenubarController {
         }
 
         if displayedMainThreads.contains(where: { $0.presentationStatus == .running }) {
+            return .running
+        }
+
+        if state.overallStatus == .running {
             return .running
         }
 

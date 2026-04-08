@@ -68,6 +68,7 @@ struct CodexDesktopStateReader {
     private let now: () -> Date
     private let recentThreadUpdateInterval: TimeInterval
     private let recentLogInterval: TimeInterval
+    private let recentActivityThreadLimit: Int
     private let activeTurnLookbackInterval: TimeInterval
     private let recentProcessActivityInterval: TimeInterval
     private let databaseLocationCacheLifetime: TimeInterval
@@ -77,12 +78,15 @@ struct CodexDesktopStateReader {
     private let codexDirectoryURLProvider: @Sendable () -> URL
     private let sessionPendingStateCache = SessionPendingStateCache()
     private let stateDatabaseURLCache = StateDatabaseURLCache()
+    private let desktopLogCandidateCache = DesktopLogCandidateCache()
+    private let desktopApprovalLogCache = DesktopApprovalLogCache()
 
     init(
         fileManager: FileManager = .default,
         now: @escaping () -> Date = Date.init,
-        recentThreadUpdateInterval: TimeInterval = 10,
-        recentLogInterval: TimeInterval = 15,
+        recentThreadUpdateInterval: TimeInterval = 60,
+        recentLogInterval: TimeInterval = 60,
+        recentActivityThreadLimit: Int = 256,
         activeTurnLookbackInterval: TimeInterval = 6 * 60 * 60,
         recentProcessActivityInterval: TimeInterval = 10 * 60,
         databaseLocationCacheLifetime: TimeInterval = 30,
@@ -95,6 +99,7 @@ struct CodexDesktopStateReader {
         self.now = now
         self.recentThreadUpdateInterval = recentThreadUpdateInterval
         self.recentLogInterval = recentLogInterval
+        self.recentActivityThreadLimit = max(1, recentActivityThreadLimit)
         self.activeTurnLookbackInterval = activeTurnLookbackInterval
         self.recentProcessActivityInterval = recentProcessActivityInterval
         self.databaseLocationCacheLifetime = max(1, databaseLocationCacheLifetime)
@@ -315,7 +320,7 @@ struct CodexDesktopStateReader {
 
         let referenceNow = now()
         let codexDirectoryURL = resolvedCodexDirectoryURL()
-        var candidateURLs: [URL] = []
+        var lastRetriableError: ReaderError?
 
         if let cachedURL = stateDatabaseURLCache.value(
             now: referenceNow,
@@ -323,9 +328,15 @@ struct CodexDesktopStateReader {
             fileManager: fileManager,
             cacheLifetime: databaseLocationCacheLifetime
         ) {
-            candidateURLs.append(cachedURL)
+            do {
+                return try operation(cachedURL)
+            } catch let error as ReaderError where error.isRetriableDatabaseOpenFailure {
+                lastRetriableError = error
+                stateDatabaseURLCache.clear()
+            }
         }
 
+        var candidateURLs: [URL] = []
         for url in try locateStateDatabaseCandidates() where !candidateURLs.contains(url) {
             candidateURLs.append(url)
         }
@@ -333,8 +344,6 @@ struct CodexDesktopStateReader {
         guard !candidateURLs.isEmpty else {
             throw ReaderError.databaseNotFound
         }
-
-        var lastRetriableError: ReaderError?
 
         for candidateURL in candidateURLs {
             do {
@@ -427,7 +436,7 @@ struct CodexDesktopStateReader {
                 WHERE archived = 0
                   AND updated_at >= \(threadUpdateCutoff)
                 ORDER BY updated_at DESC
-                LIMIT 32;
+                LIMIT \(recentActivityThreadLimit);
                 """
             ),
             SQLiteQuerySection(
@@ -587,23 +596,19 @@ struct CodexDesktopStateReader {
         guard !logURLs.isEmpty else {
             return ([], [])
         }
+        desktopApprovalLogCache.prune(keepingPaths: Set(logURLs.map(\.path)))
 
         var approvalThreadIDs: Set<String> = []
-        var debugRows: [String] = []
 
         for logURL in logURLs {
-            guard let contents = recentDesktopLogContents(at: logURL) else {
-                continue
-            }
-
-            let states = Self.parseDesktopPendingApprovalThreadStates(
-                from: contents,
-                candidateThreadIDs: candidateThreadIDs
+            approvalThreadIDs.formUnion(
+                desktopPendingApprovalThreadIDs(for: logURL).intersection(candidateThreadIDs)
             )
-            approvalThreadIDs.formUnion(states.approvalThreadIDs)
-            debugRows.append(contentsOf: states.debugRows)
         }
 
+        let debugRows = approvalThreadIDs.sorted().map { threadID in
+            "\(String(threadID.prefix(8))):desktop-approval"
+        }
         return (approvalThreadIDs, debugRows)
     }
 
@@ -615,6 +620,20 @@ struct CodexDesktopStateReader {
 
         let calendar = Calendar.current
         let currentDate = now()
+        let cacheKey = desktopLogCandidateCacheKey(
+            logsRootURL: logsRootURL,
+            now: currentDate,
+            maxDays: maxDays,
+            limit: limit
+        )
+        if let cachedLogURLs = desktopLogCandidateCache.value(
+            key: cacheKey,
+            now: currentDate,
+            cacheLifetime: DesktopLogCachePolicy.candidateCacheLifetime
+        ) {
+            return cachedLogURLs
+        }
+
         var candidates: [URL] = []
 
         for dayOffset in 0..<maxDays {
@@ -649,7 +668,29 @@ struct CodexDesktopStateReader {
             )
         }
 
-        return Array(contentsSortedByModificationDateDescending(candidates).prefix(limit))
+        let sortedCandidates = Array(contentsSortedByModificationDateDescending(candidates).prefix(limit))
+        desktopLogCandidateCache.store(sortedCandidates, key: cacheKey, checkedAt: currentDate)
+        return sortedCandidates
+    }
+
+    private func desktopLogCandidateCacheKey(
+        logsRootURL: URL,
+        now: Date,
+        maxDays: Int,
+        limit: Int
+    ) -> String {
+        let calendar = Calendar.current
+        let dayTokens = (0..<maxDays).compactMap { dayOffset in
+            calendar.date(byAdding: .day, value: -dayOffset, to: now)
+        }.map { day in
+            let components = calendar.dateComponents([.year, .month, .day], from: day)
+            let year = components.year ?? 0
+            let month = components.month ?? 0
+            let day = components.day ?? 0
+            return String(format: "%04d-%02d-%02d", year, month, day)
+        }
+
+        return logsRootURL.path + "|" + dayTokens.joined(separator: "|") + "|limit=\(limit)"
     }
 
     private func contentsSortedByModificationDateDescending(_ urls: [URL]) -> [URL] {
@@ -728,10 +769,47 @@ struct CodexDesktopStateReader {
         return "[\(sample)]"
     }
 
+    private func desktopPendingApprovalThreadIDs(for logURL: URL) -> Set<String> {
+        let resourceValues = (try? logURL.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])) ?? URLResourceValues()
+        let modificationDate = resourceValues.contentModificationDate
+        let fileSize = resourceValues.fileSize
+
+        if let cachedThreadIDs = desktopApprovalLogCache.value(
+            for: logURL.path,
+            modificationDate: modificationDate,
+            fileSize: fileSize
+        ) {
+            return cachedThreadIDs
+        }
+
+        guard let contents = recentDesktopLogContents(at: logURL) else {
+            return []
+        }
+
+        let approvalThreadIDs = Self.parseDesktopPendingApprovalThreadIDs(from: contents)
+        desktopApprovalLogCache.store(
+            approvalThreadIDs,
+            for: logURL.path,
+            modificationDate: modificationDate,
+            fileSize: fileSize
+        )
+        return approvalThreadIDs
+    }
+
     static func parseDesktopPendingApprovalThreadStates(
         from contents: String,
         candidateThreadIDs: Set<String>
     ) -> (approvalThreadIDs: Set<String>, debugRows: [String]) {
+        let approvalThreadIDs = parseDesktopPendingApprovalThreadIDs(from: contents)
+            .intersection(candidateThreadIDs)
+        let debugRows = approvalThreadIDs.sorted().map { threadID in
+            "\(String(threadID.prefix(8))):desktop-approval"
+        }
+
+        return (approvalThreadIDs, debugRows)
+    }
+
+    static func parseDesktopPendingApprovalThreadIDs(from contents: String) -> Set<String> {
         var requestIDToThreadID: [String: String] = [:]
 
         for rawLine in contents.split(whereSeparator: \.isNewline) {
@@ -739,7 +817,6 @@ struct CodexDesktopStateReader {
 
             if line.contains("[desktop-notifications] show approval"),
                let conversationID = tokenValue(in: line, after: "conversationId="),
-               candidateThreadIDs.contains(conversationID),
                tokenValue(in: line, after: "kind=") == "commandExecution",
                let requestID = tokenValue(in: line, after: "requestId=") {
                 requestIDToThreadID[requestID] = conversationID
@@ -752,12 +829,7 @@ struct CodexDesktopStateReader {
             }
         }
 
-        let approvalThreadIDs = Set(requestIDToThreadID.values)
-        let debugRows = approvalThreadIDs.sorted().map { threadID in
-            "\(String(threadID.prefix(8))):desktop-approval"
-        }
-
-        return (approvalThreadIDs, debugRows)
+        return Set(requestIDToThreadID.values)
     }
 
     private static func tokenValue(in line: String, after marker: String) -> String? {
@@ -1051,7 +1123,6 @@ struct CodexDesktopStateReader {
         var components = URLComponents(url: databaseURL.standardizedFileURL, resolvingAgainstBaseURL: false)
         components?.queryItems = [
             URLQueryItem(name: "mode", value: "ro"),
-            URLQueryItem(name: "immutable", value: "1"),
         ]
 
         return components?.string ?? databaseURL.path
@@ -1119,6 +1190,68 @@ private final class StateDatabaseURLCache {
 
     func clear() {
         entry = nil
+    }
+}
+
+private enum DesktopLogCachePolicy {
+    static let candidateCacheLifetime: TimeInterval = 5
+}
+
+private final class DesktopLogCandidateCache {
+    private struct Entry {
+        let key: String
+        let checkedAt: Date
+        let urls: [URL]
+    }
+
+    private var entry: Entry?
+
+    func value(key: String, now: Date, cacheLifetime: TimeInterval) -> [URL]? {
+        guard let entry,
+              entry.key == key,
+              now.timeIntervalSince(entry.checkedAt) < cacheLifetime
+        else {
+            return nil
+        }
+
+        return entry.urls
+    }
+
+    func store(_ urls: [URL], key: String, checkedAt: Date) {
+        entry = Entry(key: key, checkedAt: checkedAt, urls: urls)
+    }
+}
+
+private final class DesktopApprovalLogCache {
+    private struct Entry {
+        let modificationDate: Date?
+        let fileSize: Int?
+        let approvalThreadIDs: Set<String>
+    }
+
+    private var entries: [String: Entry] = [:]
+
+    func value(for path: String, modificationDate: Date?, fileSize: Int?) -> Set<String>? {
+        guard let entry = entries[path],
+              entry.modificationDate == modificationDate,
+              entry.fileSize == fileSize
+        else {
+            return nil
+        }
+
+        return entry.approvalThreadIDs
+    }
+
+    func store(_ approvalThreadIDs: Set<String>, for path: String, modificationDate: Date?, fileSize: Int?) {
+        entries[path] = Entry(
+            modificationDate: modificationDate,
+            fileSize: fileSize,
+            approvalThreadIDs: approvalThreadIDs
+        )
+    }
+
+    func prune(keepingPaths: Set<String>) {
+        entries = entries.filter { keepingPaths.contains($0.key) }
     }
 }
 

@@ -248,6 +248,35 @@ final class MenubarControllerIntegrationTests: XCTestCase {
         XCTAssertEqual(snapshot.projectSections.first?.threads.first?.thread.displayStatus, .running)
     }
 
+    func testRefreshDesktopActivityShowsRunningStatusAndRequestsBackfillForUntrackedActiveTurn() async throws {
+        let controller = makeController(
+            desktopUpdates: [
+                desktopUpdate(
+                    runtimeSnapshot: CodexDesktopRuntimeSnapshot(
+                        activeTurnCount: 1,
+                        runningThreadIDs: []
+                    )
+                )
+            ],
+            recentThreadResponses: [
+                [thread(id: "thread-a", updatedAt: 100, cwd: "/tmp/A/work")]
+            ],
+            projectCatalog: .success(
+                CodexDesktopProjectCatalog(workspaceRoots: [
+                    .init(path: "/tmp/A", displayName: "A")
+                ])
+            )
+        )
+
+        try await controller.loadInitialThreads()
+        let effects = await controller.refreshDesktopActivity()
+        let snapshot = controller.prepareSnapshot().snapshot
+
+        XCTAssertTrue(effects.shouldRequestThreadRefresh)
+        XCTAssertEqual(snapshot.overallStatus, .running)
+        XCTAssertEqual(snapshot.projectSections.first?.threads.first?.thread.displayStatus, .idle)
+    }
+
     func testCompletionHintsClearWaitingStateInSnapshot() async throws {
         let controller = makeController(
             desktopUpdates: [
