@@ -495,6 +495,25 @@ final class AppStateStoreTests: XCTestCase {
         XCTAssertEqual(child.sessionPath, "/tmp/child-thread.jsonl")
     }
 
+    func testReplaceRecentThreadsPrunesWatchedIdleThreadMissingFromAuthoritativeList() {
+        var store = AppStateStore()
+        store.markWatched(thread: thread(id: "thread-1", updatedAt: 100, status: .idle))
+
+        store.replaceRecentThreads(with: [])
+
+        XCTAssertTrue(store.recentThreads.isEmpty)
+    }
+
+    func testReplaceRecentThreadsPreservesWatchedRunningThreadMissingFromAuthoritativeList() {
+        var store = AppStateStore()
+        store.markWatched(thread: thread(id: "thread-1", updatedAt: 100, status: .active(flags: [])))
+
+        store.replaceRecentThreads(with: [])
+
+        XCTAssertEqual(store.recentThreads.map(\.id), ["thread-1"])
+        XCTAssertEqual(store.recentThreads.first?.displayStatus, .running)
+    }
+
     func testDesktopPendingOverlayUpdatesUnwatchedThreadFromNotLoaded() {
         var store = AppStateStore()
         store.replaceRecentThreads(with: [thread(id: "thread-1", updatedAt: 100, status: .notLoaded)])
@@ -1492,6 +1511,44 @@ final class AppStateStoreTests: XCTestCase {
         ])
 
         XCTAssertEqual(store.overallStatus, .running)
+    }
+
+    func testRemoveThreadsRemovesArchivedThreadAndDescendantsImmediately() {
+        var store = AppStateStore()
+        store.replaceRecentThreads(with: [
+            thread(id: "survivor-thread", updatedAt: 120, status: .idle),
+            thread(id: "parent-thread", updatedAt: 110, status: .idle),
+            thread(
+                id: "child-thread",
+                updatedAt: 100,
+                status: .active(flags: []),
+                source: #"{"subagent":{"thread_spawn":{"parent_thread_id":"parent-thread","depth":1}}}"#
+            )
+        ])
+
+        store.removeThreads(threadIDs: ["parent-thread"])
+
+        XCTAssertEqual(store.recentThreads.map(\.id), ["survivor-thread"])
+        XCTAssertEqual(store.visibleRecentThreads.map(\.id), ["survivor-thread"])
+    }
+
+    func testThreadArchivedNotificationRemovesArchivedThreadAndDescendantsImmediately() {
+        var store = AppStateStore()
+        store.replaceRecentThreads(with: [
+            thread(id: "survivor-thread", updatedAt: 120, status: .idle),
+            thread(id: "parent-thread", updatedAt: 110, status: .idle),
+            thread(
+                id: "child-thread",
+                updatedAt: 100,
+                status: .active(flags: []),
+                source: #"{"subagent":{"thread_spawn":{"parent_thread_id":"parent-thread","depth":1}}}"#
+            )
+        ])
+
+        store.apply(notification: .threadArchived(ThreadArchivedNotification(threadId: "parent-thread")))
+
+        XCTAssertEqual(store.recentThreads.map(\.id), ["survivor-thread"])
+        XCTAssertEqual(store.visibleRecentThreads.map(\.id), ["survivor-thread"])
     }
 
     private func thread(

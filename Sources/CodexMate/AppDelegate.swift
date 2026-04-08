@@ -630,10 +630,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func refreshThreads() async throws {
         let effects = try await controller.refreshThreads()
+        let pruneEffects = await controller.pruneThreadsMissingFromDesktopState()
         if await client.isConnected() {
             markConnectionHealthy()
         }
         applyControllerEffects(effects)
+        applyControllerEffects(pruneEffects)
         await reconcileLiveSubscriptions()
         renderMenu()
     }
@@ -691,6 +693,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             decodeAndApply(payload, as: ThreadStatusChangedNotification.self) { [weak self] notification in
                 guard let self else { return }
                 controller.apply(notification: .threadStatusChanged(notification))
+                requestThreadRefresh()
+            }
+        case "thread/archived":
+            decodeAndApply(payload, as: ThreadArchivedNotification.self) { [weak self] notification in
+                guard let self else { return }
+                liveSubscribedThreadUpdatedAtByID.removeValue(forKey: notification.threadId)
+                controller.apply(notification: .threadArchived(notification))
+                requestDesktopActivityRefresh()
+                requestThreadRefresh()
+            }
+        case "thread/unarchived":
+            decodeAndApply(payload, as: ThreadUnarchivedNotification.self) { [weak self] notification in
+                guard let self else { return }
+                controller.apply(notification: .threadUnarchived(notification))
+                requestDesktopActivityRefresh()
+                requestThreadRefresh()
             }
         case "turn/started":
             decodeAndApply(payload, as: TurnStartedNotification.self) { [weak self] notification in
@@ -739,12 +757,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             decodeAndApply(payload, as: ThreadClosedNotification.self) { [weak self] notification in
                 guard let self else { return }
                 liveSubscribedThreadUpdatedAtByID.removeValue(forKey: notification.threadId)
-                controller.markUnwatched(threadIDs: Set([notification.threadId]))
+                controller.removeThreads(threadIDs: Set([notification.threadId]))
+                requestDesktopActivityRefresh()
+                requestThreadRefresh()
             }
         default:
             if Self.shouldHandleNotificationAsServerRequest(method) {
                 handleServerRequest(method: method, payload: payload)
                 return
+            }
+
+            if method.hasPrefix("thread/") {
+                debugLog("received unhandled thread notification method=\(method)")
+                controller.recordDiagnostic("Unhandled thread notification: \(method)")
+                requestThreadRefresh()
             }
         }
 
@@ -858,10 +884,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func handleForegroundRefreshNotification(_ name: Notification.Name, now: Date = Date()) {
-        guard case .connected = controller.connection else {
-            return
-        }
-
         guard foregroundRefreshThrottle.shouldTrigger(now: now) else {
             return
         }
@@ -878,11 +900,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func scheduleRefreshTimerIfNeeded() {
-        guard case .connected = controller.connection else {
-            invalidateTimers()
-            return
-        }
-
         let policy = refreshSchedulingPolicy()
         guard refreshTimer == nil || refreshTimerInterval != policy.timerInterval else {
             return
@@ -963,7 +980,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func refreshDesktopActivity() async {
         let effects = await controller.refreshDesktopActivity()
+        let pruneEffects = await controller.pruneThreadsMissingFromDesktopState()
         applyControllerEffects(effects)
+        applyControllerEffects(pruneEffects)
         renderMenu()
     }
 

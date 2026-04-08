@@ -106,7 +106,11 @@ final class FallbackRecentThreadListing: RecentThreadListing, @unchecked Sendabl
 
         switch (primaryOutcome, fallbackOutcome) {
         case let (.success(primaryThreads), .success(fallbackThreads)):
-            return mergeRecentThreads(primary: primaryThreads, fallback: fallbackThreads, limit: limit)
+            if primaryThreads.isEmpty {
+                return Array(fallbackThreads.prefix(limit))
+            }
+
+            return Array(primaryThreads.prefix(limit))
         case let (.success(primaryThreads), .failure):
             return Array(primaryThreads.prefix(limit))
         case let (.failure, .success(fallbackThreads)):
@@ -125,32 +129,6 @@ final class FallbackRecentThreadListing: RecentThreadListing, @unchecked Sendabl
         } catch {
             return .failure(error)
         }
-    }
-
-    private func mergeRecentThreads(primary: [CodexThread], fallback: [CodexThread], limit: Int) -> [CodexThread] {
-        guard !primary.isEmpty else {
-            return Array(fallback.prefix(limit))
-        }
-
-        guard !fallback.isEmpty else {
-            return Array(primary.prefix(limit))
-        }
-
-        var mergedByID = Dictionary(uniqueKeysWithValues: fallback.map { ($0.id, $0) })
-        for thread in primary {
-            mergedByID[thread.id] = thread
-        }
-
-        return mergedByID.values
-            .sorted { lhs, rhs in
-                if lhs.updatedAt == rhs.updatedAt {
-                    return lhs.id.localizedCaseInsensitiveCompare(rhs.id) == .orderedAscending
-                }
-
-                return lhs.updatedAt > rhs.updatedAt
-            }
-            .prefix(limit)
-            .map { $0 }
     }
 }
 
@@ -305,6 +283,32 @@ final class MenubarController {
         return effects
     }
 
+    func pruneThreadsMissingFromDesktopState() async -> MenubarControllerEffects {
+        let candidateThreadIDs: Set<String> = Set(state.recentThreads.map(\.id))
+
+        guard !candidateThreadIDs.isEmpty else {
+            return MenubarControllerEffects()
+        }
+
+        do {
+            let presentThreadIDs = Set(try await loadThreadsByID(candidateThreadIDs).map(\.id))
+            let missingThreadIDs = candidateThreadIDs.subtracting(presentThreadIDs)
+
+            guard !missingThreadIDs.isEmpty else {
+                return MenubarControllerEffects()
+            }
+
+            state.removeThreads(threadIDs: missingThreadIDs)
+            let diagnostic = "desktop pruned missing threads=\(debugThreadIDs(missingThreadIDs))"
+            state.recordDiagnostic(diagnostic)
+            return MenubarControllerEffects(diagnostics: [diagnostic])
+        } catch {
+            let diagnostic = "desktop prune skipped: \(error.localizedDescription)"
+            state.recordDiagnostic(diagnostic)
+            return MenubarControllerEffects(diagnostics: [diagnostic])
+        }
+    }
+
     func refreshDesktopActivity() async -> MenubarControllerEffects {
         pendingDiscoveredThreads.prune(now: now())
 
@@ -383,6 +387,10 @@ final class MenubarController {
 
     func markUnwatched(threadIDs: Set<String>) {
         state.markUnwatched(threadIDs: threadIDs)
+    }
+
+    func removeThreads(threadIDs: Set<String>) {
+        state.removeThreads(threadIDs: threadIDs)
     }
 
     func clearLiveRuntimeState() {

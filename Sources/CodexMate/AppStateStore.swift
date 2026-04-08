@@ -213,6 +213,8 @@ struct AppStateStore {
     enum NotificationEvent {
         case threadStarted(ThreadStartedNotification)
         case threadStatusChanged(ThreadStatusChangedNotification)
+        case threadArchived(ThreadArchivedNotification)
+        case threadUnarchived(ThreadUnarchivedNotification)
         case turnStarted(TurnStartedNotification)
         case turnCompleted(TurnCompletedNotification)
         case error(ErrorNotificationPayload)
@@ -513,6 +515,32 @@ struct AppStateStore {
             row.activeTurnID = nil
             row.status = row.listedStatus
             threadsByID[threadID] = row
+        }
+    }
+
+    mutating func removeThreads(threadIDs: Set<String>) {
+        guard !threadIDs.isEmpty, !threadsByID.isEmpty else { return }
+
+        var removedThreadIDs = threadIDs
+        var discoveredDescendant = true
+
+        while discoveredDescendant {
+            discoveredDescendant = false
+
+            for row in threadsByID.values {
+                guard !removedThreadIDs.contains(row.id),
+                      let parentThreadID = row.parentThreadID,
+                      removedThreadIDs.contains(parentThreadID) else {
+                    continue
+                }
+
+                removedThreadIDs.insert(row.id)
+                discoveredDescendant = true
+            }
+        }
+
+        for threadID in removedThreadIDs {
+            threadsByID.removeValue(forKey: threadID)
         }
     }
 
@@ -897,6 +925,10 @@ struct AppStateStore {
             row.activeTurnID = updatedActiveTurnID(existing: row.activeTurnID, status: row.displayStatus, allowClearing: false)
             threadsByID[notification.threadId] = row
             recordPendingResolution(threadID: notification.threadId, previous: previousStatus, current: row.displayStatus, source: "thread/status/changed")
+        case let .threadArchived(notification):
+            removeThreads(threadIDs: [notification.threadId])
+        case .threadUnarchived:
+            break
         case let .turnStarted(notification):
             var row = threadsByID[notification.threadId] ?? defaultThreadRow(threadID: notification.threadId)
             let previousStatus = row.displayStatus
@@ -1211,10 +1243,6 @@ struct AppStateStore {
     }
 
     private static func shouldRetainThreadOutsideAuthoritativeList(_ row: ThreadRow) -> Bool {
-        guard !row.isWatched else {
-            return true
-        }
-
         switch row.presentationStatus {
         case .waitingForUser, .running, .failed:
             return true

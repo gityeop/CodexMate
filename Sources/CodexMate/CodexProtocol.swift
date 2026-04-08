@@ -289,6 +289,14 @@ struct ThreadStatusChangedNotification: Decodable, Equatable {
     let status: CodexThreadStatus
 }
 
+struct ThreadArchivedNotification: Decodable, Equatable {
+    let threadId: String
+}
+
+struct ThreadUnarchivedNotification: Decodable, Equatable {
+    let threadId: String
+}
+
 struct TurnStartedNotification: Decodable, Equatable {
     let threadId: String
     let turn: CodexTurn

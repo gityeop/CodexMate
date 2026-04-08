@@ -528,6 +528,135 @@ final class MenubarControllerIntegrationTests: XCTestCase {
         XCTAssertTrue(snapshot.projectSections.first?.threadGroups.isEmpty ?? false)
     }
 
+    func testRemoveThreadsImmediatelyDropsArchivedProjectFromSnapshot() async throws {
+        let controller = makeController(
+            recentThreadResponses: [
+                [
+                    thread(id: "archived-thread", updatedAt: 200, cwd: "/tmp/B/work", status: .active(flags: [])),
+                    thread(id: "survivor-thread", updatedAt: 100, cwd: "/tmp/A/work")
+                ]
+            ],
+            projectCatalog: .success(
+                CodexDesktopProjectCatalog(workspaceRoots: [
+                    .init(path: "/tmp/A", displayName: "A"),
+                    .init(path: "/tmp/B", displayName: "B")
+                ])
+            )
+        )
+
+        try await controller.loadInitialThreads()
+
+        var snapshot = controller.prepareSnapshot().snapshot
+        XCTAssertEqual(snapshot.overallStatus, .running)
+        XCTAssertEqual(snapshot.projectSections.map(\.section.displayName), ["B", "A"])
+
+        controller.removeThreads(threadIDs: ["archived-thread"])
+        snapshot = controller.prepareSnapshot().snapshot
+
+        XCTAssertEqual(snapshot.overallStatus, .idle)
+        XCTAssertEqual(snapshot.projectSections.map(\.section.displayName), ["A"])
+        XCTAssertEqual(snapshot.projectSections.first?.threads.map(\.id), ["survivor-thread"])
+    }
+
+    func testThreadArchivedNotificationImmediatelyDropsArchivedProjectFromSnapshot() async throws {
+        let controller = makeController(
+            recentThreadResponses: [
+                [
+                    thread(id: "archived-thread", updatedAt: 200, cwd: "/tmp/B/work", status: .active(flags: [])),
+                    thread(id: "survivor-thread", updatedAt: 100, cwd: "/tmp/A/work")
+                ]
+            ],
+            projectCatalog: .success(
+                CodexDesktopProjectCatalog(workspaceRoots: [
+                    .init(path: "/tmp/A", displayName: "A"),
+                    .init(path: "/tmp/B", displayName: "B")
+                ])
+            )
+        )
+
+        try await controller.loadInitialThreads()
+
+        controller.apply(notification: .threadArchived(ThreadArchivedNotification(threadId: "archived-thread")))
+        let snapshot = controller.prepareSnapshot().snapshot
+
+        XCTAssertEqual(snapshot.overallStatus, .idle)
+        XCTAssertEqual(snapshot.projectSections.map(\.section.displayName), ["A"])
+        XCTAssertEqual(snapshot.projectSections.first?.threads.map(\.id), ["survivor-thread"])
+    }
+
+    func testRefreshThreadsPrunesWatchedArchivedThreadWhenAuthoritativeListOmitsIt() async throws {
+        let archivedThread = thread(id: "archived-thread", updatedAt: 200, cwd: "/tmp/B/work")
+        let survivorThread = thread(id: "survivor-thread", updatedAt: 100, cwd: "/tmp/A/work")
+        let controller = makeController(
+            recentThreadResponses: [
+                [archivedThread, survivorThread],
+                [survivorThread]
+            ],
+            projectCatalog: .success(
+                CodexDesktopProjectCatalog(workspaceRoots: [
+                    .init(path: "/tmp/A", displayName: "A"),
+                    .init(path: "/tmp/B", displayName: "B")
+                ])
+            )
+        )
+
+        try await controller.loadInitialThreads()
+        controller.markWatched(thread: archivedThread)
+
+        _ = try await controller.refreshThreads()
+        let snapshot = controller.prepareSnapshot().snapshot
+
+        XCTAssertEqual(controller.recentThreads.map(\.id), ["survivor-thread"])
+        XCTAssertEqual(snapshot.projectSections.map(\.section.displayName), ["A"])
+    }
+
+    func testPruneThreadsMissingFromDesktopStateRemovesThreadKeptOnlyByStaleRecentList() async throws {
+        let archivedListed = thread(id: "archived-thread", updatedAt: 200, cwd: "/tmp/B/work")
+        let survivorListed = thread(id: "survivor-thread", updatedAt: 100, cwd: "/tmp/A/work")
+        let archivedMetadata = thread(
+            id: "archived-thread",
+            updatedAt: 200,
+            cwd: "/tmp/B/work",
+            path: "/tmp/B/archived.jsonl",
+            source: "",
+            agentRole: "",
+            agentNickname: ""
+        )
+        let survivorMetadata = thread(
+            id: "survivor-thread",
+            updatedAt: 100,
+            cwd: "/tmp/A/work",
+            path: "/tmp/A/survivor.jsonl",
+            source: "",
+            agentRole: "",
+            agentNickname: ""
+        )
+
+        let controller = makeController(
+            recentThreadResponses: [
+                [archivedListed, survivorListed]
+            ],
+            metadataResponses: [
+                .success([archivedMetadata, survivorMetadata]),
+                .success([survivorMetadata])
+            ],
+            projectCatalog: .success(
+                CodexDesktopProjectCatalog(workspaceRoots: [
+                    .init(path: "/tmp/A", displayName: "A"),
+                    .init(path: "/tmp/B", displayName: "B")
+                ])
+            )
+        )
+
+        try await controller.loadInitialThreads()
+        let effects = await controller.pruneThreadsMissingFromDesktopState()
+        let snapshot = controller.prepareSnapshot().snapshot
+
+        XCTAssertEqual(controller.recentThreads.map { $0.id }, ["survivor-thread"])
+        XCTAssertEqual(snapshot.projectSections.map { $0.section.displayName }, ["A"])
+        XCTAssertEqual(effects.diagnostics.count, 1)
+    }
+
     func testPrepareSnapshotAppliesVisibleThreadLimitOverridePerProject() async throws {
         let controller = makeController(
             recentThreadResponses: [
@@ -769,6 +898,7 @@ final class MenubarControllerIntegrationTests: XCTestCase {
         updatedAt: Int,
         cwd: String,
         status: CodexThreadStatus = .idle,
+        path: String? = nil,
         source: String? = nil,
         agentRole: String? = nil,
         agentNickname: String? = nil
@@ -781,6 +911,7 @@ final class MenubarControllerIntegrationTests: XCTestCase {
             status: status,
             cwd: cwd,
             name: nil,
+            path: path,
             source: source,
             agentRole: agentRole,
             agentNickname: agentNickname
