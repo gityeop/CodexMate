@@ -564,6 +564,18 @@ private final class NotchMenuDocumentView: FlippedDocumentView {
 }
 
 private final class LockedHorizontalClipView: NSClipView {
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        drawsBackground = true
+        backgroundColor = .black
+        wantsLayer = true
+        layer?.backgroundColor = NSColor.black.cgColor
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
     override func constrainBoundsRect(_ proposedBounds: NSRect) -> NSRect {
         var constrained = super.constrainBoundsRect(proposedBounds)
         constrained.origin.x = 0
@@ -802,6 +814,8 @@ final class NotchStatusOverlayView: NSView {
         let color = NSColor.black
         layer?.backgroundColor = color.cgColor
         menuScrollView.backgroundColor = color
+        menuScrollView.contentView.drawsBackground = true
+        menuScrollView.contentView.backgroundColor = color
         menuScrollView.contentView.layer?.backgroundColor = color.cgColor
         menuDocumentView.layer?.backgroundColor = color.cgColor
     }

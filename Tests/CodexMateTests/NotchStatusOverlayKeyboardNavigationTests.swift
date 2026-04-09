@@ -181,6 +181,18 @@ final class NotchStatusOverlayKeyboardNavigationTests: XCTestCase {
         }
     }
 
+    func testScrollViewAndClipViewUseBlackBackgroundForOverscrollSurface() throws {
+        let view = NotchStatusOverlayView(frame: NSRect(x: 0, y: 0, width: 520, height: 220))
+        view.setMenuItems(makeScrollableMenuItems())
+        view.menuExpansionProgress = 1
+        view.layoutSubtreeIfNeeded()
+
+        let scrollView = try XCTUnwrap(firstScrollView(in: view))
+        XCTAssertTrue(scrollView.contentView.drawsBackground)
+        assertEqualColor(scrollView.backgroundColor, .black)
+        assertEqualColor(scrollView.contentView.backgroundColor, .black)
+    }
+
     func testReturnActivatesSelectedRow() throws {
         let expectation = expectation(description: "selected row activates")
         var activationCount = 0
@@ -498,5 +510,22 @@ final class NotchStatusOverlayKeyboardNavigationTests: XCTestCase {
 
     private func allSubviews(in view: NSView) -> [NSView] {
         view.subviews + view.subviews.flatMap { allSubviews(in: $0) }
+    }
+
+    private func assertEqualColor(
+        _ actual: NSColor,
+        _ expected: NSColor,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        let actualRGB = actual.usingColorSpace(.deviceRGB)
+        let expectedRGB = expected.usingColorSpace(.deviceRGB)
+        XCTAssertNotNil(actualRGB, file: file, line: line)
+        XCTAssertNotNil(expectedRGB, file: file, line: line)
+        guard let actualRGB, let expectedRGB else { return }
+        XCTAssertEqual(actualRGB.redComponent, expectedRGB.redComponent, accuracy: 0.001, file: file, line: line)
+        XCTAssertEqual(actualRGB.greenComponent, expectedRGB.greenComponent, accuracy: 0.001, file: file, line: line)
+        XCTAssertEqual(actualRGB.blueComponent, expectedRGB.blueComponent, accuracy: 0.001, file: file, line: line)
+        XCTAssertEqual(actualRGB.alphaComponent, expectedRGB.alphaComponent, accuracy: 0.001, file: file, line: line)
     }
 }
