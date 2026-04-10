@@ -858,6 +858,36 @@ final class MenubarControllerIntegrationTests: XCTestCase {
         XCTAssertEqual(snapshot.projectSections.map(\.section.displayName), ["A"])
     }
 
+    func testRefreshThreadsImmediatelyPrunesRunningThreadWhenAuthoritativeListAndMetadataOmitIt() async throws {
+        let archivedThread = thread(id: "archived-thread", updatedAt: 200, cwd: "/tmp/B/work", status: .active(flags: []))
+        let survivorThread = thread(id: "survivor-thread", updatedAt: 100, cwd: "/tmp/A/work")
+        let controller = makeController(
+            recentThreadResponses: [
+                [archivedThread, survivorThread],
+                [survivorThread]
+            ],
+            metadataResponses: [
+                .success([])
+            ],
+            projectCatalog: .success(
+                CodexDesktopProjectCatalog(workspaceRoots: [
+                    .init(path: "/tmp/A", displayName: "A"),
+                    .init(path: "/tmp/B", displayName: "B")
+                ])
+            ),
+            now: { Date(timeIntervalSince1970: 250) }
+        )
+
+        try await controller.loadInitialThreads()
+        let effects = try await controller.refreshThreads()
+        let snapshot = controller.prepareSnapshot().snapshot
+
+        XCTAssertEqual(controller.recentThreads.map(\.id), ["survivor-thread"])
+        XCTAssertEqual(snapshot.overallStatus, .idle)
+        XCTAssertEqual(snapshot.projectSections.map(\.section.displayName), ["A"])
+        XCTAssertEqual(effects.diagnostics.count, 1)
+    }
+
     func testPruneThreadsMissingFromDesktopStateRemovesThreadKeptOnlyByStaleRecentList() async throws {
         let archivedListed = thread(id: "archived-thread", updatedAt: 200, cwd: "/tmp/B/work")
         let survivorListed = thread(id: "survivor-thread", updatedAt: 100, cwd: "/tmp/A/work")

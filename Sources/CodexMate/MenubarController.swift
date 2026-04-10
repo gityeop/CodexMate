@@ -358,9 +358,19 @@ final class MenubarController {
 
     func refreshThreads() async throws -> MenubarControllerEffects {
         let threads = try await hydratedRecentThreads(limit: configuration.maxTrackedThreads)
-        let effects = recordDiscoveredThreadRefreshResult(threads: threads)
+        let authoritativeThreadIDs = Set(threads.map(\.id))
+        let omittedListedThreadIDs = listedThreadIDsMissingFromAuthoritativeList(keeping: authoritativeThreadIDs)
+        var effects = recordDiscoveredThreadRefreshResult(threads: threads)
         projectCatalog = (try? await loadProjectCatalog()) ?? .empty
         state.replaceRecentThreads(with: threads)
+        let omissionEffects = await pruneAuthoritativeListOmissions(omittedListedThreadIDs)
+        effects.diagnostics.append(contentsOf: omissionEffects.diagnostics)
+        effects.shouldRequestThreadRefresh = effects.shouldRequestThreadRefresh
+            || omissionEffects.shouldRequestThreadRefresh
+        effects.shouldRequestDesktopActivityRefresh = effects.shouldRequestDesktopActivityRefresh
+            || omissionEffects.shouldRequestDesktopActivityRefresh
+        effects.shouldBoostThreadDiscovery = effects.shouldBoostThreadDiscovery
+            || omissionEffects.shouldBoostThreadDiscovery
         synchronizePendingAuthoritativeThreads()
         return effects
     }
@@ -641,6 +651,44 @@ final class MenubarController {
             diagnostics: [diagnostic],
             shouldBoostThreadDiscovery: !resolution.missingThreadIDs.isEmpty
         )
+    }
+
+    private func listedThreadIDsMissingFromAuthoritativeList(keeping threadIDs: Set<String>) -> Set<String> {
+        Set(
+            state.recentThreads.compactMap { thread in
+                guard thread.authoritativeListPresence == .listed,
+                      thread.parentThreadID == nil,
+                      !threadIDs.contains(thread.id) else {
+                    return nil
+                }
+
+                return thread.id
+            }
+        )
+    }
+
+    private func pruneAuthoritativeListOmissions(_ threadIDs: Set<String>) async -> MenubarControllerEffects {
+        guard !threadIDs.isEmpty else {
+            return MenubarControllerEffects()
+        }
+
+        do {
+            let presentThreadIDs = Set(try await loadThreadsByID(threadIDs).map(\.id))
+            let missingThreadIDs = threadIDs.subtracting(presentThreadIDs)
+
+            guard !missingThreadIDs.isEmpty else {
+                return MenubarControllerEffects()
+            }
+
+            state.archiveThreads(threadIDs: missingThreadIDs)
+            let diagnostic = "thread/list pruned missing listed threads=\(debugThreadIDs(missingThreadIDs))"
+            state.recordDiagnostic(diagnostic)
+            return MenubarControllerEffects(diagnostics: [diagnostic])
+        } catch {
+            let diagnostic = "thread/list omission prune skipped: \(error.localizedDescription)"
+            state.recordDiagnostic(diagnostic)
+            return MenubarControllerEffects(diagnostics: [diagnostic])
+        }
     }
 
     private func seedDiscoveredThreads(_ threadIDs: Set<String>) async -> MenubarControllerEffects {
