@@ -2,33 +2,13 @@ import XCTest
 @testable import CodexMate
 
 final class DesktopActivityHintPlannerTests: XCTestCase {
-    func testHintedRunningThreadIDsExpiresShortlyAfterTurnStartWithoutCompletion() {
+    func testHintLifetimesDifferentiateRunningAndCompletedTurns() {
         let now = Date(timeIntervalSince1970: 200)
         let snapshot = CodexDesktopConversationActivityReader.ActivitySnapshot(
             latestViewedAtByThreadID: [:],
             latestTurnStartedAtByThreadID: [
                 "thread-1": Date(timeIntervalSince1970: 170),
                 "thread-2": Date(timeIntervalSince1970: 188),
-            ],
-            latestTurnCompletedAtByThreadID: [:]
-        )
-
-        let hinted = DesktopActivityHintPlanner.hintedRunningThreadIDs(
-            activitySnapshot: snapshot,
-            candidateThreadIDs: ["thread-1", "thread-2"],
-            now: now,
-            runningHintInterval: 15
-        )
-
-        XCTAssertEqual(hinted, ["thread-2"])
-    }
-
-    func testLatestTurnCompletedHintsCanRemainLongerThanRunningHints() {
-        let now = Date(timeIntervalSince1970: 200)
-        let snapshot = CodexDesktopConversationActivityReader.ActivitySnapshot(
-            latestViewedAtByThreadID: [:],
-            latestTurnStartedAtByThreadID: [
-                "thread-1": Date(timeIntervalSince1970: 170)
             ],
             latestTurnCompletedAtByThreadID: [
                 "thread-1": Date(timeIntervalSince1970: 180)
@@ -43,12 +23,12 @@ final class DesktopActivityHintPlannerTests: XCTestCase {
         )
         let runningHints = DesktopActivityHintPlanner.hintedRunningThreadIDs(
             activitySnapshot: snapshot,
-            candidateThreadIDs: ["thread-1"],
+            candidateThreadIDs: ["thread-1", "thread-2"],
             now: now,
             runningHintInterval: 15
         )
 
         XCTAssertEqual(completionHints["thread-1"], Date(timeIntervalSince1970: 180))
-        XCTAssertTrue(runningHints.isEmpty)
+        XCTAssertEqual(runningHints, ["thread-2"])
     }
 }

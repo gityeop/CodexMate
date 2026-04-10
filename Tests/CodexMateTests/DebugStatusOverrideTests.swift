@@ -2,24 +2,21 @@ import XCTest
 @testable import CodexMate
 
 final class DebugStatusOverrideTests: XCTestCase {
-    func testOverallStatusReadsKnownValues() {
-        XCTAssertEqual(
-            DebugStatusOverride.overallStatus(from: [DebugStatusOverride.environmentKey: "failed"]),
-            .failed
-        )
-        XCTAssertEqual(
-            DebugStatusOverride.overallStatus(from: [DebugStatusOverride.environmentKey: "waiting_for_user"]),
-            .waitingForUser
-        )
-        XCTAssertEqual(
-            DebugStatusOverride.overallStatus(from: [DebugStatusOverride.environmentKey: "running"]),
-            .running
-        )
-    }
+    func testOverallStatusParsesKnownValuesAndRejectsUnknownOnes() {
+        let cases: [(rawValue: String, expected: AppStateStore.OverallStatus?)] = [
+            ("failed", .failed),
+            ("waiting_for_user", .waitingForUser),
+            ("running", .running),
+            ("not-a-status", nil),
+        ]
 
-    func testOverallStatusIgnoresUnknownValue() {
-        XCTAssertNil(
-            DebugStatusOverride.overallStatus(from: [DebugStatusOverride.environmentKey: "not-a-status"])
-        )
+        for testCase in cases {
+            XCTAssertEqual(
+                DebugStatusOverride.overallStatus(
+                    from: [DebugStatusOverride.environmentKey: testCase.rawValue]
+                ),
+                testCase.expected
+            )
+        }
     }
 }

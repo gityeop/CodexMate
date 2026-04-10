@@ -39,7 +39,7 @@ actor DesktopActivityService {
         let activitySnapshot = conversationActivityReader.activitySnapshot(now: now)
         let candidateThreadIDs = Set(candidateSessionPaths.keys)
 
-        let latestTurnCompletedAtByThreadID = DesktopActivityHintPlanner.latestTurnCompletedAtByThreadID(
+        let activityLatestTurnCompletedAtByThreadID = DesktopActivityHintPlanner.latestTurnCompletedAtByThreadID(
             activitySnapshot: activitySnapshot,
             candidateThreadIDs: candidateThreadIDs,
             now: now,
@@ -48,6 +48,10 @@ actor DesktopActivityService {
 
         do {
             let runtimeSnapshot = try loadRuntimeSnapshot(candidateSessionPaths: candidateSessionPaths)
+            let latestTurnCompletedAtByThreadID = mergeLatestDates(
+                activityLatestTurnCompletedAtByThreadID,
+                runtimeSnapshot.latestTurnCompletedAtByThreadID
+            )
             let hintedRunningThreadIDs = DesktopActivityHintPlanner.hintedRunningThreadIDs(
                 activitySnapshot: activitySnapshot,
                 candidateThreadIDs: candidateThreadIDs,
@@ -70,6 +74,7 @@ actor DesktopActivityService {
                 waitingForInputThreadIDs: runtimeSnapshot.waitingForInputThreadIDs,
                 approvalThreadIDs: runtimeSnapshot.approvalThreadIDs,
                 failedThreads: runtimeSnapshot.failedThreads,
+                latestTurnCompletedAtByThreadID: latestTurnCompletedAtByThreadID,
                 debugSummary: runtimeSnapshot.debugSummary
             )
 
@@ -91,17 +96,28 @@ actor DesktopActivityService {
                 return DesktopActivityUpdate(
                     runtimeSnapshot: fallbackSnapshot,
                     latestViewedAtByThreadID: activitySnapshot.latestViewedAtByThreadID,
-                    latestTurnCompletedAtByThreadID: latestTurnCompletedAtByThreadID,
+                    latestTurnCompletedAtByThreadID: activityLatestTurnCompletedAtByThreadID,
                     runtimeErrorMessage: nil
                 )
             }
             return DesktopActivityUpdate(
                 runtimeSnapshot: nil,
                 latestViewedAtByThreadID: activitySnapshot.latestViewedAtByThreadID,
-                latestTurnCompletedAtByThreadID: latestTurnCompletedAtByThreadID,
+                latestTurnCompletedAtByThreadID: activityLatestTurnCompletedAtByThreadID,
                 runtimeErrorMessage: runtimeErrorMessage
             )
         }
+    }
+
+    private func mergeLatestDates(_ lhs: [String: Date], _ rhs: [String: Date]) -> [String: Date] {
+        var merged = lhs
+        for (threadID, date) in rhs {
+            if date > (merged[threadID] ?? .distantPast) {
+                merged[threadID] = date
+            }
+        }
+
+        return merged
     }
 
     private func loadRuntimeSnapshot(candidateSessionPaths: [String: String?]) throws -> CodexDesktopRuntimeSnapshot {

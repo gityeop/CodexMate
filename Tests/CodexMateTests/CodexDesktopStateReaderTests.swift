@@ -49,6 +49,160 @@ final class CodexDesktopStateReaderTests: XCTestCase {
         XCTAssertTrue(snapshot.runningThreadIDs.isEmpty)
     }
 
+    func testSnapshotKeepsRecentUpdatesWhenLogsTableIsUnavailable() throws {
+        let tempDirectoryURL = FileManager.default.temporaryDirectory
+            .appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: tempDirectoryURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDirectoryURL) }
+
+        let databaseURL = tempDirectoryURL.appending(path: "state.sqlite")
+        try createStateDatabase(
+            at: databaseURL,
+            sql: """
+            CREATE TABLE threads (
+                id TEXT PRIMARY KEY,
+                first_user_message TEXT NOT NULL DEFAULT '',
+                title TEXT NOT NULL DEFAULT '',
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                cwd TEXT NOT NULL,
+                rollout_path TEXT,
+                archived INTEGER NOT NULL DEFAULT 0
+            );
+            INSERT INTO threads (id, first_user_message, title, created_at, updated_at, cwd, rollout_path, archived)
+            VALUES ('thread-1', 'Preview', 'Thread 1', 150, 195, '/tmp/project', NULL, 0);
+            """
+        )
+
+        let reader = CodexDesktopStateReader(
+            now: { Date(timeIntervalSince1970: 200) },
+            recentThreadUpdateInterval: 10,
+            recentLogInterval: 15,
+            stateDatabaseURLOverride: databaseURL
+        )
+
+        let snapshot = try reader.snapshot(candidateSessionPaths: [:])
+
+        XCTAssertEqual(snapshot.activeTurnCount, 0)
+        XCTAssertEqual(snapshot.recentActivityThreadIDs, ["thread-1"])
+        XCTAssertTrue(snapshot.runningThreadIDs.isEmpty)
+    }
+
+    func testSnapshotUsesSplitLogsDatabaseWhenPresent() throws {
+        let tempDirectoryURL = FileManager.default.temporaryDirectory
+            .appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: tempDirectoryURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDirectoryURL) }
+
+        try createStateDatabase(
+            at: tempDirectoryURL.appending(path: "state_1.sqlite"),
+            sql: """
+            CREATE TABLE threads (
+                id TEXT PRIMARY KEY,
+                first_user_message TEXT NOT NULL DEFAULT '',
+                title TEXT NOT NULL DEFAULT '',
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                cwd TEXT NOT NULL,
+                rollout_path TEXT,
+                archived INTEGER NOT NULL DEFAULT 0
+            );
+            INSERT INTO threads (id, first_user_message, title, created_at, updated_at, cwd, rollout_path, archived)
+            VALUES ('thread-1', 'Preview', 'Thread 1', 100, 150, '/tmp/project', NULL, 0);
+            """
+        )
+        try createStateDatabase(
+            at: tempDirectoryURL.appending(path: "logs_2.sqlite"),
+            sql: """
+            CREATE TABLE logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts INTEGER NOT NULL,
+                ts_nanos INTEGER NOT NULL DEFAULT 0,
+                level TEXT NOT NULL DEFAULT 'info',
+                target TEXT NOT NULL,
+                feedback_log_body TEXT,
+                module_path TEXT,
+                file TEXT,
+                line INTEGER,
+                thread_id TEXT,
+                process_uuid TEXT,
+                estimated_bytes INTEGER NOT NULL DEFAULT 0
+            );
+            INSERT INTO logs (ts, ts_nanos, level, target, feedback_log_body, thread_id, process_uuid)
+            VALUES
+                (195, 0, 'info', 'codex_app_server::outgoing_message', 'app-server event: turn/started', NULL, 'process-1'),
+                (195, 1, 'info', 'codex_core::stream_events_utils', 'Output item', 'thread-1', 'process-1');
+            """
+        )
+
+        let reader = CodexDesktopStateReader(
+            now: { Date(timeIntervalSince1970: 200) },
+            recentThreadUpdateInterval: 10,
+            recentLogInterval: 15,
+            recentProcessActivityInterval: 20,
+            codexDirectoryURLOverride: tempDirectoryURL
+        )
+
+        let snapshot = try reader.snapshot(candidateSessionPaths: ["thread-1": nil])
+
+        XCTAssertEqual(snapshot.activeTurnCount, 1)
+        XCTAssertEqual(snapshot.recentActivityThreadIDs, ["thread-1"])
+        XCTAssertEqual(snapshot.runningThreadIDs, ["thread-1"])
+    }
+
+    func testSnapshotIncludesLatestAppServerTurnCompletionHints() throws {
+        let tempDirectoryURL = FileManager.default.temporaryDirectory
+            .appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: tempDirectoryURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDirectoryURL) }
+
+        let databaseURL = tempDirectoryURL.appending(path: "state.sqlite")
+        try createStateDatabase(
+            at: databaseURL,
+            sql: """
+            CREATE TABLE threads (
+                id TEXT PRIMARY KEY,
+                first_user_message TEXT NOT NULL DEFAULT '',
+                title TEXT NOT NULL DEFAULT '',
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                cwd TEXT NOT NULL,
+                rollout_path TEXT,
+                archived INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE TABLE logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                process_uuid TEXT,
+                target TEXT,
+                message TEXT,
+                ts INTEGER NOT NULL,
+                ts_nanos INTEGER NOT NULL DEFAULT 0,
+                thread_id TEXT
+            );
+            INSERT INTO threads (id, first_user_message, title, created_at, updated_at, cwd, rollout_path, archived)
+            VALUES ('thread-1', 'Preview', 'Thread 1', 150, 195, '/tmp/project', NULL, 0);
+            INSERT INTO logs (process_uuid, target, message, ts, ts_nanos, thread_id)
+            VALUES
+                ('process-1', 'codex_app_server::outgoing_message', 'app-server event: turn/completed', 198, 0, 'thread-1'),
+                ('process-1', 'codex_app_server::outgoing_message', 'app-server event: turn/completed', 199, 0, 'thread-2');
+            """
+        )
+
+        let reader = CodexDesktopStateReader(
+            now: { Date(timeIntervalSince1970: 200) },
+            recentProcessActivityInterval: 20,
+            stateDatabaseURLOverride: databaseURL
+        )
+
+        let snapshot = try reader.snapshot(candidateSessionPaths: ["thread-1": nil])
+
+        XCTAssertEqual(
+            snapshot.latestTurnCompletedAtByThreadID["thread-1"],
+            Date(timeIntervalSince1970: 198)
+        )
+        XCTAssertNil(snapshot.latestTurnCompletedAtByThreadID["thread-2"])
+    }
+
     func testDefaultSnapshotKeepsUnknownRecentThreadVisibleAcrossIdleRefreshWindow() throws {
         let tempDirectoryURL = FileManager.default.temporaryDirectory
             .appending(path: UUID().uuidString)

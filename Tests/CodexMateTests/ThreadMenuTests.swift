@@ -4,55 +4,78 @@ import XCTest
 
 @MainActor
 final class ThreadMenuTests: XCTestCase {
-    func testReturnShortcutOpensHighlightedThread() throws {
-        let event = try makeKeyEvent(
-            keyCode: 36,
-            characters: "\r"
-        )
+    func testOpenHighlightedItemShortcutsCoverReturnAndEnter() throws {
+        let cases: [(UInt16, NSEvent.ModifierFlags, String)] = [
+            (36, [], "\r"),
+            (76, [.numericPad], "\u{3}"),
+        ]
 
-        XCTAssertEqual(
-            ThreadMenu.shortcutAction(for: event),
-            .openHighlightedItem
-        )
+        for (keyCode, modifierFlags, characters) in cases {
+            let event = try makeKeyEvent(
+                keyCode: keyCode,
+                modifierFlags: modifierFlags,
+                characters: characters
+            )
+
+            XCTAssertEqual(
+                ThreadMenu.shortcutAction(for: event),
+                .openHighlightedItem
+            )
+        }
     }
 
-    func testEnterShortcutOpensHighlightedThread() throws {
-        let event = try makeKeyEvent(
-            keyCode: 76,
-            modifierFlags: [.numericPad],
-            characters: "\u{3}"
-        )
+    func testKeyboardShortcutsMapToExpectedActions() throws {
+        let cases: [(event: NSEvent, expected: ThreadMenuKeyboardShortcutAction?)] = [
+            (
+                try makeKeyEvent(
+                    keyCode: 20,
+                    modifierFlags: [.command],
+                    characters: "3"
+                ),
+                .openProjectThread(2)
+            ),
+            (
+                try makeKeyEvent(
+                    keyCode: 29,
+                    modifierFlags: [.command],
+                    characters: "0"
+                ),
+                .openProjectThread(9)
+            ),
+            (
+                try makeKeyEvent(
+                    keyCode: 18,
+                    modifierFlags: [.command, .shift],
+                    characters: "!",
+                    charactersIgnoringModifiers: "1"
+                ),
+                nil
+            ),
+            (
+                try makeKeyEvent(
+                    keyCode: 125,
+                    modifierFlags: [.option],
+                    characters: "↓"
+                ),
+                .movePrimarySelection(1)
+            ),
+            (
+                try makeKeyEvent(
+                    keyCode: 126,
+                    modifierFlags: [.option],
+                    characters: "↑"
+                ),
+                .movePrimarySelection(-1)
+            ),
+        ]
 
-        XCTAssertEqual(
-            ThreadMenu.shortcutAction(for: event),
-            .openHighlightedItem
-        )
-    }
-
-    func testCommandNumberShortcutMapsToProjectIndex() throws {
-        let event = try makeKeyEvent(
-            keyCode: 20,
-            modifierFlags: [.command],
-            characters: "3"
-        )
-
-        XCTAssertEqual(
-            ThreadMenu.shortcutAction(for: event),
-            .openProjectThread(2)
-        )
-    }
-
-    func testCommandZeroShortcutMapsToTenthProjectIndex() throws {
-        let event = try makeKeyEvent(
-            keyCode: 29,
-            modifierFlags: [.command],
-            characters: "0"
-        )
-
-        XCTAssertEqual(
-            ThreadMenu.shortcutAction(for: event),
-            .openProjectThread(9)
-        )
+        for (index, testCase) in cases.enumerated() {
+            XCTAssertEqual(
+                ThreadMenu.shortcutAction(for: testCase.event),
+                testCase.expected,
+                "case \(index)"
+            )
+        }
     }
 
     func testProjectShortcutKeyEquivalentsExpandThroughZero() {
@@ -61,39 +84,6 @@ final class ThreadMenuTests: XCTestCase {
         XCTAssertEqual(ProjectMenuShortcut.keyEquivalent(for: 8), "9")
         XCTAssertEqual(ProjectMenuShortcut.keyEquivalent(for: 9), "0")
         XCTAssertNil(ProjectMenuShortcut.keyEquivalent(for: 10))
-    }
-
-    func testCommandNumberShortcutRejectsExtraModifiers() throws {
-        let event = try makeKeyEvent(
-            keyCode: 18,
-            modifierFlags: [.command, .shift],
-            characters: "!",
-            charactersIgnoringModifiers: "1"
-        )
-
-        XCTAssertNil(ThreadMenu.shortcutAction(for: event))
-    }
-
-    func testOptionArrowShortcutMovesProjectSelection() throws {
-        let downEvent = try makeKeyEvent(
-            keyCode: 125,
-            modifierFlags: [.option],
-            characters: "↓"
-        )
-        let upEvent = try makeKeyEvent(
-            keyCode: 126,
-            modifierFlags: [.option],
-            characters: "↑"
-        )
-
-        XCTAssertEqual(
-            ThreadMenu.shortcutAction(for: downEvent),
-            .movePrimarySelection(1)
-        )
-        XCTAssertEqual(
-            ThreadMenu.shortcutAction(for: upEvent),
-            .movePrimarySelection(-1)
-        )
     }
 
     private func makeKeyEvent(

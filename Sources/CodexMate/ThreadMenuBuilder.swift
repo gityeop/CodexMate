@@ -8,109 +8,41 @@ struct ThreadMenuSection: Equatable {
 
 struct ThreadMenuThread: Equatable {
     let thread: AppStateStore.ThreadRow
+    let hasUnreadContent: Bool
     let children: [ThreadMenuThread]
 }
 
 enum ThreadMenuBuilder {
     static func build(
-        snapshotSections: [MenubarProjectSectionSnapshot],
-        recentThreads: [AppStateStore.ThreadRow],
-        projectCatalog: CodexDesktopProjectCatalog,
-        projectLimit: Int? = nil,
-        visibleThreadLimit: Int? = nil
+        snapshotSections: [MenubarProjectSectionSnapshot]
     ) -> [ThreadMenuSection] {
-        let parentIDByThreadID = Dictionary(
-            uniqueKeysWithValues: recentThreads.compactMap { thread in
-                thread.parentThreadID.map { (thread.id, $0) }
-            }
-        )
-
-        struct ProjectBucket {
-            let project: CodexDesktopProjectCatalog.ProjectReference
-            var threads: [AppStateStore.ThreadRow]
-        }
-
-        var projectBucketsByID: [String: ProjectBucket] = [:]
-        for thread in recentThreads {
-            let project = projectCatalog.project(for: thread.cwd)
-            if var bucket = projectBucketsByID[project.id] {
-                bucket.threads.append(thread)
-                projectBucketsByID[project.id] = bucket
-            } else {
-                projectBucketsByID[project.id] = ProjectBucket(project: project, threads: [thread])
-            }
-        }
-
-        if snapshotSections.isEmpty {
-            struct FallbackSection {
-                let displayName: String
-                let latestUpdatedAt: Date
-                let threads: [AppStateStore.ThreadRow]
-            }
-
-            let fallbackSections = projectBucketsByID.values.compactMap { bucket -> FallbackSection? in
-                guard !bucket.threads.isEmpty else { return nil }
-                return FallbackSection(
-                    displayName: bucket.project.displayName,
-                    latestUpdatedAt: bucket.threads.map(\.activityUpdatedAt).max() ?? .distantPast,
-                    threads: bucket.threads
-                )
-            }
-            .sorted { lhs, rhs in
-                if lhs.latestUpdatedAt == rhs.latestUpdatedAt {
-                    return lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName) == .orderedAscending
-                }
-
-                return lhs.latestUpdatedAt > rhs.latestUpdatedAt
-            }
-
-            let limitedFallbackSections: ArraySlice<FallbackSection>
-            if let projectLimit {
-                limitedFallbackSections = fallbackSections.prefix(max(0, projectLimit))
-            } else {
-                limitedFallbackSections = fallbackSections[...]
-            }
-
-            return limitedFallbackSections.compactMap { section -> ThreadMenuSection? in
-                return buildSection(
-                    displayName: section.displayName,
-                    sectionThreads: section.threads,
-                    visibleRootIDs: nil,
-                    parentIDByThreadID: parentIDByThreadID,
-                    visibleRootLimit: visibleThreadLimit
-                )
-            }
-        }
-
         return snapshotSections.compactMap { snapshotSection -> ThreadMenuSection? in
-            guard let bucket = projectBucketsByID[snapshotSection.section.id],
-                  !bucket.threads.isEmpty else {
-                return nil
-            }
-
             return buildSection(
                 displayName: snapshotSection.section.displayName,
-                sectionThreads: bucket.threads,
-                visibleRootIDs: Set(snapshotSection.threads.map(\.id)),
-                parentIDByThreadID: parentIDByThreadID,
-                visibleRootLimit: nil
+                sectionThreads: snapshotSection.allThreads,
+                visibleRootIDs: Set(snapshotSection.threads.map(\.id))
             )
         }
     }
 
     private static func buildSection(
         displayName: String,
-        sectionThreads: [AppStateStore.ThreadRow],
-        visibleRootIDs: Set<String>?,
-        parentIDByThreadID: [String: String],
-        visibleRootLimit: Int?
-    ) -> ThreadMenuSection {
+        sectionThreads: [MenubarThreadSnapshot],
+        visibleRootIDs: Set<String>?
+    ) -> ThreadMenuSection? {
+        guard !sectionThreads.isEmpty else { return nil }
+
+        let parentIDByThreadID = Dictionary(
+            uniqueKeysWithValues: sectionThreads.compactMap { thread in
+                thread.thread.parentThreadID.map { (thread.id, $0) }
+            }
+        )
         let roots = sectionRootThreads(
             allThreads: sectionThreads,
             visibleRootIDs: visibleRootIDs,
             parentIDByThreadID: parentIDByThreadID
         )
-        let childrenByParentID = Dictionary(grouping: sectionThreads) { $0.parentThreadID }
+        let childrenByParentID = Dictionary(grouping: sectionThreads) { $0.thread.parentThreadID }
         let rootNodes = roots.compactMap { root in
             buildThread(
                 thread: root,
@@ -120,23 +52,18 @@ enum ThreadMenuBuilder {
             )
         }
         .sorted(by: isHigherPriorityMenuThread)
-        let visibleRootNodes: [ThreadMenuThread]
-        if let visibleRootLimit {
-            visibleRootNodes = Array(rootNodes.prefix(max(0, visibleRootLimit)))
-        } else {
-            visibleRootNodes = rootNodes
-        }
+        guard !rootNodes.isEmpty else { return nil }
 
         return ThreadMenuSection(
             displayName: displayName,
-            threadCount: visibleRootNodes.count,
-            threads: visibleRootNodes
+            threadCount: rootNodes.count,
+            threads: rootNodes
         )
     }
 
     private static func buildThread(
-        thread: AppStateStore.ThreadRow,
-        childrenByParentID: [String?: [AppStateStore.ThreadRow]],
+        thread: MenubarThreadSnapshot,
+        childrenByParentID: [String?: [MenubarThreadSnapshot]],
         isRoot: Bool,
         visited: Set<String>
     ) -> ThreadMenuThread? {
@@ -156,31 +83,35 @@ enum ThreadMenuBuilder {
             )
         }
 
-        let shouldShow = isRoot || isAttentionThread(thread) || !visibleChildren.isEmpty
+        let shouldShow = isRoot || isAttentionThread(thread.thread) || !visibleChildren.isEmpty
         guard shouldShow else {
             return nil
         }
 
         let sortedVisibleChildren = visibleChildren.sorted(by: isHigherPriorityMenuThread)
-        return ThreadMenuThread(thread: thread, children: sortedVisibleChildren)
+        return ThreadMenuThread(
+            thread: thread.thread,
+            hasUnreadContent: thread.hasUnreadContent,
+            children: sortedVisibleChildren
+        )
     }
 
     private static func sectionRootThreads(
-        allThreads: [AppStateStore.ThreadRow],
+        allThreads: [MenubarThreadSnapshot],
         visibleRootIDs: Set<String>?,
         parentIDByThreadID: [String: String]
-    ) -> [AppStateStore.ThreadRow] {
+    ) -> [MenubarThreadSnapshot] {
         let threadByID = Dictionary(uniqueKeysWithValues: allThreads.map { ($0.id, $0) })
         let allThreadIDs = Set(allThreads.map(\.id))
 
         if let visibleRootIDs, !visibleRootIDs.isEmpty {
             var roots = allThreads.filter { visibleRootIDs.contains($0.id) }
             let orphanThreads = allThreads.filter { thread in
-                guard thread.isSubagent else {
+                guard thread.thread.isSubagent else {
                     return false
                 }
 
-                guard isAttentionThread(thread) else {
+                guard isAttentionThread(thread.thread) else {
                     return false
                 }
 
@@ -273,5 +204,9 @@ enum ThreadMenuBuilder {
         }
 
         return lhs.activityUpdatedAt > rhs.activityUpdatedAt
+    }
+
+    private static func isNewerThread(_ lhs: MenubarThreadSnapshot, _ rhs: MenubarThreadSnapshot) -> Bool {
+        isNewerThread(lhs.thread, rhs.thread)
     }
 }

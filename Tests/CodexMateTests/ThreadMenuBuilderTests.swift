@@ -24,9 +24,13 @@ final class ThreadMenuBuilderTests: XCTestCase {
         )
 
         let sections = ThreadMenuBuilder.build(
-            snapshotSections: [snapshotSection(root: parent, childThreads: [runningChild, idleChild])],
-            recentThreads: [idleChild, runningChild, parent],
-            projectCatalog: projectCatalog
+            snapshotSections: [
+                snapshotSection(
+                    root: parent,
+                    childThreads: [runningChild, idleChild],
+                    allThreads: [idleChild, runningChild, parent]
+                )
+            ]
         )
 
         XCTAssertEqual(sections.first?.threads.map(\.thread.id), ["parent-thread"])
@@ -56,9 +60,13 @@ final class ThreadMenuBuilderTests: XCTestCase {
         )
 
         let sections = ThreadMenuBuilder.build(
-            snapshotSections: [snapshotSection(root: parent, childThreads: [runningChild])],
-            recentThreads: [approvalGrandchild, runningChild, parent],
-            projectCatalog: projectCatalog
+            snapshotSections: [
+                snapshotSection(
+                    root: parent,
+                    childThreads: [runningChild],
+                    allThreads: [approvalGrandchild, runningChild, parent]
+                )
+            ]
         )
 
         XCTAssertEqual(sections.first?.threads.first?.children.map(\.thread.id), ["running-child"])
@@ -81,9 +89,7 @@ final class ThreadMenuBuilderTests: XCTestCase {
         )
 
         let sections = ThreadMenuBuilder.build(
-            snapshotSections: [snapshotSection(root: parent)],
-            recentThreads: [orphan, parent],
-            projectCatalog: projectCatalog
+            snapshotSections: [snapshotSection(root: parent, allThreads: [orphan, parent])]
         )
 
         XCTAssertEqual(sections.first?.threads.map(\.thread.id), ["orphan-child", "parent-thread"])
@@ -103,33 +109,26 @@ final class ThreadMenuBuilderTests: XCTestCase {
         )
 
         let sections = ThreadMenuBuilder.build(
-            snapshotSections: [snapshotSection(root: visibleRoot)],
-            recentThreads: [visibleRoot, hiddenChild, hiddenRoot],
-            projectCatalog: projectCatalog
+            snapshotSections: [
+                snapshotSection(
+                    root: visibleRoot,
+                    allThreads: [visibleRoot, hiddenChild, hiddenRoot]
+                )
+            ]
         )
 
         XCTAssertEqual(sections.first?.threads.map(\.thread.id), ["visible-root"])
     }
 
-    func testFallbackBuildAppliesConfiguredProjectAndThreadLimits() {
-        let projectCatalog = CodexDesktopProjectCatalog(
-            workspaceRoots: [
-                .init(path: "/tmp/A", displayName: "A"),
-                .init(path: "/tmp/B", displayName: "B"),
-                .init(path: "/tmp/C", displayName: "C")
-            ]
-        )
-        let threadA1 = threadRow(id: "thread-a-1", title: "Thread A1", updatedAt: 100, cwd: "/tmp/A/work")
-        let threadA2 = threadRow(id: "thread-a-2", title: "Thread A2", updatedAt: 90, cwd: "/tmp/A/work")
+    func testBuildUsesPrecomputedSnapshotSections() {
         let threadB1 = threadRow(id: "thread-b-1", title: "Thread B1", updatedAt: 300, cwd: "/tmp/B/work")
         let threadC1 = threadRow(id: "thread-c-1", title: "Thread C1", updatedAt: 200, cwd: "/tmp/C/work")
 
         let sections = ThreadMenuBuilder.build(
-            snapshotSections: [],
-            recentThreads: [threadA1, threadA2, threadB1, threadC1],
-            projectCatalog: projectCatalog,
-            projectLimit: 2,
-            visibleThreadLimit: 1
+            snapshotSections: [
+                snapshotSection(displayName: "B", root: threadB1, allThreads: [threadB1]),
+                snapshotSection(displayName: "C", root: threadC1, allThreads: [threadC1])
+            ]
         )
 
         XCTAssertEqual(sections.map(\.displayName), ["B", "C"])
@@ -161,39 +160,37 @@ final class ThreadMenuBuilderTests: XCTestCase {
         )
 
         let sections = ThreadMenuBuilder.build(
-            snapshotSections: [snapshot],
-            recentThreads: [newerIdleRoot, olderWaitingRoot],
-            projectCatalog: projectCatalog
+            snapshotSections: [snapshot]
         )
 
         XCTAssertEqual(sections.first?.threads.map(\.thread.id), ["waiting-root", "idle-root"])
     }
 
-    private let projectCatalog = CodexDesktopProjectCatalog(
-        workspaceRoots: [
-            .init(path: "/tmp/A", displayName: "A")
-        ]
-    )
-
     private func snapshotSection(
+        displayName: String = "A",
         root: AppStateStore.ThreadRow,
-        childThreads: [AppStateStore.ThreadRow] = []
+        childThreads: [AppStateStore.ThreadRow] = [],
+        allThreads: [AppStateStore.ThreadRow]? = nil
     ) -> MenubarProjectSectionSnapshot {
         let rootSnapshot = MenubarThreadSnapshot(thread: root, hasUnreadContent: false)
         let childSnapshots = childThreads.map { MenubarThreadSnapshot(thread: $0, hasUnreadContent: false) }
+        let allThreadSnapshots = (allThreads ?? [root] + childThreads).map {
+            MenubarThreadSnapshot(thread: $0, hasUnreadContent: false)
+        }
         let threadGroups = childSnapshots.isEmpty
             ? []
             : [MenubarThreadGroupSnapshot(thread: rootSnapshot, childThreads: childSnapshots)]
 
         return MenubarProjectSectionSnapshot(
             section: AppStateStore.ProjectSection(
-                id: "/tmp/A",
-                displayName: "A",
+                id: "/tmp/\(displayName)",
+                displayName: displayName,
                 latestUpdatedAt: root.activityUpdatedAt,
                 threads: [root]
             ),
             threads: [rootSnapshot],
-            threadGroups: threadGroups
+            threadGroups: threadGroups,
+            allThreads: allThreadSnapshots
         )
     }
 

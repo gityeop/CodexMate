@@ -59,6 +59,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private enum ThreadDiscoveryBoostPolicy {
         static let duration: TimeInterval = 10
         static let desktopActivityInterval: TimeInterval = 1
+        static let threadListInterval: TimeInterval = 1
     }
 
     private enum StatusAnimation {
@@ -149,6 +150,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
     )
     private var liveSubscribedThreadUpdatedAtByID: [String: Date] = [:]
+    private var pendingLiveSubscriptionThreadIDs: Set<String> = []
     private var connectedBinaryPath: String?
     private var refreshTimer: Timer?
     private var refreshTimerInterval: TimeInterval?
@@ -687,6 +689,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 if isMenuOpen {
                     renderMenu()
                 }
+                armFastThreadDiscoveryRefreshWindow()
+                requestImmediateThreadSubscription(threadID: notification.thread.id)
                 requestThreadRefresh()
             }
         case "thread/status/changed":
@@ -699,15 +703,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             decodeAndApply(payload, as: ThreadArchivedNotification.self) { [weak self] notification in
                 guard let self else { return }
                 liveSubscribedThreadUpdatedAtByID.removeValue(forKey: notification.threadId)
+                pendingLiveSubscriptionThreadIDs.remove(notification.threadId)
                 controller.apply(notification: .threadArchived(notification))
-                requestDesktopActivityRefresh()
+                armFastThreadDiscoveryRefreshWindow()
                 requestThreadRefresh()
             }
         case "thread/unarchived":
             decodeAndApply(payload, as: ThreadUnarchivedNotification.self) { [weak self] notification in
                 guard let self else { return }
                 controller.apply(notification: .threadUnarchived(notification))
-                requestDesktopActivityRefresh()
+                armFastThreadDiscoveryRefreshWindow()
                 requestThreadRefresh()
             }
         case "turn/started":
@@ -757,8 +762,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             decodeAndApply(payload, as: ThreadClosedNotification.self) { [weak self] notification in
                 guard let self else { return }
                 liveSubscribedThreadUpdatedAtByID.removeValue(forKey: notification.threadId)
-                controller.removeThreads(threadIDs: Set([notification.threadId]))
-                requestDesktopActivityRefresh()
+                pendingLiveSubscriptionThreadIDs.remove(notification.threadId)
+                controller.markUnwatched(threadIDs: Set([notification.threadId]))
                 requestThreadRefresh()
             }
         default:
@@ -958,7 +963,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 basePolicy.desktopActivityInterval,
                 ThreadDiscoveryBoostPolicy.desktopActivityInterval
             ),
-            threadListInterval: basePolicy.threadListInterval
+            threadListInterval: min(
+                basePolicy.threadListInterval,
+                ThreadDiscoveryBoostPolicy.threadListInterval
+            )
         )
     }
 
@@ -1085,13 +1093,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             visibleThreadLimit: preferences.threadsPerProjectLimit
         )
         let snapshot = preparedSnapshot.snapshot
-        let menuSections = ThreadMenuBuilder.build(
-            snapshotSections: snapshot.projectSections,
-            recentThreads: controller.recentThreads,
-            projectCatalog: controller.projectCatalog,
-            projectLimit: preferences.projectLimit,
-            visibleThreadLimit: preferences.threadsPerProjectLimit
-        )
+        let menuSections = snapshot.menuSections
         var threadProjectIndexByThreadID: [String: Int] = [:]
         for (index, section) in menuSections.enumerated() {
             for threadID in flattenedThreadIDs(from: section.threads) {
@@ -1103,24 +1105,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         optionShortcutTargetIDs = projectShortcutThreadIDs + [MenuNavigationIdentifier.settings]
         threadProjectIndexByThreadID[MenuNavigationIdentifier.settings] = projectShortcutThreadIDs.count
         self.threadProjectIndexByThreadID = threadProjectIndexByThreadID
-        let renderThreadIDs = Set(flattenedThreadIDs(from: menuSections.flatMap(\.threads)))
-        let hasUnreadThreads = menuSections.flatMap(\.threads).contains(where: hasUnreadContent(in:))
         let statusOverride = debugStatusOverride
         renderStatusItem(
             overallStatus: statusOverride ?? snapshot.overallStatus,
-            hasUnreadThreads: statusOverride == nil ? hasUnreadThreads : false
+            hasUnreadThreads: statusOverride == nil ? snapshot.hasUnreadThreads : false
         )
-        var didChangeReadMarkers = preparedSnapshot.didChangeReadMarkers
-        if controller.seedThreadReadMarkers(for: renderThreadIDs) {
-            didChangeReadMarkers = true
-        }
+        let didChangeReadMarkers = preparedSnapshot.didChangeReadMarkers
         if didChangeReadMarkers {
             persistThreadReadMarkers()
         }
 
         var hoverTooltipContentsByThreadID: [String: MenubarStatusPresentation.ThreadTooltipContent] = [:]
         menu.removeAllItems()
-        let isShowingLoadingPlaceholder = isInitialThreadBootstrapInProgress && controller.recentThreads.isEmpty
+        let isShowingLoadingPlaceholder = isInitialThreadBootstrapInProgress && !snapshot.hasRecentThreads
 
         if isShowingLoadingPlaceholder {
             menu.addItem(makeStaticItem(title: strings.text("menu.loadingRecentThreads", language: preferences.language)))
@@ -1304,10 +1301,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func hasUnreadContent(in thread: ThreadMenuThread) -> Bool {
-        if controller.threadReadMarkers.hasUnreadContent(
-            threadID: thread.thread.id,
-            lastTerminalActivityAt: thread.thread.lastTerminalActivityAt
-        ) {
+        if thread.hasUnreadContent {
             return true
         }
 
@@ -1504,6 +1498,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             debugLog(diagnostic)
         }
 
+        if effects.shouldBoostThreadDiscovery {
+            armFastThreadDiscoveryRefreshWindow()
+        }
+
         if effects.shouldRequestDesktopActivityRefresh {
             requestDesktopActivityRefresh()
         }
@@ -1632,10 +1630,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    private func requestImmediateThreadSubscription(threadID: String) {
+        guard liveSubscribedThreadUpdatedAtByID[threadID] == nil,
+              pendingLiveSubscriptionThreadIDs.insert(threadID).inserted else {
+            return
+        }
+
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            await resumeThreadSubscriptions([threadID])
+            renderMenu()
+        }
+    }
+
     private func reconcileLiveSubscriptions() async {
+        var subscribedOrPendingThreadUpdatedAtByID = liveSubscribedThreadUpdatedAtByID
+        for threadID in pendingLiveSubscriptionThreadIDs {
+            subscribedOrPendingThreadUpdatedAtByID[threadID] = .distantFuture
+        }
+
         let plan = ThreadSubscriptionPlanner.makePlan(
             recentThreads: controller.recentThreads,
-            liveThreadUpdatedAtByID: liveSubscribedThreadUpdatedAtByID,
+            liveThreadUpdatedAtByID: subscribedOrPendingThreadUpdatedAtByID,
             maxSubscribedThreads: ThreadListDisplay.maxTrackedThreads
         )
 
@@ -1699,7 +1715,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         for result in results {
+            pendingLiveSubscriptionThreadIDs.remove(result.threadID)
             if let thread = result.thread {
+                guard controller.recentThreads.contains(where: { $0.id == thread.id }) else {
+                    liveSubscribedThreadUpdatedAtByID.removeValue(forKey: thread.id)
+                    continue
+                }
+
                 markConnectionHealthy()
                 liveSubscribedThreadUpdatedAtByID[thread.id] = thread.updatedDate
                 controller.markWatched(thread: thread)
@@ -1729,6 +1751,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         for result in results {
+            pendingLiveSubscriptionThreadIDs.remove(result.threadID)
             if let status = result.responseStatus {
                 liveSubscribedThreadUpdatedAtByID.removeValue(forKey: result.threadID)
                 if ["unsubscribed", "notSubscribed", "notLoaded"].contains(status) {

@@ -2,25 +2,7 @@ import XCTest
 @testable import CodexMate
 
 final class ThreadSubscriptionPlannerTests: XCTestCase {
-    func testMakePlanResumesNewestRecentThreadsUpToTrackedLimit() {
-        let recentThreads = [
-            threadRow(id: "thread-1", updatedAt: 300),
-            threadRow(id: "thread-2", updatedAt: 290),
-            threadRow(id: "thread-3", updatedAt: 280),
-        ]
-
-        let plan = ThreadSubscriptionPlanner.makePlan(
-            recentThreads: recentThreads,
-            liveThreadUpdatedAtByID: ["thread-2": Date(timeIntervalSince1970: 290)],
-            maxSubscribedThreads: 2
-        )
-
-        XCTAssertEqual(plan.targetThreadIDs, ["thread-1", "thread-2"])
-        XCTAssertEqual(plan.threadIDsToResume, ["thread-1"])
-        XCTAssertEqual(plan.threadIDsToUnsubscribe, [])
-    }
-
-    func testMakePlanUnsubscribesThreadsOutsideRecentTrackedWindow() {
+    func testMakePlanUsingRecentThreadsResumesMissingTargetsAndPrunesStaleSubscriptions() {
         let recentThreads = [
             threadRow(id: "thread-1", updatedAt: 300),
             threadRow(id: "thread-2", updatedAt: 290),
@@ -38,6 +20,20 @@ final class ThreadSubscriptionPlannerTests: XCTestCase {
 
         XCTAssertEqual(plan.targetThreadIDs, ["thread-1", "thread-2"])
         XCTAssertEqual(plan.threadIDsToResume, ["thread-1"])
+        XCTAssertEqual(plan.threadIDsToUnsubscribe, ["thread-4"])
+    }
+
+    func testMakePlanUsesExplicitTargetThreadIDsInOrder() {
+        let plan = ThreadSubscriptionPlanner.makePlan(
+            targetThreadIDs: ["thread-2", "thread-1", "thread-2", "thread-3"],
+            liveThreadUpdatedAtByID: [
+                "thread-2": Date(timeIntervalSince1970: 290),
+                "thread-4": Date(timeIntervalSince1970: 270),
+            ]
+        )
+
+        XCTAssertEqual(plan.targetThreadIDs, ["thread-2", "thread-1", "thread-3"])
+        XCTAssertEqual(plan.threadIDsToResume, ["thread-1", "thread-3"])
         XCTAssertEqual(plan.threadIDsToUnsubscribe, ["thread-4"])
     }
 

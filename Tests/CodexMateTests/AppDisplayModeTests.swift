@@ -2,15 +2,18 @@ import XCTest
 @testable import CodexMate
 
 final class AppDisplayModeTests: XCTestCase {
-    func testMenuBarResolvesToMenuBarWithoutHardwareNotch() {
-        XCTAssertEqual(AppDisplayMode.menuBar.resolved(hasHardwareNotch: false), .menuBar)
-    }
+    func testResolvedDisplayModeMatchesExpectedBehavior() {
+        let cases: [(mode: AppDisplayMode, hasHardwareNotch: Bool, expected: AppDisplayMode)] = [
+            (.menuBar, false, .menuBar),
+            (.notch, true, .notch),
+            (.notch, false, .notch),
+        ]
 
-    func testNotchResolvesToNotchWithHardwareNotch() {
-        XCTAssertEqual(AppDisplayMode.notch.resolved(hasHardwareNotch: true), .notch)
-    }
-
-    func testNotchRemainsNotchWithoutHardwareNotch() {
-        XCTAssertEqual(AppDisplayMode.notch.resolved(hasHardwareNotch: false), .notch)
+        for testCase in cases {
+            XCTAssertEqual(
+                testCase.mode.resolved(hasHardwareNotch: testCase.hasHardwareNotch),
+                testCase.expected
+            )
+        }
     }
 }

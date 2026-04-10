@@ -277,7 +277,39 @@ final class MenubarControllerIntegrationTests: XCTestCase {
         XCTAssertEqual(snapshot.projectSections.first?.threads.first?.thread.displayStatus, .idle)
     }
 
-    func testCompletionHintsClearWaitingStateInSnapshot() async throws {
+    func testConnectedRefreshDesktopActivityPromotesRunningStatusFromDesktopHint() async throws {
+        let controller = makeController(
+            desktopUpdates: [
+                desktopUpdate(
+                    runtimeSnapshot: CodexDesktopRuntimeSnapshot(
+                        activeTurnCount: 1,
+                        runningThreadIDs: ["thread-a"],
+                        recentActivityThreadIDs: ["thread-a"]
+                    )
+                )
+            ],
+            recentThreadResponses: [
+                [thread(id: "thread-a", updatedAt: 100, cwd: "/tmp/A/work")]
+            ],
+            projectCatalog: .success(
+                CodexDesktopProjectCatalog(workspaceRoots: [
+                    .init(path: "/tmp/A", displayName: "A")
+                ])
+            )
+        )
+
+        try await controller.loadInitialThreads()
+        controller.setConnection(.connected(binaryPath: "/tmp/codex"))
+
+        let effects = await controller.refreshDesktopActivity()
+        let snapshot = controller.prepareSnapshot().snapshot
+
+        XCTAssertTrue(effects.shouldRequestThreadRefresh)
+        XCTAssertEqual(snapshot.overallStatus, .running)
+        XCTAssertEqual(snapshot.projectSections.first?.threads.first?.thread.displayStatus, .running)
+    }
+
+    func testConnectedRefreshDesktopActivityIgnoresStaleCompletionHintForLiveRunningThread() async throws {
         let controller = makeController(
             desktopUpdates: [
                 desktopUpdate(
@@ -287,6 +319,193 @@ final class MenubarControllerIntegrationTests: XCTestCase {
                     ),
                     latestCompleted: [
                         "thread-a": Date(timeIntervalSince1970: 200)
+                    ]
+                )
+            ],
+            recentThreadResponses: [
+                [thread(id: "thread-a", updatedAt: 100, cwd: "/tmp/A/work")]
+            ],
+            projectCatalog: .success(
+                CodexDesktopProjectCatalog(workspaceRoots: [
+                    .init(path: "/tmp/A", displayName: "A")
+                ])
+            )
+        )
+
+        try await controller.loadInitialThreads()
+        controller.setConnection(.connected(binaryPath: "/tmp/codex"))
+        controller.apply(notification: .turnStarted(
+            TurnStartedNotification(
+                threadId: "thread-a",
+                turn: CodexTurn(id: "turn-1", status: .inProgress, error: nil)
+            )
+        ))
+
+        let effects = await controller.refreshDesktopActivity()
+        let snapshot = controller.prepareSnapshot().snapshot
+
+        XCTAssertFalse(effects.shouldRequestThreadRefresh)
+        XCTAssertEqual(snapshot.projectSections.first?.threads.first?.thread.displayStatus, .running)
+    }
+
+    func testConnectedRefreshDesktopActivityAppliesCompletionHintForMissedTurnCompletion() async throws {
+        let controller = makeController(
+            desktopUpdates: [
+                desktopUpdate(
+                    runtimeSnapshot: CodexDesktopRuntimeSnapshot(
+                        activeTurnCount: 0,
+                        runningThreadIDs: []
+                    ),
+                    latestCompleted: [
+                        "thread-a": Date().addingTimeInterval(60)
+                    ]
+                )
+            ],
+            recentThreadResponses: [
+                [thread(id: "thread-a", updatedAt: 100, cwd: "/tmp/A/work")]
+            ],
+            projectCatalog: .success(
+                CodexDesktopProjectCatalog(workspaceRoots: [
+                    .init(path: "/tmp/A", displayName: "A")
+                ])
+            )
+        )
+
+        try await controller.loadInitialThreads()
+        controller.setConnection(.connected(binaryPath: "/tmp/codex"))
+
+        let effects = await controller.refreshDesktopActivity()
+        let snapshot = controller.prepareSnapshot().snapshot
+        let threadSnapshot = snapshot.projectSections.first?.threads.first
+
+        XCTAssertTrue(effects.shouldRequestThreadRefresh)
+        XCTAssertEqual(threadSnapshot?.thread.displayStatus, .idle)
+        XCTAssertTrue(threadSnapshot?.hasUnreadContent ?? false)
+        XCTAssertTrue(snapshot.hasUnreadThreads)
+    }
+
+    func testConnectedRefreshDesktopActivityStillSeedsDiscoveredThreadFromBackfill() async throws {
+        let controller = makeController(
+            desktopUpdates: [
+                desktopUpdate(
+                    runtimeSnapshot: CodexDesktopRuntimeSnapshot(
+                        activeTurnCount: 0,
+                        runningThreadIDs: [],
+                        recentActivityThreadIDs: ["thread-b"]
+                    )
+                )
+            ],
+            recentThreadResponses: [
+                [thread(id: "thread-a", updatedAt: 100, cwd: "/tmp/A/work")]
+            ],
+            metadataResponses: [
+                .success([]),
+                .success([thread(id: "thread-b", updatedAt: 200, cwd: "/tmp/B/work")])
+            ],
+            projectCatalog: .success(
+                CodexDesktopProjectCatalog(workspaceRoots: [
+                    .init(path: "/tmp/A", displayName: "A"),
+                    .init(path: "/tmp/B", displayName: "B")
+                ])
+            )
+        )
+
+        try await controller.loadInitialThreads()
+        controller.setConnection(.connected(binaryPath: "/tmp/codex"))
+
+        let effects = await controller.refreshDesktopActivity()
+        let snapshot = controller.prepareSnapshot().snapshot
+
+        XCTAssertTrue(effects.shouldRequestThreadRefresh)
+        XCTAssertTrue(effects.shouldRequestDesktopActivityRefresh)
+        XCTAssertTrue(effects.shouldBoostThreadDiscovery)
+        XCTAssertEqual(snapshot.projectSections.map(\.section.displayName), ["B", "A"])
+    }
+
+    func testRefreshDesktopActivityRetriesPendingDiscoveryMetadataUntilThreadAppears() async throws {
+        let controller = makeController(
+            desktopUpdates: [
+                desktopUpdate(
+                    runtimeSnapshot: CodexDesktopRuntimeSnapshot(
+                        activeTurnCount: 0,
+                        runningThreadIDs: [],
+                        recentActivityThreadIDs: ["thread-b"]
+                    )
+                ),
+                desktopUpdate(
+                    runtimeSnapshot: CodexDesktopRuntimeSnapshot(
+                        activeTurnCount: 0,
+                        runningThreadIDs: [],
+                        recentActivityThreadIDs: ["thread-b"]
+                    )
+                )
+            ],
+            recentThreadResponses: [
+                [
+                    thread(
+                        id: "thread-a",
+                        updatedAt: 100,
+                        cwd: "/tmp/A/work",
+                        path: "/tmp/thread-a.jsonl",
+                        source: "manual",
+                        agentRole: "assistant",
+                        agentNickname: "A"
+                    )
+                ],
+                [
+                    thread(
+                        id: "thread-a",
+                        updatedAt: 110,
+                        cwd: "/tmp/A/work",
+                        path: "/tmp/thread-a.jsonl",
+                        source: "manual",
+                        agentRole: "assistant",
+                        agentNickname: "A"
+                    )
+                ]
+            ],
+            metadataResponses: [
+                .success([]),
+                .success([thread(id: "thread-b", updatedAt: 200, cwd: "/tmp/B/work")])
+            ],
+            projectCatalog: .success(
+                CodexDesktopProjectCatalog(workspaceRoots: [
+                    .init(path: "/tmp/A", displayName: "A"),
+                    .init(path: "/tmp/B", displayName: "B")
+                ])
+            )
+        )
+
+        try await controller.loadInitialThreads()
+
+        let firstDesktopEffects = await controller.refreshDesktopActivity()
+        XCTAssertTrue(firstDesktopEffects.shouldRequestThreadRefresh)
+        XCTAssertTrue(firstDesktopEffects.shouldBoostThreadDiscovery)
+        XCTAssertEqual(controller.prepareSnapshot().snapshot.projectSections.map(\.section.displayName), ["A"])
+
+        let refreshEffects = try await controller.refreshThreads()
+        XCTAssertTrue(refreshEffects.shouldBoostThreadDiscovery)
+        XCTAssertEqual(controller.prepareSnapshot().snapshot.projectSections.map(\.section.displayName), ["A"])
+
+        let secondDesktopEffects = await controller.refreshDesktopActivity()
+        let snapshot = controller.prepareSnapshot().snapshot
+
+        XCTAssertTrue(secondDesktopEffects.shouldBoostThreadDiscovery)
+        XCTAssertEqual(snapshot.projectSections.map(\.section.displayName), ["B", "A"])
+        XCTAssertEqual(snapshot.projectSections.first?.threads.map(\.id), ["thread-b"])
+    }
+
+    func testCompletionHintsClearWaitingStateInSnapshot() async throws {
+        let completionAt = Date().addingTimeInterval(60)
+        let controller = makeController(
+            desktopUpdates: [
+                desktopUpdate(
+                    runtimeSnapshot: CodexDesktopRuntimeSnapshot(
+                        activeTurnCount: 0,
+                        runningThreadIDs: []
+                    ),
+                    latestCompleted: [
+                        "thread-a": completionAt
                     ]
                 )
             ],
@@ -528,6 +747,35 @@ final class MenubarControllerIntegrationTests: XCTestCase {
         XCTAssertTrue(snapshot.projectSections.first?.threadGroups.isEmpty ?? false)
     }
 
+    func testRefreshThreadsKeepsStartedTopLevelThreadUntilAuthoritativeListCatchesUp() async throws {
+        let controller = makeController(
+            recentThreadResponses: [
+                [thread(id: "main-thread", updatedAt: 100, cwd: "/tmp/A/work")],
+                [thread(id: "main-thread", updatedAt: 100, cwd: "/tmp/A/work")]
+            ],
+            projectCatalog: .success(
+                CodexDesktopProjectCatalog(workspaceRoots: [
+                    .init(path: "/tmp/A", displayName: "A"),
+                    .init(path: "/tmp/B", displayName: "B")
+                ])
+            )
+        )
+
+        try await controller.loadInitialThreads()
+        controller.apply(notification: .threadStarted(
+            ThreadStartedNotification(
+                thread: thread(id: "new-thread", updatedAt: 200, cwd: "/tmp/B/work")
+            )
+        ))
+
+        _ = try await controller.refreshThreads()
+        let snapshot = controller.prepareSnapshot().snapshot
+
+        XCTAssertEqual(controller.recentThreads.map(\.id), ["new-thread", "main-thread"])
+        XCTAssertEqual(snapshot.projectSections.map(\.section.displayName), ["B", "A"])
+        XCTAssertEqual(snapshot.projectSections.first?.threads.map(\.id), ["new-thread"])
+    }
+
     func testRemoveThreadsImmediatelyDropsArchivedProjectFromSnapshot() async throws {
         let controller = makeController(
             recentThreadResponses: [
@@ -655,6 +903,71 @@ final class MenubarControllerIntegrationTests: XCTestCase {
         XCTAssertEqual(controller.recentThreads.map { $0.id }, ["survivor-thread"])
         XCTAssertEqual(snapshot.projectSections.map { $0.section.displayName }, ["A"])
         XCTAssertEqual(effects.diagnostics.count, 1)
+    }
+
+    func testPruneThreadsMissingFromDesktopStateRemovesStaleThreadWhileConnected() async throws {
+        let missingFromDesktopState = thread(id: "missing-thread", updatedAt: 200, cwd: "/tmp/B/work")
+        let survivorThread = thread(id: "survivor-thread", updatedAt: 100, cwd: "/tmp/A/work")
+        let controller = makeController(
+            recentThreadResponses: [
+                [missingFromDesktopState, survivorThread]
+            ],
+            metadataResponses: [
+                .success([survivorThread]),
+                .success([survivorThread])
+            ],
+            projectCatalog: .success(
+                CodexDesktopProjectCatalog(workspaceRoots: [
+                    .init(path: "/tmp/A", displayName: "A"),
+                    .init(path: "/tmp/B", displayName: "B")
+                ])
+            ),
+            now: { Date(timeIntervalSince1970: 500) }
+        )
+
+        try await controller.loadInitialThreads()
+        controller.setConnection(.connected(binaryPath: "/tmp/codex"))
+
+        let effects = await controller.pruneThreadsMissingFromDesktopState()
+        let snapshot = controller.prepareSnapshot().snapshot
+
+        XCTAssertEqual(controller.recentThreads.map(\.id), ["survivor-thread"])
+        XCTAssertEqual(snapshot.projectSections.map(\.section.displayName), ["A"])
+        XCTAssertEqual(effects.diagnostics.count, 1)
+    }
+
+    func testPruneThreadsMissingFromDesktopStateKeepsStartedThreadWhileConnected() async throws {
+        let controller = makeController(
+            recentThreadResponses: [
+                [thread(id: "main-thread", updatedAt: 100, cwd: "/tmp/A/work")]
+            ],
+            metadataResponses: [
+                .success([thread(id: "main-thread", updatedAt: 100, cwd: "/tmp/A/work")]),
+                .success([thread(id: "main-thread", updatedAt: 100, cwd: "/tmp/A/work")])
+            ],
+            projectCatalog: .success(
+                CodexDesktopProjectCatalog(workspaceRoots: [
+                    .init(path: "/tmp/A", displayName: "A"),
+                    .init(path: "/tmp/B", displayName: "B")
+                ])
+            ),
+            now: { Date(timeIntervalSince1970: 300) }
+        )
+
+        try await controller.loadInitialThreads()
+        controller.setConnection(.connected(binaryPath: "/tmp/codex"))
+        controller.apply(notification: .threadStarted(
+            ThreadStartedNotification(
+                thread: thread(id: "new-thread", updatedAt: 250, cwd: "/tmp/B/work")
+            )
+        ))
+
+        let effects = await controller.pruneThreadsMissingFromDesktopState()
+        let snapshot = controller.prepareSnapshot().snapshot
+
+        XCTAssertEqual(controller.recentThreads.map(\.id), ["new-thread", "main-thread"])
+        XCTAssertEqual(snapshot.projectSections.map(\.section.displayName), ["B", "A"])
+        XCTAssertTrue(effects.diagnostics.isEmpty)
     }
 
     func testPrepareSnapshotAppliesVisibleThreadLimitOverridePerProject() async throws {
@@ -857,7 +1170,8 @@ final class MenubarControllerIntegrationTests: XCTestCase {
         desktopUpdates: [DesktopActivityUpdate] = [],
         recentThreadResponses: [[CodexThread]],
         metadataResponses: [Result<[CodexThread], Error>] = [],
-        projectCatalog: Result<CodexDesktopProjectCatalog, Error> = .success(.empty)
+        projectCatalog: Result<CodexDesktopProjectCatalog, Error> = .success(.empty),
+        now: @escaping () -> Date = Date.init
     ) -> MenubarController {
         MenubarController(
             desktopActivityLoader: FakeDesktopActivityLoader(updates: desktopUpdates),
@@ -872,7 +1186,8 @@ final class MenubarControllerIntegrationTests: XCTestCase {
                 maxPendingDiscoveredThreads: 64,
                 pendingDiscoveredThreadTTL: 120,
                 threadReadMarkerRetentionSeconds: 30 * 24 * 60 * 60
-            )
+            ),
+            now: now
         )
     }
 

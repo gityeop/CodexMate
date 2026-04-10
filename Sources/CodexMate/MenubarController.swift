@@ -98,26 +98,75 @@ final class FallbackRecentThreadListing: RecentThreadListing, @unchecked Sendabl
     }
 
     func recentThreads(limit: Int) async throws -> [CodexThread] {
-        async let primaryResult = fetchRecentThreadsResult(using: primary, limit: limit)
-        async let fallbackResult = fetchRecentThreadsResult(using: fallback, limit: limit)
+        async let primaryOutcome = fetchRecentThreadsResult(using: primary, limit: limit)
+        async let fallbackOutcome = fetchRecentThreadsResult(using: fallback, limit: limit)
 
-        let primaryOutcome = await primaryResult
-        let fallbackOutcome = await fallbackResult
-
-        switch (primaryOutcome, fallbackOutcome) {
-        case let (.success(primaryThreads), .success(fallbackThreads)):
-            if primaryThreads.isEmpty {
+        switch await primaryOutcome {
+        case let .success(primaryThreads):
+            switch await fallbackOutcome {
+            case let .success(fallbackThreads):
+                return mergedThreads(
+                    primaryThreads: primaryThreads,
+                    fallbackThreads: fallbackThreads,
+                    limit: limit
+                )
+            case .failure:
+                return Array(primaryThreads.prefix(limit))
+            }
+        case let .failure(primaryError):
+            switch await fallbackOutcome {
+            case let .success(fallbackThreads):
                 return Array(fallbackThreads.prefix(limit))
+            case .failure:
+                throw primaryError
+            }
+        }
+    }
+
+    private func mergedThreads(
+        primaryThreads: [CodexThread],
+        fallbackThreads: [CodexThread],
+        limit: Int
+    ) -> [CodexThread] {
+        guard !primaryThreads.isEmpty else {
+            return Array(fallbackThreads.prefix(limit))
+        }
+
+        let fallbackThreadsByID = Dictionary(uniqueKeysWithValues: fallbackThreads.map { ($0.id, $0) })
+        var mergedThreadsByID: [String: CodexThread] = [:]
+
+        for thread in primaryThreads {
+            guard mergedThreadsByID[thread.id] == nil else {
+                continue
             }
 
-            return Array(primaryThreads.prefix(limit))
-        case let (.success(primaryThreads), .failure):
-            return Array(primaryThreads.prefix(limit))
-        case let (.failure, .success(fallbackThreads)):
-            return Array(fallbackThreads.prefix(limit))
-        case let (.failure(primaryError), .failure):
-            throw primaryError
+            if let fallbackThread = fallbackThreadsByID[thread.id] {
+                mergedThreadsByID[thread.id] = thread.mergingMetadata(from: fallbackThread)
+            } else {
+                mergedThreadsByID[thread.id] = thread
+            }
         }
+
+        for thread in fallbackThreads {
+            guard mergedThreadsByID[thread.id] == nil else {
+                continue
+            }
+
+            mergedThreadsByID[thread.id] = thread
+        }
+
+        return mergedThreadsByID.values
+            .sorted(by: Self.isHigherPriorityRecentThread)
+            .prefix(max(0, limit))
+            .map { $0 }
+    }
+
+    private static func isHigherPriorityRecentThread(_ lhs: CodexThread, _ rhs: CodexThread) -> Bool {
+        if lhs.updatedAt == rhs.updatedAt {
+            return lhs.displayTitle.localizedCaseInsensitiveCompare(rhs.displayTitle) == .orderedAscending
+        }
+
+        return lhs.updatedAt > rhs.updatedAt
     }
 
     private func fetchRecentThreadsResult(
@@ -146,6 +195,7 @@ struct MenubarControllerEffects: Equatable {
     var diagnostics: [String] = []
     var shouldRequestThreadRefresh = false
     var shouldRequestDesktopActivityRefresh = false
+    var shouldBoostThreadDiscovery = false
 }
 
 struct MenubarThreadSnapshot: Equatable, Identifiable {
@@ -170,9 +220,37 @@ struct MenubarProjectSectionSnapshot: Equatable, Identifiable {
     let section: AppStateStore.ProjectSection
     let threads: [MenubarThreadSnapshot]
     let threadGroups: [MenubarThreadGroupSnapshot]
+    let allThreads: [MenubarThreadSnapshot]
+
+    init(
+        section: AppStateStore.ProjectSection,
+        threads: [MenubarThreadSnapshot],
+        threadGroups: [MenubarThreadGroupSnapshot],
+        allThreads: [MenubarThreadSnapshot]? = nil
+    ) {
+        self.section = section
+        self.threads = threads
+        self.threadGroups = threadGroups
+        self.allThreads = allThreads ?? Self.uniqueThreadSnapshots(
+            threads + threadGroups.flatMap(\.childThreads)
+        )
+    }
 
     var id: String {
         section.id
+    }
+
+    private static func uniqueThreadSnapshots(
+        _ threadSnapshots: [MenubarThreadSnapshot]
+    ) -> [MenubarThreadSnapshot] {
+        var seenThreadIDs: Set<String> = []
+        var uniqueThreadSnapshots: [MenubarThreadSnapshot] = []
+
+        for threadSnapshot in threadSnapshots where seenThreadIDs.insert(threadSnapshot.id).inserted {
+            uniqueThreadSnapshots.append(threadSnapshot)
+        }
+
+        return uniqueThreadSnapshots
     }
 }
 
@@ -180,6 +258,8 @@ struct MenubarSnapshot: Equatable {
     let overallStatus: AppStateStore.OverallStatus
     let hasUnreadThreads: Bool
     let projectSections: [MenubarProjectSectionSnapshot]
+    let menuSections: [ThreadMenuSection]
+    let hasRecentThreads: Bool
     let isWatchLatestThreadEnabled: Bool
 }
 
@@ -273,6 +353,7 @@ final class MenubarController {
             visibleThreadLimit: effectiveVisibleThreadLimit
         )
         state.replaceRecentThreads(with: threads)
+        synchronizePendingAuthoritativeThreads()
     }
 
     func refreshThreads() async throws -> MenubarControllerEffects {
@@ -280,11 +361,17 @@ final class MenubarController {
         let effects = recordDiscoveredThreadRefreshResult(threads: threads)
         projectCatalog = (try? await loadProjectCatalog()) ?? .empty
         state.replaceRecentThreads(with: threads)
+        synchronizePendingAuthoritativeThreads()
         return effects
     }
 
     func pruneThreadsMissingFromDesktopState() async -> MenubarControllerEffects {
-        let candidateThreadIDs: Set<String> = Set(state.recentThreads.map(\.id))
+        let pruneGraceCutoff = now().addingTimeInterval(-configuration.pendingDiscoveredThreadTTL)
+        let candidateThreadIDs: Set<String> = Set(
+            state.recentThreads
+                .filter { $0.updatedAt <= pruneGraceCutoff }
+                .map(\.id)
+        )
 
         guard !candidateThreadIDs.isEmpty else {
             return MenubarControllerEffects()
@@ -311,6 +398,7 @@ final class MenubarController {
 
     func refreshDesktopActivity() async -> MenubarControllerEffects {
         pendingDiscoveredThreads.prune(now: now())
+        synchronizePendingAuthoritativeThreads()
 
         let trackedThreads = state.recentThreads
         let candidateSessionPaths = Dictionary(
@@ -318,6 +406,7 @@ final class MenubarController {
         )
         let activityObservedAt = now()
         let update = await loadDesktopActivity(candidateSessionPaths, activityObservedAt)
+        let isConnected = state.connection.isConnected
         let recentThreadIDs = Set(trackedThreads.map(\.id))
         let attentionThreadIDs = Set(update.runtimeSnapshot?.waitingForInputThreadIDs ?? [])
             .union(update.runtimeSnapshot?.approvalThreadIDs ?? [])
@@ -330,37 +419,84 @@ final class MenubarController {
             now: activityObservedAt
         )
         let newlyDiscoveredThreadIDs = pendingDiscoveredThreads.observe(discoveredThreadIDs, now: activityObservedAt)
+        let unresolvedPendingThreadIDs = pendingDiscoveredThreads.pendingThreadIDs.subtracting(recentThreadIDs)
+        let threadIDsToSeed = newlyDiscoveredThreadIDs.union(unresolvedPendingThreadIDs)
 
         var effects = MenubarControllerEffects()
 
         if let runtimeSnapshot = update.runtimeSnapshot {
-            state.apply(desktopSnapshot: runtimeSnapshot, observedAt: activityObservedAt)
+            if isConnected {
+                let trackedRunningThreadIDs = Set(
+                    trackedThreads
+                        .filter { $0.presentationStatus == .running }
+                        .map(\.id)
+                )
+                if runtimeSnapshot.activeTurnCount > 0,
+                   trackedRunningThreadIDs.isEmpty {
+                    effects.shouldRequestThreadRefresh = true
 
-            if runtimeSnapshot.activeTurnCount > 0,
-               !state.recentThreads.contains(where: { $0.presentationStatus == .running }) {
-                effects.shouldRequestThreadRefresh = true
+                    let diagnostic = "desktop hinted active turn while app-server stayed idle "
+                        + "activeTurns=\(runtimeSnapshot.activeTurnCount) recent=\(trackedThreads.count)"
+                    state.recordDiagnostic(diagnostic)
+                    effects.diagnostics.append(diagnostic)
+                }
 
-                let diagnostic = "desktop observed active turn without tracked running thread "
-                    + "activeTurns=\(runtimeSnapshot.activeTurnCount) recent=\(trackedThreads.count)"
-                state.recordDiagnostic(diagnostic)
-                effects.diagnostics.append(diagnostic)
+                state.apply(connectedDesktopSnapshot: runtimeSnapshot, observedAt: activityObservedAt)
+            } else {
+                state.apply(desktopSnapshot: runtimeSnapshot, observedAt: activityObservedAt)
+
+                if runtimeSnapshot.activeTurnCount > 0,
+                   !state.recentThreads.contains(where: { $0.presentationStatus == .running }) {
+                    effects.shouldRequestThreadRefresh = true
+
+                    let diagnostic = "desktop observed active turn without tracked running thread "
+                        + "activeTurns=\(runtimeSnapshot.activeTurnCount) recent=\(trackedThreads.count)"
+                    state.recordDiagnostic(diagnostic)
+                    effects.diagnostics.append(diagnostic)
+                }
             }
         } else if let runtimeErrorMessage = update.runtimeErrorMessage {
             let diagnostic = "Desktop activity unavailable: \(runtimeErrorMessage)"
             state.recordDiagnostic(diagnostic)
             effects.diagnostics.append(diagnostic)
+            effects.shouldRequestThreadRefresh = true
+            effects.shouldBoostThreadDiscovery = true
         }
 
+        if isConnected {
+            let completionHintThreadIDs = Set(trackedThreads.compactMap { thread -> String? in
+                guard let completedAt = update.latestTurnCompletedAtByThreadID[thread.id],
+                      completedAt > (thread.lastTerminalActivityAt ?? .distantPast),
+                      completedAt >= (thread.lastRuntimeEventAt ?? .distantPast) else {
+                    return nil
+                }
+
+                return thread.id
+            })
+            if !completionHintThreadIDs.isEmpty {
+                effects.shouldRequestThreadRefresh = true
+
+                let diagnostic = "desktop completion hints requested authoritative refresh threads="
+                    + debugThreadIDs(completionHintThreadIDs)
+                state.recordDiagnostic(diagnostic)
+                effects.diagnostics.append(diagnostic)
+            }
+        }
         state.apply(desktopCompletionHints: update.latestTurnCompletedAtByThreadID)
+
         synchronizeThreadReadMarkers(from: update.latestViewedAtByThreadID)
 
-        if !newlyDiscoveredThreadIDs.isEmpty {
-            let seedEffects = await seedDiscoveredThreads(newlyDiscoveredThreadIDs)
+        if !threadIDsToSeed.isEmpty {
+            let seedEffects = await seedDiscoveredThreads(threadIDsToSeed)
             effects.diagnostics.append(contentsOf: seedEffects.diagnostics)
-            effects.shouldRequestDesktopActivityRefresh = seedEffects.shouldRequestDesktopActivityRefresh
-            effects.shouldRequestThreadRefresh = true
+            effects.shouldRequestDesktopActivityRefresh = effects.shouldRequestDesktopActivityRefresh
+                || seedEffects.shouldRequestDesktopActivityRefresh
+            effects.shouldRequestThreadRefresh = effects.shouldRequestThreadRefresh
+                || !newlyDiscoveredThreadIDs.isEmpty
+            effects.shouldBoostThreadDiscovery = true
 
-            let diagnostic = "desktop discovered new threads=\(debugThreadIDs(newlyDiscoveredThreadIDs)) "
+            let diagnostic = "desktop pending threads discovered=\(debugThreadIDs(newlyDiscoveredThreadIDs)) "
+                + "retrying=\(debugThreadIDs(unresolvedPendingThreadIDs)) "
                 + "recent=\(trackedThreads.count) viewed=\(update.latestViewedAtByThreadID.count)"
             state.recordDiagnostic(diagnostic)
             effects.diagnostics.append(diagnostic)
@@ -404,31 +540,33 @@ final class MenubarController {
     ) -> MenubarPreparedSnapshot {
         let effectiveProjectLimit = projectLimit ?? configuration.projectLimit
         let effectiveVisibleThreadLimit = visibleThreadLimit ?? configuration.visibleThreadLimit
-        let snapshotSections = projectSectionsWithSubagentThreads(
+        var snapshot = MenubarSnapshotSelector.makeSnapshot(
+            state: state,
+            projectCatalog: projectCatalog,
+            threadReadMarkers: threadReadMarkers,
             projectLimit: effectiveProjectLimit,
             visibleThreadLimit: effectiveVisibleThreadLimit
         )
-        let displayedThreads = snapshotSections.flatMap { section in
-            section.threads + section.threadGroups.flatMap(\.childThreads)
-        }
-        let displayedThreadIDs = Set(displayedThreads.map(\.id))
-        let didChangeReadMarkers = pruneThreadReadMarkersIfNeeded(
+        let trackedSnapshotThreadIDs = trackedThreadIDs(in: snapshot)
+        let didPruneReadMarkers = pruneThreadReadMarkersIfNeeded(
             now: now(),
-            additionalTrackedThreadIDs: additionalTrackedThreadIDs.union(displayedThreadIDs)
-        ) || synchronizeThreadReadMarkers(with: displayedThreads)
-        let hasUnreadThreads = snapshotSections.flatMap { section in
-            section.threads + section.threadGroups.flatMap(\.childThreads)
+            additionalTrackedThreadIDs: additionalTrackedThreadIDs.union(trackedSnapshotThreadIDs)
+        )
+        let didSeedReadMarkers = seedThreadReadMarkers(for: trackedSnapshotThreadIDs)
+        let didChangeReadMarkers = didPruneReadMarkers || didSeedReadMarkers
+
+        if didChangeReadMarkers {
+            snapshot = MenubarSnapshotSelector.makeSnapshot(
+                state: state,
+                projectCatalog: projectCatalog,
+                threadReadMarkers: threadReadMarkers,
+                projectLimit: effectiveProjectLimit,
+                visibleThreadLimit: effectiveVisibleThreadLimit
+            )
         }
-        .contains(where: \.hasUnreadContent)
-        let displayOverallStatus = displayedOverallStatus(snapshotSections: snapshotSections)
 
         return MenubarPreparedSnapshot(
-            snapshot: MenubarSnapshot(
-                overallStatus: displayOverallStatus,
-                hasUnreadThreads: hasUnreadThreads,
-                projectSections: snapshotSections,
-                isWatchLatestThreadEnabled: !state.visibleRecentThreads.isEmpty
-            ),
+            snapshot: snapshot,
             didChangeReadMarkers: didChangeReadMarkers
         )
     }
@@ -472,6 +610,23 @@ final class MenubarController {
         return didChange
     }
 
+    private func trackedThreadIDs(in snapshot: MenubarSnapshot) -> Set<String> {
+        let projectSectionThreadIDs = snapshot.projectSections.flatMap { section in
+            section.threads.map(\.id) + section.threadGroups.flatMap(\.childThreads).map(\.id)
+        }
+        let menuThreadIDs = snapshot.menuSections.flatMap { section in
+            flattenedThreadIDs(from: section.threads)
+        }
+
+        return Set(projectSectionThreadIDs).union(menuThreadIDs)
+    }
+
+    private func flattenedThreadIDs(from threads: [ThreadMenuThread]) -> [String] {
+        threads.flatMap { thread in
+            [thread.thread.id] + flattenedThreadIDs(from: thread.children)
+        }
+    }
+
     private func recordDiscoveredThreadRefreshResult(threads: [CodexThread]) -> MenubarControllerEffects {
         guard pendingDiscoveredThreads.hasPendingThreads else {
             return MenubarControllerEffects()
@@ -482,7 +637,10 @@ final class MenubarController {
             + "missing=\(debugThreadIDs(resolution.missingThreadIDs)) total=\(threads.count)"
 
         state.recordDiagnostic(diagnostic)
-        return MenubarControllerEffects(diagnostics: [diagnostic])
+        return MenubarControllerEffects(
+            diagnostics: [diagnostic],
+            shouldBoostThreadDiscovery: !resolution.missingThreadIDs.isEmpty
+        )
     }
 
     private func seedDiscoveredThreads(_ threadIDs: Set<String>) async -> MenubarControllerEffects {
@@ -516,18 +674,6 @@ final class MenubarController {
         }
     }
 
-    private func synchronizeThreadReadMarkers(with threads: [MenubarThreadSnapshot]) -> Bool {
-        var didChange = false
-
-        for thread in threads {
-            if threadReadMarkers.seedIfNeeded(threadID: thread.id) {
-                didChange = true
-            }
-        }
-
-        return didChange
-    }
-
     private func synchronizeThreadReadMarkers(from latestViewedAtByThreadID: [String: Date]) {
         guard !latestViewedAtByThreadID.isEmpty else { return }
 
@@ -539,6 +685,12 @@ final class MenubarController {
                 viewedAt: viewedAt
             )
         }
+    }
+
+    private func synchronizePendingAuthoritativeThreads() {
+        state.prunePendingAuthoritativeThreads(
+            keeping: pendingDiscoveredThreads.pendingThreadIDs
+        )
     }
 
     private func pruneThreadReadMarkersIfNeeded(
@@ -648,269 +800,4 @@ final class MenubarController {
         return "[" + sample.joined(separator: ",") + suffix + "]"
     }
 
-    private func projectSectionsWithSubagentThreads(
-        projectLimit: Int,
-        visibleThreadLimit: Int
-    ) -> [MenubarProjectSectionSnapshot] {
-        let allThreads = state.recentThreads
-        guard !allThreads.isEmpty else { return [] }
-
-        struct Bucket {
-            let id: String
-            let displayName: String
-            var latestUpdatedAt: Date
-            var threadRowsByID: [String: AppStateStore.ThreadRow]
-            var orderedThreads: [AppStateStore.ThreadRow]
-        }
-
-        var bucketsByProjectID: [String: Bucket] = [:]
-
-        for thread in allThreads {
-            let project = projectCatalog.project(for: thread.cwd)
-            if var bucket = bucketsByProjectID[project.id] {
-                bucket.latestUpdatedAt = max(bucket.latestUpdatedAt, thread.activityUpdatedAt)
-                bucket.threadRowsByID[thread.id] = thread
-                bucket.orderedThreads.append(thread)
-                bucketsByProjectID[project.id] = bucket
-            } else {
-                bucketsByProjectID[project.id] = Bucket(
-                    id: project.id,
-                    displayName: project.displayName,
-                    latestUpdatedAt: thread.activityUpdatedAt,
-                    threadRowsByID: [thread.id: thread],
-                    orderedThreads: [thread]
-                )
-            }
-        }
-
-        let buckets = bucketsByProjectID.values.sorted { lhs, rhs in
-            if lhs.latestUpdatedAt == rhs.latestUpdatedAt {
-                return lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName) == .orderedAscending
-            }
-
-            return lhs.latestUpdatedAt > rhs.latestUpdatedAt
-        }
-
-        let sections = buckets.map { bucket in
-            let orderedThreads = bucket.orderedThreads.sorted(by: Self.isNewerThread)
-            let childThreadIDs: Set<String> = Set(
-                orderedThreads.compactMap { thread in
-                    guard let parentThreadID = thread.parentThreadID,
-                          bucket.threadRowsByID[parentThreadID] != nil else {
-                        return nil
-                    }
-
-                    return thread.id
-                }
-            )
-
-            let topLevelThreads = orderedThreads.filter { !childThreadIDs.contains($0.id) }
-            let threadSnapshotsByID = Dictionary(
-                uniqueKeysWithValues: orderedThreads.map { thread in
-                    (thread.id, makeThreadSnapshot(thread))
-                }
-            )
-
-            let threadGroups = topLevelThreads.compactMap { thread -> MenubarThreadGroupSnapshot? in
-                let childThreads = orderedThreads.compactMap { candidate -> MenubarThreadSnapshot? in
-                    guard candidate.parentThreadID == thread.id else { return nil }
-                    return threadSnapshotsByID[candidate.id]
-                }
-
-                guard !childThreads.isEmpty else { return nil }
-                guard let parentSnapshot = threadSnapshotsByID[thread.id] else { return nil }
-
-                return MenubarThreadGroupSnapshot(thread: parentSnapshot, childThreads: childThreads)
-            }
-
-            return MenubarProjectSectionSnapshot(
-                section: AppStateStore.ProjectSection(
-                    id: bucket.id,
-                    displayName: bucket.displayName,
-                    latestUpdatedAt: bucket.latestUpdatedAt,
-                    threads: topLevelThreads
-                ),
-                threads: topLevelThreads.map(makeThreadSnapshot),
-                threadGroups: threadGroups
-            )
-        }
-
-        guard projectLimit != .max || visibleThreadLimit != .max else {
-            return sections
-        }
-
-        return limitProjectSections(
-            sections,
-            projectLimit: projectLimit,
-            visibleThreadLimit: visibleThreadLimit
-        )
-    }
-
-    private static func isNewerThread(_ lhs: AppStateStore.ThreadRow, _ rhs: AppStateStore.ThreadRow) -> Bool {
-        if lhs.activityUpdatedAt == rhs.activityUpdatedAt {
-            return lhs.displayTitle.localizedCaseInsensitiveCompare(rhs.displayTitle) == .orderedAscending
-        }
-
-        return lhs.activityUpdatedAt > rhs.activityUpdatedAt
-    }
-
-    private func limitProjectSections(
-        _ sections: [MenubarProjectSectionSnapshot],
-        projectLimit: Int,
-        visibleThreadLimit: Int
-    ) -> [MenubarProjectSectionSnapshot] {
-        let visibleProjectLimit = max(0, projectLimit)
-        let visibleThreadLimit = max(0, visibleThreadLimit)
-        let orderedSections: [MenubarProjectSectionSnapshot]
-
-        if sections.count > visibleProjectLimit {
-            orderedSections = sections.sorted(by: Self.isHigherPriorityProjectSection)
-        } else {
-            orderedSections = sections
-        }
-
-        let limitedSections = Array(orderedSections.prefix(visibleProjectLimit))
-
-        return limitedSections.map { section in
-            let orderedThreads: [MenubarThreadSnapshot]
-            if section.threads.count > visibleThreadLimit {
-                orderedThreads = Self.prioritizedThreads(in: section)
-            } else {
-                orderedThreads = section.threads
-            }
-
-            let limitedThreads = Array(orderedThreads.prefix(visibleThreadLimit))
-            let threadGroupsByID = Dictionary(uniqueKeysWithValues: section.threadGroups.map { ($0.id, $0) })
-            let limitedThreadGroups = limitedThreads.compactMap { threadGroupsByID[$0.id] }
-
-            return MenubarProjectSectionSnapshot(
-                section: AppStateStore.ProjectSection(
-                    id: section.section.id,
-                    displayName: section.section.displayName,
-                    latestUpdatedAt: section.section.latestUpdatedAt,
-                    threads: limitedThreads.map(\.thread)
-                ),
-                threads: limitedThreads,
-                threadGroups: limitedThreadGroups
-            )
-        }
-    }
-
-    private static func isHigherPriorityProjectSection(
-        _ lhs: MenubarProjectSectionSnapshot,
-        _ rhs: MenubarProjectSectionSnapshot
-    ) -> Bool {
-        let lhsRank = visibilityPriority(for: lhs)
-        let rhsRank = visibilityPriority(for: rhs)
-
-        if lhsRank != rhsRank {
-            return lhsRank > rhsRank
-        }
-
-        if lhs.section.latestUpdatedAt == rhs.section.latestUpdatedAt {
-            return lhs.section.displayName.localizedCaseInsensitiveCompare(rhs.section.displayName) == .orderedAscending
-        }
-
-        return lhs.section.latestUpdatedAt > rhs.section.latestUpdatedAt
-    }
-
-    private static func prioritizedThreads(in section: MenubarProjectSectionSnapshot) -> [MenubarThreadSnapshot] {
-        let threadGroupsByID = Dictionary(uniqueKeysWithValues: section.threadGroups.map { ($0.id, $0) })
-
-        return section.threads.sorted { lhs, rhs in
-            let lhsRank = visibilityPriority(
-                for: lhs,
-                childThreads: threadGroupsByID[lhs.id]?.childThreads ?? []
-            )
-            let rhsRank = visibilityPriority(
-                for: rhs,
-                childThreads: threadGroupsByID[rhs.id]?.childThreads ?? []
-            )
-
-            if lhsRank != rhsRank {
-                return lhsRank > rhsRank
-            }
-
-            return isNewerThread(lhs.thread, rhs.thread)
-        }
-    }
-
-    private static func visibilityPriority(for section: MenubarProjectSectionSnapshot) -> Int {
-        let threadGroupsByID = Dictionary(uniqueKeysWithValues: section.threadGroups.map { ($0.id, $0) })
-
-        return section.threads.map { thread in
-            visibilityPriority(
-                for: thread,
-                childThreads: threadGroupsByID[thread.id]?.childThreads ?? []
-            )
-        }.max() ?? 0
-    }
-
-    private static func visibilityPriority(
-        for threadSnapshot: MenubarThreadSnapshot,
-        childThreads: [MenubarThreadSnapshot] = []
-    ) -> Int {
-        max(
-            visibilityPriority(for: threadSnapshot.thread),
-            childThreads.map { visibilityPriority(for: $0.thread) }.max() ?? 0
-        )
-    }
-
-    private static func visibilityPriority(for thread: AppStateStore.ThreadRow) -> Int {
-        switch thread.presentationStatus {
-        case .waitingForUser:
-            return 3
-        case .running:
-            return 2
-        case .failed:
-            return 1
-        case .idle, .notLoaded:
-            return 0
-        }
-    }
-
-    private func makeThreadSnapshot(_ thread: AppStateStore.ThreadRow) -> MenubarThreadSnapshot {
-        MenubarThreadSnapshot(
-            thread: thread,
-            hasUnreadContent: threadReadMarkers.hasUnreadContent(
-                threadID: thread.id,
-                lastTerminalActivityAt: thread.lastTerminalActivityAt
-            )
-        )
-    }
-
-    private func displayedOverallStatus(
-        snapshotSections: [MenubarProjectSectionSnapshot]
-    ) -> AppStateStore.OverallStatus {
-        if state.connection == .connecting {
-            return .connecting
-        }
-
-        let displayedMainThreads = snapshotSections
-            .flatMap(\.threads)
-            .map(\.thread)
-            .filter { !$0.isSubagent }
-
-        if displayedMainThreads.contains(where: { $0.presentationStatus == .waitingForUser }) {
-            return .waitingForUser
-        }
-
-        if displayedMainThreads.contains(where: { $0.presentationStatus == .running }) {
-            return .running
-        }
-
-        if state.overallStatus == .running {
-            return .running
-        }
-
-        if state.connection.isFailed {
-            return .failed
-        }
-
-        if displayedMainThreads.contains(where: { $0.presentationStatus == .failed }) {
-            return .failed
-        }
-
-        return .idle
-    }
 }

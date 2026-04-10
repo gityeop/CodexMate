@@ -5,12 +5,22 @@ struct AppStateStore {
     private static let watchedRunningReconciliationGraceInterval: TimeInterval = 5
     private static let watchedPendingReconciliationGraceInterval: TimeInterval = 5
     private static let watchedFailedReconciliationGraceInterval: TimeInterval = 5
+    private static let archivedThreadTombstoneTTL: TimeInterval = 120
+    private static let completionHintClockTolerance: TimeInterval = 5
 
     enum ConnectionState: Equatable {
         case disconnected
         case connecting
         case connected(binaryPath: String)
         case failed(message: String)
+
+        var isConnected: Bool {
+            if case .connected = self {
+                return true
+            }
+
+            return false
+        }
 
         var isFailed: Bool {
             if case .failed = self {
@@ -151,6 +161,7 @@ struct AppStateStore {
         var listedStatus: ThreadStatus
         var updatedAt: Date
         var statusUpdatedAt: Date = .distantPast
+        var authoritativeListPresence: AuthoritativeListPresence = .listed
         var isWatched: Bool
         var runtimePhase: RuntimePhase = .none
         var pendingRequestKind: PendingRequestKind?
@@ -226,11 +237,17 @@ struct AppStateStore {
         case approval(ApprovalRequestPayload)
     }
 
+    enum AuthoritativeListPresence: Equatable {
+        case listed
+        case pendingInclusion
+    }
+
     private(set) var connection: ConnectionState = .disconnected
     private(set) var threadsByID: [String: ThreadRow] = [:]
     private(set) var lastDiagnostic: String?
     private(set) var desktopActiveTurnCount: Int = 0
     private(set) var desktopDebugSummary: String?
+    private(set) var archivedThreadTombstonesByID: [String: Date] = [:]
 
     var recentThreads: [ThreadRow] {
         threadsByID.values.sorted { lhs, rhs in
@@ -362,9 +379,15 @@ struct AppStateStore {
     }
 
     mutating func replaceRecentThreads(with threads: [CodexThread]) {
+        let observedAt = Date()
+        pruneArchivedThreadTombstones(observedAt: observedAt)
         var updatedThreads: [String: ThreadRow] = [:]
 
         for thread in threads {
+            guard !isArchivedThreadTombstoned(thread.id, observedAt: observedAt) else {
+                continue
+            }
+
             var row = threadsByID[thread.id] ?? ThreadRow(thread: thread, isWatched: false)
             let previousStatus = row.displayStatus
             let previousUpdatedAt = row.updatedAt
@@ -379,6 +402,7 @@ struct AppStateStore {
 
             let newStatus = ThreadStatus(threadStatus: thread.status)
             row.listedStatus = newStatus
+            row.authoritativeListPresence = .listed
             row.updatedAt = max(row.updatedAt, incomingUpdatedAt)
             row.statusUpdatedAt = max(row.statusUpdatedAt, incomingUpdatedAt)
             row.applyListedStatus(newStatus, observedAt: incomingUpdatedAt)
@@ -421,6 +445,12 @@ struct AppStateStore {
     }
 
     mutating func markWatched(thread: CodexThread) {
+        let observedAt = Date()
+        pruneArchivedThreadTombstones(observedAt: observedAt)
+        guard !isArchivedThreadTombstoned(thread.id, observedAt: observedAt) else {
+            return
+        }
+
         let existingRow = threadsByID[thread.id]
         var row = existingRow ?? ThreadRow(thread: thread, isWatched: true)
         let previousStatus = row.displayStatus
@@ -439,6 +469,7 @@ struct AppStateStore {
         }
         row.statusUpdatedAt = max(row.statusUpdatedAt, incomingUpdatedAt)
         row.listedStatus = newStatus
+        row.authoritativeListPresence = .listed
         row.isWatched = true
         row.lastRuntimeEventAt = max(row.lastRuntimeEventAt ?? .distantPast, incomingUpdatedAt)
         row.applyListedStatus(newStatus, observedAt: incomingUpdatedAt)
@@ -459,7 +490,14 @@ struct AppStateStore {
     }
 
     mutating func mergeRecentThread(_ thread: CodexThread) {
-        var row = threadsByID[thread.id] ?? ThreadRow(thread: thread, isWatched: false)
+        let observedAt = Date()
+        pruneArchivedThreadTombstones(observedAt: observedAt)
+        guard !isArchivedThreadTombstoned(thread.id, observedAt: observedAt) else {
+            return
+        }
+
+        let existingRow = threadsByID[thread.id]
+        var row = existingRow ?? ThreadRow(thread: thread, isWatched: false)
         let previousStatus = row.displayStatus
         let previousUpdatedAt = row.updatedAt
         let incomingUpdatedAt = thread.updatedDate
@@ -473,6 +511,9 @@ struct AppStateStore {
 
         let newStatus = ThreadStatus(threadStatus: thread.status)
         row.listedStatus = newStatus
+        if existingRow == nil || row.authoritativeListPresence == .pendingInclusion {
+            row.authoritativeListPresence = .pendingInclusion
+        }
         row.updatedAt = max(row.updatedAt, incomingUpdatedAt)
         row.statusUpdatedAt = max(row.statusUpdatedAt, incomingUpdatedAt)
         row.applyListedStatus(newStatus, observedAt: incomingUpdatedAt)
@@ -503,6 +544,25 @@ struct AppStateStore {
         threadsByID[thread.id] = row
     }
 
+    mutating func prunePendingAuthoritativeThreads(keeping threadIDs: Set<String>) {
+        guard !threadsByID.isEmpty else { return }
+
+        let expiredThreadIDs = threadsByID.compactMap { entry -> String? in
+            let (threadID, row) = entry
+            guard row.authoritativeListPresence == .pendingInclusion,
+                  !threadIDs.contains(threadID),
+                  !Self.shouldRetainThreadOutsidePendingWindow(row) else {
+                return nil
+            }
+
+            return threadID
+        }
+
+        for threadID in expiredThreadIDs {
+            threadsByID.removeValue(forKey: threadID)
+        }
+    }
+
     mutating func markUnwatched(threadIDs: Set<String>) {
         guard !threadIDs.isEmpty else { return }
 
@@ -518,8 +578,9 @@ struct AppStateStore {
         }
     }
 
-    mutating func removeThreads(threadIDs: Set<String>) {
-        guard !threadIDs.isEmpty, !threadsByID.isEmpty else { return }
+    @discardableResult
+    mutating func removeThreads(threadIDs: Set<String>) -> Set<String> {
+        guard !threadIDs.isEmpty, !threadsByID.isEmpty else { return [] }
 
         var removedThreadIDs = threadIDs
         var discoveredDescendant = true
@@ -541,6 +602,18 @@ struct AppStateStore {
 
         for threadID in removedThreadIDs {
             threadsByID.removeValue(forKey: threadID)
+        }
+
+        return removedThreadIDs
+    }
+
+    mutating func archiveThreads(threadIDs: Set<String>, observedAt: Date = Date()) {
+        guard !threadIDs.isEmpty else { return }
+
+        pruneArchivedThreadTombstones(observedAt: observedAt)
+        let removedThreadIDs = removeThreads(threadIDs: threadIDs).union(threadIDs)
+        for threadID in removedThreadIDs {
+            archivedThreadTombstonesByID[threadID] = observedAt
         }
     }
 
@@ -574,6 +647,7 @@ struct AppStateStore {
     }
 
     mutating func apply(desktopSnapshot: CodexDesktopRuntimeSnapshot, observedAt: Date = Date()) {
+        pruneArchivedThreadTombstones(observedAt: observedAt)
         desktopActiveTurnCount = max(0, desktopSnapshot.activeTurnCount)
         desktopDebugSummary = desktopSnapshot.debugSummary
         reconcileRunningThreads(
@@ -593,6 +667,27 @@ struct AppStateStore {
         overlayPendingThreads(desktopSnapshot.waitingForInputThreadIDs, status: .waitingForInput, observedAt: observedAt)
         overlayPendingThreads(desktopSnapshot.approvalThreadIDs, status: .needsApproval, observedAt: observedAt)
         overlayRunningThreads(desktopSnapshot.runningThreadIDs, observedAt: observedAt)
+    }
+
+    mutating func apply(connectedDesktopSnapshot desktopSnapshot: CodexDesktopRuntimeSnapshot, observedAt: Date = Date()) {
+        pruneArchivedThreadTombstones(observedAt: observedAt)
+        let trustedRunningThreadIDs = trustedConnectedDesktopRunningThreadIDs(
+            desktopSnapshot.runningThreadIDs,
+            observedAt: observedAt
+        )
+        reconcileRunningThreads(
+            runningThreadIDs: trustedRunningThreadIDs,
+            observedAt: observedAt
+        )
+        desktopActiveTurnCount = connectedDesktopActiveTurnCount(
+            activeTurnCount: desktopSnapshot.activeTurnCount,
+            trustedRunningThreadIDs: trustedRunningThreadIDs
+        )
+        desktopDebugSummary = desktopSnapshot.debugSummary
+        overlayFailedThreads(desktopSnapshot.failedThreads)
+        overlayPendingThreads(desktopSnapshot.waitingForInputThreadIDs, status: .waitingForInput, observedAt: observedAt)
+        overlayPendingThreads(desktopSnapshot.approvalThreadIDs, status: .needsApproval, observedAt: observedAt)
+        overlayRunningThreads(trustedRunningThreadIDs, observedAt: observedAt)
     }
 
     mutating func apply(desktopCompletionHints completedAtByThreadID: [String: Date]) {
@@ -668,12 +763,11 @@ struct AppStateStore {
             return true
         }
 
-        guard row.sessionPath != nil,
-              row.listedStatus != .running else {
+        guard row.listedStatus != .running else {
             return false
         }
 
-        // Give session files a moment to catch up before downgrading live running state.
+        // Give live notifications and desktop files a moment to converge before downgrading.
         return observedAt.timeIntervalSince(row.lastRuntimeEventAt ?? .distantPast) >= watchedRunningReconciliationGraceInterval
     }
 
@@ -876,7 +970,19 @@ struct AppStateStore {
     }
 
     private static func shouldAcceptDesktopCompletionHint(for row: ThreadRow, completedAt: Date) -> Bool {
-        completedAt >= (row.lastTerminalActivityAt ?? .distantPast)
+        let lastTerminalActivityAt = row.lastTerminalActivityAt ?? .distantPast
+        guard completedAt > lastTerminalActivityAt || row.presentationStatus == .running else {
+            return false
+        }
+
+        let lastRuntimeEventAt = row.lastRuntimeEventAt ?? .distantPast
+        if completedAt.addingTimeInterval(completionHintClockTolerance) >= lastRuntimeEventAt {
+            return true
+        }
+
+        return row.runtimePhase == .running
+            && row.activeTurnID == nil
+            && completedAt >= lastTerminalActivityAt
     }
 
     private static func terminalStatusAfterDesktopCompletion(for row: ThreadRow) -> ThreadStatus {
@@ -895,7 +1001,13 @@ struct AppStateStore {
     mutating func apply(notification: NotificationEvent) {
         switch notification {
         case let .threadStarted(notification):
-            var row = threadsByID[notification.thread.id] ?? ThreadRow(thread: notification.thread, isWatched: true)
+            let notificationObservedAt = Date()
+            guard !shouldIgnoreArchivedThreadEvent(threadID: notification.thread.id, observedAt: notificationObservedAt) else {
+                return
+            }
+
+            let existingRow = threadsByID[notification.thread.id]
+            var row = existingRow ?? ThreadRow(thread: notification.thread, isWatched: true)
             let previousStatus = row.displayStatus
             let observedAt = notification.thread.updatedDate
             row.displayTitle = notification.thread.displayTitle
@@ -909,15 +1021,22 @@ struct AppStateStore {
             row.statusUpdatedAt = max(row.statusUpdatedAt, observedAt)
             let runtimeStatus = ThreadStatus(threadStatus: notification.thread.status)
             row.listedStatus = runtimeStatus
+            if existingRow == nil || row.authoritativeListPresence == .pendingInclusion {
+                row.authoritativeListPresence = .pendingInclusion
+            }
             row.isWatched = true
             row.applyRuntimeStatus(runtimeStatus, observedAt: observedAt)
             row.activeTurnID = updatedActiveTurnID(existing: row.activeTurnID, status: row.displayStatus, allowClearing: false)
             threadsByID[notification.thread.id] = row
             recordPendingResolution(threadID: notification.thread.id, previous: previousStatus, current: row.displayStatus, source: "thread/started")
         case let .threadStatusChanged(notification):
+            let observedAt = Date()
+            guard !shouldIgnoreArchivedThreadEvent(threadID: notification.threadId, observedAt: observedAt) else {
+                return
+            }
+
             var row = threadsByID[notification.threadId] ?? defaultThreadRow(threadID: notification.threadId)
             let previousStatus = row.displayStatus
-            let observedAt = Date()
             row.isWatched = true
             let runtimeStatus = ThreadStatus(threadStatus: notification.status)
             row.applyRuntimeStatus(runtimeStatus, observedAt: observedAt)
@@ -926,13 +1045,17 @@ struct AppStateStore {
             threadsByID[notification.threadId] = row
             recordPendingResolution(threadID: notification.threadId, previous: previousStatus, current: row.displayStatus, source: "thread/status/changed")
         case let .threadArchived(notification):
-            removeThreads(threadIDs: [notification.threadId])
-        case .threadUnarchived:
-            break
+            archiveThreads(threadIDs: [notification.threadId])
+        case let .threadUnarchived(notification):
+            archivedThreadTombstonesByID.removeValue(forKey: notification.threadId)
         case let .turnStarted(notification):
+            let observedAt = Date()
+            guard !shouldIgnoreArchivedThreadEvent(threadID: notification.threadId, observedAt: observedAt) else {
+                return
+            }
+
             var row = threadsByID[notification.threadId] ?? defaultThreadRow(threadID: notification.threadId)
             let previousStatus = row.displayStatus
-            let observedAt = Date()
             row.isWatched = true
             row.activeTurnID = notification.turn.id
             row.statusUpdatedAt = observedAt
@@ -940,9 +1063,13 @@ struct AppStateStore {
             threadsByID[notification.threadId] = row
             recordPendingResolution(threadID: notification.threadId, previous: previousStatus, current: row.displayStatus, source: "turn/started")
         case let .turnCompleted(notification):
+            let observedAt = Date()
+            guard !shouldIgnoreArchivedThreadEvent(threadID: notification.threadId, observedAt: observedAt) else {
+                return
+            }
+
             var row = threadsByID[notification.threadId] ?? defaultThreadRow(threadID: notification.threadId)
             let previousStatus = row.displayStatus
-            let observedAt = Date()
             row.isWatched = true
             row.activeTurnID = nil
             row.statusUpdatedAt = observedAt
@@ -965,9 +1092,13 @@ struct AppStateStore {
         case let .error(notification):
             guard !notification.willRetry else { return }
 
+            let observedAt = Date()
+            guard !shouldIgnoreArchivedThreadEvent(threadID: notification.threadId, observedAt: observedAt) else {
+                return
+            }
+
             var row = threadsByID[notification.threadId] ?? defaultThreadRow(threadID: notification.threadId)
             let previousStatus = row.displayStatus
-            let observedAt = Date()
             row.isWatched = true
             row.activeTurnID = nil
             row.statusUpdatedAt = observedAt
@@ -1033,6 +1164,81 @@ struct AppStateStore {
         recordDiagnostic("cleared pending thread=\(shortThreadID(threadID)) from=\(previous.displayName) to=\(current.displayName) via \(source)")
     }
 
+    private func connectedDesktopActiveTurnCount(
+        activeTurnCount: Int,
+        trustedRunningThreadIDs: Set<String>
+    ) -> Int {
+        let activeTurnCount = max(0, activeTurnCount)
+        guard activeTurnCount > 0 else { return 0 }
+
+        if !trustedRunningThreadIDs.isEmpty
+            || recentThreads.contains(where: { $0.presentationStatus == .running }) {
+            return activeTurnCount
+        }
+
+        return 0
+    }
+
+    private func trustedConnectedDesktopRunningThreadIDs(
+        _ runningThreadIDs: Set<String>,
+        observedAt: Date
+    ) -> Set<String> {
+        Set(runningThreadIDs.filter { threadID in
+            guard !isArchivedThreadTombstoned(threadID, observedAt: observedAt) else {
+                return false
+            }
+
+            guard let row = threadsByID[threadID] else {
+                return true
+            }
+
+            return Self.shouldTrustConnectedDesktopRunningEvidence(for: row, observedAt: observedAt)
+        })
+    }
+
+    private static func shouldTrustConnectedDesktopRunningEvidence(for row: ThreadRow, observedAt: Date) -> Bool {
+        guard row.isWatched else {
+            return true
+        }
+
+        if row.presentationStatus == .running {
+            return true
+        }
+
+        if hasAuthoritativeTerminalActivity(row) {
+            return false
+        }
+
+        return shouldAcceptDesktopRunningOverlay(for: row, observedAt: observedAt)
+    }
+
+    private static func hasAuthoritativeTerminalActivity(_ row: ThreadRow) -> Bool {
+        guard let lastTerminalActivityAt = row.lastTerminalActivityAt else {
+            return false
+        }
+
+        return lastTerminalActivityAt >= (row.lastRuntimeEventAt ?? .distantPast)
+    }
+
+    private mutating func shouldIgnoreArchivedThreadEvent(threadID: String, observedAt: Date) -> Bool {
+        pruneArchivedThreadTombstones(observedAt: observedAt)
+        return isArchivedThreadTombstoned(threadID, observedAt: observedAt)
+    }
+
+    private mutating func pruneArchivedThreadTombstones(observedAt: Date) {
+        archivedThreadTombstonesByID = archivedThreadTombstonesByID.filter { _, archivedAt in
+            observedAt.timeIntervalSince(archivedAt) < Self.archivedThreadTombstoneTTL
+        }
+    }
+
+    private func isArchivedThreadTombstoned(_ threadID: String, observedAt: Date) -> Bool {
+        guard let archivedAt = archivedThreadTombstonesByID[threadID] else {
+            return false
+        }
+
+        return observedAt.timeIntervalSince(archivedAt) < Self.archivedThreadTombstoneTTL
+    }
+
     private func shortThreadID(_ threadID: String) -> String {
         String(threadID.prefix(8))
     }
@@ -1068,6 +1274,12 @@ struct AppStateStore {
     }
 
     private mutating func updateThread(threadID: String, update: (inout ThreadRow) -> Void) {
+        let observedAt = Date()
+        pruneArchivedThreadTombstones(observedAt: observedAt)
+        guard !isArchivedThreadTombstoned(threadID, observedAt: observedAt) else {
+            return
+        }
+
         var row = threadsByID[threadID] ?? defaultThreadRow(threadID: threadID)
 
         update(&row)
@@ -1243,6 +1455,14 @@ struct AppStateStore {
     }
 
     private static func shouldRetainThreadOutsideAuthoritativeList(_ row: ThreadRow) -> Bool {
+        if row.authoritativeListPresence == .pendingInclusion {
+            return true
+        }
+
+        return shouldRetainThreadOutsidePendingWindow(row)
+    }
+
+    private static func shouldRetainThreadOutsidePendingWindow(_ row: ThreadRow) -> Bool {
         switch row.presentationStatus {
         case .waitingForUser, .running, .failed:
             return true

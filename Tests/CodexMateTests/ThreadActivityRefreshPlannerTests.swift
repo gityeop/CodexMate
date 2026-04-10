@@ -2,64 +2,47 @@ import XCTest
 @testable import CodexMate
 
 final class ThreadActivityRefreshPlannerTests: XCTestCase {
-    func testShouldNotRefreshThreadsWhenUnknownThreadWasOnlyViewed() {
-        let shouldRefresh = ThreadActivityRefreshPlanner.shouldRefreshThreads(
-            recentThreadIDs: ["thread-1", "thread-2"],
-            latestViewedAtByThreadID: [
-                "thread-2": Date(timeIntervalSince1970: 100),
-                "thread-3": Date(timeIntervalSince1970: 200),
-            ],
-            now: Date(timeIntervalSince1970: 210),
-            discoveryLookbackInterval: 30
-        )
-
-        XCTAssertFalse(shouldRefresh)
-    }
-
-    func testShouldRefreshThreadsWhenStateSnapshotIncludesUnknownRecentActivity() {
-        let shouldRefresh = ThreadActivityRefreshPlanner.shouldRefreshThreads(
+    func testShouldRefreshThreadsWhenStateSnapshotIncludesUnknownAttentionSignals() {
+        let recentActivityRefresh = ThreadActivityRefreshPlanner.shouldRefreshThreads(
             recentThreadIDs: ["thread-1", "thread-2"],
             latestViewedAtByThreadID: [:],
             recentActivityThreadIDs: ["thread-3"]
         )
-
-        XCTAssertTrue(shouldRefresh)
-    }
-
-    func testShouldRefreshThreadsWhenStateSnapshotIncludesUnknownApprovalThread() {
-        let shouldRefresh = ThreadActivityRefreshPlanner.shouldRefreshThreads(
+        let approvalRefresh = ThreadActivityRefreshPlanner.shouldRefreshThreads(
             recentThreadIDs: ["thread-1", "thread-2"],
             latestViewedAtByThreadID: [:],
             attentionThreadIDs: ["thread-3"]
         )
 
-        XCTAssertTrue(shouldRefresh)
+        XCTAssertTrue(recentActivityRefresh)
+        XCTAssertTrue(approvalRefresh)
     }
 
-    func testShouldNotRefreshThreadsWhenConversationActivityOnlyIncludesKnownThreads() {
-        let shouldRefresh = ThreadActivityRefreshPlanner.shouldRefreshThreads(
-            recentThreadIDs: ["thread-1", "thread-2"],
-            latestViewedAtByThreadID: [
+    func testShouldNotRefreshThreadsForViewOnlyOrStaleUnknownActivity() {
+        let cases: [([String: Date], Bool)] = [
+            ([
+                "thread-2": Date(timeIntervalSince1970: 100),
+                "thread-3": Date(timeIntervalSince1970: 200),
+            ], false),
+            ([
                 "thread-1": Date(timeIntervalSince1970: 100),
                 "thread-2": Date(timeIntervalSince1970: 200),
-            ],
-            now: Date(timeIntervalSince1970: 210),
-            discoveryLookbackInterval: 30
-        )
-
-        XCTAssertFalse(shouldRefresh)
-    }
-
-    func testShouldNotRefreshThreadsForOldUnknownActivity() {
-        let shouldRefresh = ThreadActivityRefreshPlanner.shouldRefreshThreads(
-            recentThreadIDs: ["thread-1", "thread-2"],
-            latestViewedAtByThreadID: [
+            ], false),
+            ([
                 "thread-3": Date(timeIntervalSince1970: 100),
-            ],
-            now: Date(timeIntervalSince1970: 210),
-            discoveryLookbackInterval: 30
-        )
+            ], false),
+        ]
 
-        XCTAssertFalse(shouldRefresh)
+        for (latestViewedAtByThreadID, expected) in cases {
+            XCTAssertEqual(
+                ThreadActivityRefreshPlanner.shouldRefreshThreads(
+                    recentThreadIDs: ["thread-1", "thread-2"],
+                    latestViewedAtByThreadID: latestViewedAtByThreadID,
+                    now: Date(timeIntervalSince1970: 210),
+                    discoveryLookbackInterval: 30
+                ),
+                expected
+            )
+        }
     }
 }

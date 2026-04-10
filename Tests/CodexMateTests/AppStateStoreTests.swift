@@ -504,6 +504,33 @@ final class AppStateStoreTests: XCTestCase {
         XCTAssertTrue(store.recentThreads.isEmpty)
     }
 
+    func testReplaceRecentThreadsKeepsStartedIdleThreadMissingFromAuthoritativeList() {
+        var store = AppStateStore()
+        store.apply(notification: .threadStarted(
+            ThreadStartedNotification(
+                thread: thread(id: "thread-1", updatedAt: 100, status: .idle)
+            )
+        ))
+
+        store.replaceRecentThreads(with: [])
+
+        XCTAssertEqual(store.recentThreads.map(\.id), ["thread-1"])
+        XCTAssertEqual(store.recentThreads.first?.authoritativeListPresence, .pendingInclusion)
+    }
+
+    func testPrunePendingAuthoritativeThreadsRemovesExpiredIdlePendingRows() {
+        var store = AppStateStore()
+        store.apply(notification: .threadStarted(
+            ThreadStartedNotification(
+                thread: thread(id: "thread-1", updatedAt: 100, status: .idle)
+            )
+        ))
+
+        store.prunePendingAuthoritativeThreads(keeping: [])
+
+        XCTAssertTrue(store.recentThreads.isEmpty)
+    }
+
     func testReplaceRecentThreadsPreservesWatchedRunningThreadMissingFromAuthoritativeList() {
         var store = AppStateStore()
         store.markWatched(thread: thread(id: "thread-1", updatedAt: 100, status: .active(flags: [])))
@@ -768,66 +795,47 @@ final class AppStateStoreTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(activityUpdatedAt ?? .distantPast, beforeResolvedAt)
     }
 
-    func testActiveFlagWaitingOnUserInputMapsToWaitingForInput() {
-        var store = AppStateStore()
+    func testActiveFlagsMapPendingStates() {
+        let cases: [(CodexThreadStatus, AppStateStore.ThreadStatus)] = [
+            (.active(flags: [.waitingOnUserInput]), .waitingForInput),
+            (.active(flags: [.waitingOnApproval]), .needsApproval),
+        ]
 
-        store.replaceRecentThreads(with: [
-            thread(id: "thread-1", updatedAt: 100, status: .active(flags: [.waitingOnUserInput]))
-        ])
+        for (listedStatus, expectedStatus) in cases {
+            var store = AppStateStore()
 
-        XCTAssertEqual(store.overallStatus, .waitingForUser)
-        XCTAssertEqual(store.recentThreads.first?.status, .waitingForInput)
+            store.replaceRecentThreads(with: [
+                thread(id: "thread-1", updatedAt: 100, status: listedStatus)
+            ])
+
+            XCTAssertEqual(store.overallStatus, .waitingForUser)
+            XCTAssertEqual(store.recentThreads.first?.status, expectedStatus)
+        }
     }
 
-    func testActiveFlagWaitingOnApprovalMapsToNeedsApproval() {
-        var store = AppStateStore()
+    func testDesktopRunningOverlayPreservesExplicitPendingStateWithoutFreshPendingEvidence() {
+        let cases: [(AppStateStore.PendingRequestKind, AppStateStore.ThreadStatus)] = [
+            (.userInput, .waitingForInput),
+            (.approval, .needsApproval),
+        ]
 
-        store.replaceRecentThreads(with: [
-            thread(id: "thread-1", updatedAt: 100, status: .active(flags: [.waitingOnApproval]))
-        ])
+        for (pendingRequestKind, expectedStatus) in cases {
+            var store = AppStateStore()
+            store.replaceRecentThreads(with: [thread(id: "thread-1", updatedAt: 100, status: .idle)])
+            applyPendingRequest(pendingRequestKind, to: &store)
 
-        XCTAssertEqual(store.overallStatus, .waitingForUser)
-        XCTAssertEqual(store.recentThreads.first?.status, .needsApproval)
-    }
+            store.apply(
+                desktopSnapshot: CodexDesktopRuntimeSnapshot(
+                    activeTurnCount: 1,
+                    runningThreadIDs: ["thread-1"]
+                ),
+                observedAt: Date(timeIntervalSince1970: 200)
+            )
 
-    func testDesktopRunningOverlayClearsStaleWaitingForInputWhenPendingEvidenceDisappears() {
-        var store = AppStateStore()
-        store.replaceRecentThreads(with: [thread(id: "thread-1", updatedAt: 100, status: .idle)])
-        store.apply(serverRequest: .toolUserInput(
-            ToolRequestUserInputRequest(threadId: "thread-1", turnId: "turn-1", itemId: "item-1")
-        ))
-
-        store.apply(
-            desktopSnapshot: CodexDesktopRuntimeSnapshot(
-                activeTurnCount: 1,
-                runningThreadIDs: ["thread-1"]
-            ),
-            observedAt: Date(timeIntervalSince1970: 200)
-        )
-
-        XCTAssertEqual(store.overallStatus, .waitingForUser)
-        XCTAssertEqual(store.recentThreads.first?.status, .waitingForInput)
-        XCTAssertEqual(store.recentThreads.first?.displayStatus, .waitingForInput)
-    }
-
-    func testDesktopRunningOverlayClearsStaleNeedsApprovalWhenPendingEvidenceDisappears() {
-        var store = AppStateStore()
-        store.replaceRecentThreads(with: [thread(id: "thread-1", updatedAt: 100, status: .idle)])
-        store.apply(serverRequest: .approval(
-            ApprovalRequestPayload(threadId: "thread-1", turnId: "turn-1", itemId: "item-1", reason: nil)
-        ))
-
-        store.apply(
-            desktopSnapshot: CodexDesktopRuntimeSnapshot(
-                activeTurnCount: 1,
-                runningThreadIDs: ["thread-1"]
-            ),
-            observedAt: Date(timeIntervalSince1970: 200)
-        )
-
-        XCTAssertEqual(store.overallStatus, .waitingForUser)
-        XCTAssertEqual(store.recentThreads.first?.status, .needsApproval)
-        XCTAssertEqual(store.recentThreads.first?.displayStatus, .needsApproval)
+            XCTAssertEqual(store.overallStatus, .waitingForUser)
+            XCTAssertEqual(store.recentThreads.first?.status, expectedStatus)
+            XCTAssertEqual(store.recentThreads.first?.displayStatus, expectedStatus)
+        }
     }
 
     func testDesktopActiveTurnCountKeepsOverallRunningWithoutThreadOverlay() {
@@ -878,7 +886,7 @@ final class AppStateStoreTests: XCTestCase {
         XCTAssertEqual(store.recentThreads.first?.activeTurnID, "turn-1")
     }
 
-    func testDesktopCompletionHintClearsWatchedRunningThreadAndAggregateFallback() {
+    func testConnectedDesktopSnapshotClearsWatchedActiveTurnAfterGraceWithoutRunningEvidence() {
         var store = AppStateStore()
         store.replaceRecentThreads(with: [thread(id: "thread-1", updatedAt: 100, status: .idle)])
         store.apply(notification: .turnStarted(
@@ -889,43 +897,124 @@ final class AppStateStoreTests: XCTestCase {
         ))
 
         store.apply(
-            desktopSnapshot: CodexDesktopRuntimeSnapshot(
-                activeTurnCount: 1,
+            connectedDesktopSnapshot: CodexDesktopRuntimeSnapshot(
+                activeTurnCount: 0,
                 runningThreadIDs: []
             ),
-            observedAt: Date(timeIntervalSince1970: 200)
+            observedAt: Date().addingTimeInterval(6)
         )
-
-        store.apply(desktopCompletionHints: [
-            "thread-1": Date(timeIntervalSince1970: 300)
-        ])
 
         XCTAssertEqual(store.overallStatus, .idle)
         XCTAssertEqual(store.recentThreads.first?.displayStatus, .idle)
         XCTAssertNil(store.recentThreads.first?.activeTurnID)
-        XCTAssertEqual(store.recentThreads.first?.lastTerminalActivityAt, Date(timeIntervalSince1970: 300))
     }
 
-    func testDesktopCompletionHintClearsUnwatchedRunningOverlay() {
+    func testConnectedDesktopSnapshotDoesNotReviveCompletedThreadFromStaleActiveCount() {
         var store = AppStateStore()
-        store.replaceRecentThreads(with: [thread(id: "thread-1", updatedAt: 100, status: .notLoaded)])
+        store.replaceRecentThreads(with: [thread(id: "thread-1", updatedAt: 100, status: .idle)])
+        store.apply(notification: .turnStarted(
+            TurnStartedNotification(
+                threadId: "thread-1",
+                turn: CodexTurn(id: "turn-1", status: .inProgress, error: nil)
+            )
+        ))
+        store.apply(notification: .turnCompleted(
+            TurnCompletedNotification(
+                threadId: "thread-1",
+                turn: CodexTurn(id: "turn-1", status: .completed, error: nil)
+            )
+        ))
+
+        store.apply(
+            connectedDesktopSnapshot: CodexDesktopRuntimeSnapshot(
+                activeTurnCount: 1,
+                runningThreadIDs: ["thread-1"]
+            ),
+            observedAt: Date().addingTimeInterval(1)
+        )
+
+        XCTAssertEqual(store.overallStatus, .idle)
+        XCTAssertEqual(store.recentThreads.first?.displayStatus, .idle)
+        XCTAssertEqual(store.desktopActiveTurnCount, 0)
+    }
+
+    func testDesktopCompletionHintClearsRunningState() {
+        let completionAt = Date().addingTimeInterval(1)
+        let cases: [(inout AppStateStore) -> Void] = [
+            { store in
+                store.replaceRecentThreads(with: [self.thread(id: "thread-1", updatedAt: 100, status: .idle)])
+                store.apply(notification: .turnStarted(
+                    TurnStartedNotification(
+                        threadId: "thread-1",
+                        turn: CodexTurn(id: "turn-1", status: .inProgress, error: nil)
+                    )
+                ))
+                store.apply(
+                    desktopSnapshot: CodexDesktopRuntimeSnapshot(
+                        activeTurnCount: 1,
+                        runningThreadIDs: []
+                    ),
+                    observedAt: Date(timeIntervalSince1970: 200)
+                )
+            },
+            { store in
+                store.replaceRecentThreads(with: [self.thread(id: "thread-1", updatedAt: 100, status: .notLoaded)])
+                store.apply(
+                    desktopSnapshot: CodexDesktopRuntimeSnapshot(
+                        activeTurnCount: 1,
+                        runningThreadIDs: ["thread-1"]
+                    ),
+                    observedAt: Date(timeIntervalSince1970: 200)
+                )
+            },
+        ]
+
+        for configure in cases {
+            var store = AppStateStore()
+            configure(&store)
+
+            store.apply(desktopCompletionHints: [
+                "thread-1": completionAt
+            ])
+
+            XCTAssertEqual(store.overallStatus, .idle)
+            XCTAssertEqual(store.recentThreads.first?.displayStatus, .idle)
+            XCTAssertNil(store.recentThreads.first?.activeTurnID)
+            XCTAssertEqual(store.recentThreads.first?.lastTerminalActivityAt, completionAt)
+        }
+    }
+
+    func testDesktopCompletionHintClearsRunningRevivedAfterLiveCompletion() throws {
+        var store = AppStateStore()
+        store.replaceRecentThreads(with: [thread(id: "thread-1", updatedAt: 100, status: .idle)])
+        store.apply(notification: .turnStarted(
+            TurnStartedNotification(
+                threadId: "thread-1",
+                turn: CodexTurn(id: "turn-1", status: .inProgress, error: nil)
+            )
+        ))
+        store.apply(notification: .turnCompleted(
+            TurnCompletedNotification(
+                threadId: "thread-1",
+                turn: CodexTurn(id: "turn-1", status: .completed, error: nil)
+            )
+        ))
+        let completedAt = try XCTUnwrap(store.recentThreads.first?.lastTerminalActivityAt)
 
         store.apply(
             desktopSnapshot: CodexDesktopRuntimeSnapshot(
                 activeTurnCount: 1,
                 runningThreadIDs: ["thread-1"]
             ),
-            observedAt: Date(timeIntervalSince1970: 200)
+            observedAt: completedAt.addingTimeInterval(1)
         )
+        XCTAssertEqual(store.recentThreads.first?.displayStatus, .running)
 
-        store.apply(desktopCompletionHints: [
-            "thread-1": Date(timeIntervalSince1970: 300)
-        ])
+        store.apply(desktopCompletionHints: ["thread-1": completedAt])
 
         XCTAssertEqual(store.overallStatus, .idle)
         XCTAssertEqual(store.recentThreads.first?.displayStatus, .idle)
-        XCTAssertNil(store.recentThreads.first?.activeTurnID)
-        XCTAssertEqual(store.recentThreads.first?.lastTerminalActivityAt, Date(timeIntervalSince1970: 300))
+        XCTAssertEqual(store.desktopActiveTurnCount, 0)
     }
 
     func testDesktopRunningOverlayPromotesWatchedIdleThreadWhenFreshEvidenceAppears() {
@@ -1008,102 +1097,59 @@ final class AppStateStoreTests: XCTestCase {
         XCTAssertEqual(store.recentThreads.first?.statusUpdatedAt, Date(timeIntervalSince1970: 200))
     }
 
-    func testThreadListRefreshClearsWatchedWaitingForInputWhenIncomingIdleIsNewer() {
-        var store = AppStateStore()
-        let newerUpdatedAt = Int(Date().addingTimeInterval(60).timeIntervalSince1970)
-        store.markWatched(thread: thread(id: "thread-1", updatedAt: 100, status: .idle))
-        store.apply(serverRequest: .toolUserInput(
-            ToolRequestUserInputRequest(threadId: "thread-1", turnId: "turn-1", itemId: "item-1")
-        ))
+    func testThreadListRefreshClearsWatchedPendingStateWhenIncomingAuthoritativeStatusIsNewer() {
+        let cases: [(AppStateStore.PendingRequestKind, CodexThreadStatus, AppStateStore.ThreadStatus)] = [
+            (.userInput, .idle, .idle),
+            (.userInput, .notLoaded, .notLoaded),
+            (.approval, .idle, .idle),
+        ]
 
-        store.replaceRecentThreads(with: [
-            thread(id: "thread-1", updatedAt: newerUpdatedAt, status: .idle)
-        ])
+        for (pendingRequestKind, incomingStatus, expectedStatus) in cases {
+            var store = AppStateStore()
+            let newerUpdatedAt = Int(Date().addingTimeInterval(60).timeIntervalSince1970)
+            store.markWatched(thread: thread(id: "thread-1", updatedAt: 100, status: .idle))
+            applyPendingRequest(pendingRequestKind, to: &store)
 
-        XCTAssertEqual(store.recentThreads.first?.status, .idle)
-        XCTAssertEqual(store.recentThreads.first?.displayStatus, .idle)
+            store.replaceRecentThreads(with: [
+                thread(id: "thread-1", updatedAt: newerUpdatedAt, status: incomingStatus)
+            ])
+
+            XCTAssertEqual(store.recentThreads.first?.status, expectedStatus)
+            XCTAssertEqual(store.recentThreads.first?.displayStatus, expectedStatus)
+        }
     }
 
-    func testThreadListRefreshClearsWatchedWaitingForInputWhenIncomingNotLoadedIsNewer() {
-        var store = AppStateStore()
-        let newerUpdatedAt = Int(Date().addingTimeInterval(60).timeIntervalSince1970)
-        store.markWatched(thread: thread(id: "thread-1", updatedAt: 100, status: .idle))
-        store.apply(serverRequest: .toolUserInput(
-            ToolRequestUserInputRequest(threadId: "thread-1", turnId: "turn-1", itemId: "item-1")
-        ))
-
-        store.replaceRecentThreads(with: [
-            thread(id: "thread-1", updatedAt: newerUpdatedAt, status: .notLoaded)
-        ])
-
-        XCTAssertEqual(store.recentThreads.first?.status, .notLoaded)
-        XCTAssertEqual(store.recentThreads.first?.displayStatus, .notLoaded)
-    }
-
-    func testThreadListRefreshClearsWatchedNeedsApprovalWhenIncomingIdleIsNewer() {
-        var store = AppStateStore()
-        let newerUpdatedAt = Int(Date().addingTimeInterval(60).timeIntervalSince1970)
-        store.markWatched(thread: thread(id: "thread-1", updatedAt: 100, status: .idle))
-        store.apply(serverRequest: .approval(
-            ApprovalRequestPayload(threadId: "thread-1", turnId: "turn-1", itemId: "item-1", reason: nil)
-        ))
-
-        store.replaceRecentThreads(with: [
-            thread(id: "thread-1", updatedAt: newerUpdatedAt, status: .idle)
-        ])
-
-        XCTAssertEqual(store.recentThreads.first?.status, .idle)
-        XCTAssertEqual(store.recentThreads.first?.displayStatus, .idle)
-    }
-
-    func testDesktopSnapshotDoesNotOverrideWatchedWaitingWhenRunningEvidenceAppears() {
-        var store = AppStateStore()
-        store.markWatched(thread: thread(id: "thread-1", updatedAt: 100, status: .idle))
-        store.apply(serverRequest: .toolUserInput(
-            ToolRequestUserInputRequest(threadId: "thread-1", turnId: "turn-1", itemId: "item-1")
-        ))
-
-        store.replaceRecentThreads(with: [
-            thread(id: "thread-1", updatedAt: 110, status: .notLoaded)
-        ])
-
-        store.apply(
-            desktopSnapshot: CodexDesktopRuntimeSnapshot(
+    func testDesktopSnapshotDoesNotOverrideWatchedWaitingWithoutSessionEvidence() {
+        let snapshots = [
+            CodexDesktopRuntimeSnapshot(
                 activeTurnCount: 1,
                 runningThreadIDs: ["thread-1"]
             ),
-            observedAt: Date(timeIntervalSince1970: 200)
-        )
-
-        XCTAssertEqual(store.recentThreads.first?.status, .waitingForInput)
-        XCTAssertEqual(store.recentThreads.first?.listedStatus, .notLoaded)
-        XCTAssertEqual(store.recentThreads.first?.displayStatus, .waitingForInput)
-        XCTAssertEqual(store.overallStatus, .waitingForUser)
-    }
-
-    func testDesktopSnapshotDoesNotOverrideWatchedWaitingWhenPendingDisappears() {
-        var store = AppStateStore()
-        store.markWatched(thread: thread(id: "thread-1", updatedAt: 100, status: .idle))
-        store.apply(serverRequest: .toolUserInput(
-            ToolRequestUserInputRequest(threadId: "thread-1", turnId: "turn-1", itemId: "item-1")
-        ))
-
-        store.replaceRecentThreads(with: [
-            thread(id: "thread-1", updatedAt: 110, status: .notLoaded)
-        ])
-
-        store.apply(
-            desktopSnapshot: CodexDesktopRuntimeSnapshot(
+            CodexDesktopRuntimeSnapshot(
                 activeTurnCount: 0,
                 runningThreadIDs: []
             ),
-            observedAt: Date(timeIntervalSince1970: 200)
-        )
+        ]
 
-        XCTAssertEqual(store.recentThreads.first?.status, .waitingForInput)
-        XCTAssertEqual(store.recentThreads.first?.listedStatus, .notLoaded)
-        XCTAssertEqual(store.recentThreads.first?.displayStatus, .waitingForInput)
-        XCTAssertEqual(store.overallStatus, .waitingForUser)
+        for snapshot in snapshots {
+            var store = AppStateStore()
+            store.markWatched(thread: thread(id: "thread-1", updatedAt: 100, status: .idle))
+            applyPendingRequest(.userInput, to: &store)
+
+            store.replaceRecentThreads(with: [
+                thread(id: "thread-1", updatedAt: 110, status: .notLoaded)
+            ])
+
+            store.apply(
+                desktopSnapshot: snapshot,
+                observedAt: Date(timeIntervalSince1970: 200)
+            )
+
+            XCTAssertEqual(store.recentThreads.first?.status, .waitingForInput)
+            XCTAssertEqual(store.recentThreads.first?.listedStatus, .notLoaded)
+            XCTAssertEqual(store.recentThreads.first?.displayStatus, .waitingForInput)
+            XCTAssertEqual(store.overallStatus, .waitingForUser)
+        }
     }
 
     func testDesktopSnapshotClearsWatchedWaitingWithoutSessionPathAfterGraceWhenPendingDisappears() {
@@ -1126,87 +1172,60 @@ final class AppStateStoreTests: XCTestCase {
         XCTAssertNil(store.recentThreads.first?.pendingRequestKind)
     }
 
-    func testDesktopSnapshotMarksWatchedThreadWaitingWhenSessionPathExists() {
-        var store = AppStateStore()
-        store.markWatched(thread: thread(
-            id: "thread-1",
-            updatedAt: 100,
-            status: .idle,
-            path: "/tmp/thread-1.jsonl"
-        ))
-
-        store.apply(
-            desktopSnapshot: CodexDesktopRuntimeSnapshot(
-                activeTurnCount: 0,
-                runningThreadIDs: [],
-                waitingForInputThreadIDs: ["thread-1"]
+    func testDesktopSnapshotUpdatesSessionBackedWaitingState() {
+        let cases: [(CodexDesktopRuntimeSnapshot?, Date?, AppStateStore.OverallStatus, AppStateStore.ThreadStatus, AppStateStore.PendingRequestKind?)] = [
+            (nil, nil, .waitingForUser, .waitingForInput, .userInput),
+            (
+                CodexDesktopRuntimeSnapshot(
+                    activeTurnCount: 0,
+                    runningThreadIDs: []
+                ),
+                Date(timeIntervalSince1970: 300),
+                .idle,
+                .idle,
+                nil
             ),
-            observedAt: Date(timeIntervalSince1970: 200)
-        )
-
-        XCTAssertEqual(store.overallStatus, .waitingForUser)
-        XCTAssertEqual(store.recentThreads.first?.displayStatus, .waitingForInput)
-        XCTAssertEqual(store.recentThreads.first?.pendingRequestKind, .userInput)
-    }
-
-    func testDesktopSnapshotClearsWatchedWaitingWhenSessionPendingDisappears() {
-        var store = AppStateStore()
-        store.markWatched(thread: thread(
-            id: "thread-1",
-            updatedAt: 100,
-            status: .idle,
-            path: "/tmp/thread-1.jsonl"
-        ))
-        store.apply(
-            desktopSnapshot: CodexDesktopRuntimeSnapshot(
-                activeTurnCount: 0,
-                runningThreadIDs: [],
-                waitingForInputThreadIDs: ["thread-1"]
+            (
+                CodexDesktopRuntimeSnapshot(
+                    activeTurnCount: 1,
+                    runningThreadIDs: ["thread-1"]
+                ),
+                Date(timeIntervalSince1970: 300),
+                .running,
+                .running,
+                nil
             ),
-            observedAt: Date(timeIntervalSince1970: 200)
-        )
+        ]
 
-        store.apply(
-            desktopSnapshot: CodexDesktopRuntimeSnapshot(
-                activeTurnCount: 0,
-                runningThreadIDs: []
-            ),
-            observedAt: Date(timeIntervalSince1970: 300)
-        )
+        for (followupSnapshot, followupObservedAt, expectedOverallStatus, expectedDisplayStatus, expectedPendingRequestKind) in cases {
+            var store = AppStateStore()
+            store.markWatched(thread: thread(
+                id: "thread-1",
+                updatedAt: 100,
+                status: .idle,
+                path: "/tmp/thread-1.jsonl"
+            ))
 
-        XCTAssertEqual(store.overallStatus, .idle)
-        XCTAssertEqual(store.recentThreads.first?.displayStatus, .idle)
-        XCTAssertNil(store.recentThreads.first?.pendingRequestKind)
-    }
+            store.apply(
+                desktopSnapshot: CodexDesktopRuntimeSnapshot(
+                    activeTurnCount: 0,
+                    runningThreadIDs: [],
+                    waitingForInputThreadIDs: ["thread-1"]
+                ),
+                observedAt: Date(timeIntervalSince1970: 200)
+            )
 
-    func testDesktopSnapshotClearsWatchedWaitingToRunningWhenTurnContinues() {
-        var store = AppStateStore()
-        store.markWatched(thread: thread(
-            id: "thread-1",
-            updatedAt: 100,
-            status: .idle,
-            path: "/tmp/thread-1.jsonl"
-        ))
-        store.apply(
-            desktopSnapshot: CodexDesktopRuntimeSnapshot(
-                activeTurnCount: 0,
-                runningThreadIDs: [],
-                waitingForInputThreadIDs: ["thread-1"]
-            ),
-            observedAt: Date(timeIntervalSince1970: 200)
-        )
+            if let followupSnapshot, let followupObservedAt {
+                store.apply(
+                    desktopSnapshot: followupSnapshot,
+                    observedAt: followupObservedAt
+                )
+            }
 
-        store.apply(
-            desktopSnapshot: CodexDesktopRuntimeSnapshot(
-                activeTurnCount: 1,
-                runningThreadIDs: ["thread-1"]
-            ),
-            observedAt: Date(timeIntervalSince1970: 300)
-        )
-
-        XCTAssertEqual(store.overallStatus, .running)
-        XCTAssertEqual(store.recentThreads.first?.displayStatus, .running)
-        XCTAssertNil(store.recentThreads.first?.pendingRequestKind)
+            XCTAssertEqual(store.overallStatus, expectedOverallStatus)
+            XCTAssertEqual(store.recentThreads.first?.displayStatus, expectedDisplayStatus)
+            XCTAssertEqual(store.recentThreads.first?.pendingRequestKind, expectedPendingRequestKind)
+        }
     }
 
     func testWaitingForInputBeatsRunningInOverallStatus() {
@@ -1294,46 +1313,32 @@ final class AppStateStoreTests: XCTestCase {
         XCTAssertNil(store.recentThreads.first?.activeTurnID)
     }
 
-    func testTurnFailureClearsWaitingForInputToFailed() {
-        var store = AppStateStore()
-        store.replaceRecentThreads(with: [thread(id: "thread-1", updatedAt: 100, status: .idle)])
-        store.apply(serverRequest: .toolUserInput(
-            ToolRequestUserInputRequest(threadId: "thread-1", turnId: "turn-1", itemId: "item-1")
-        ))
-
-        store.apply(notification: .turnCompleted(
-            TurnCompletedNotification(
-                threadId: "thread-1",
-                turn: CodexTurn(
-                    id: "turn-1",
-                    status: .failed,
-                    error: CodexTurnError(message: "boom")
-                )
-            )
-        ))
-
-        XCTAssertEqual(store.recentThreads.first?.status, .failed(message: "boom"))
-        XCTAssertNotNil(store.recentThreads.first?.lastTerminalActivityAt)
-    }
-
     func testTurnFailureMarksThreadFailed() {
-        var store = AppStateStore()
-        store.replaceRecentThreads(with: [thread(id: "thread-1", updatedAt: 100, status: .idle)])
+        let cases = [false, true]
 
-        store.apply(notification: .turnCompleted(
-            TurnCompletedNotification(
-                threadId: "thread-1",
-                turn: CodexTurn(
-                    id: "turn-1",
-                    status: .failed,
-                    error: CodexTurnError(message: "boom")
+        for appliesPendingRequest in cases {
+            var store = AppStateStore()
+            store.replaceRecentThreads(with: [thread(id: "thread-1", updatedAt: 100, status: .idle)])
+
+            if appliesPendingRequest {
+                applyPendingRequest(.userInput, to: &store)
+            }
+
+            store.apply(notification: .turnCompleted(
+                TurnCompletedNotification(
+                    threadId: "thread-1",
+                    turn: CodexTurn(
+                        id: "turn-1",
+                        status: .failed,
+                        error: CodexTurnError(message: "boom")
+                    )
                 )
-            )
-        ))
+            ))
 
-        XCTAssertEqual(store.overallStatus, .failed)
-        XCTAssertEqual(store.recentThreads.first?.status, .failed(message: "boom"))
-        XCTAssertNotNil(store.recentThreads.first?.lastTerminalActivityAt)
+            XCTAssertEqual(store.overallStatus, .failed)
+            XCTAssertEqual(store.recentThreads.first?.status, .failed(message: "boom"))
+            XCTAssertNotNil(store.recentThreads.first?.lastTerminalActivityAt)
+        }
     }
 
     func testServerRequestDoesNotSetLastTerminalActivityAt() {
@@ -1453,24 +1458,21 @@ final class AppStateStoreTests: XCTestCase {
         XCTAssertEqual(store.recentThreads.first?.status, .failed(message: nil))
     }
 
-    func testConnectionFailureDoesNotMaskRunningThreadStatus() {
-        var store = AppStateStore()
-        store.setConnection(.failed(message: "Codex app-server exited with status 1"))
-        store.replaceRecentThreads(with: [
-            thread(id: "thread-1", updatedAt: 100, status: .active(flags: []))
-        ])
+    func testConnectionFailureDoesNotMaskThreadStatus() {
+        let cases: [(CodexThreadStatus, AppStateStore.OverallStatus)] = [
+            (.active(flags: []), .running),
+            (.active(flags: [.waitingOnUserInput]), .waitingForUser),
+        ]
 
-        XCTAssertEqual(store.overallStatus, .running)
-    }
+        for (threadStatus, expectedOverallStatus) in cases {
+            var store = AppStateStore()
+            store.setConnection(.failed(message: "Codex app-server exited with status 1"))
+            store.replaceRecentThreads(with: [
+                thread(id: "thread-1", updatedAt: 100, status: threadStatus)
+            ])
 
-    func testConnectionFailureDoesNotMaskWaitingThreadStatus() {
-        var store = AppStateStore()
-        store.setConnection(.failed(message: "Codex app-server exited with status 1"))
-        store.replaceRecentThreads(with: [
-            thread(id: "thread-1", updatedAt: 100, status: .active(flags: [.waitingOnUserInput]))
-        ])
-
-        XCTAssertEqual(store.overallStatus, .waitingForUser)
+            XCTAssertEqual(store.overallStatus, expectedOverallStatus)
+        }
     }
 
     func testFailedThreadsReturnsNewestFailuresFirst() {
@@ -1513,42 +1515,56 @@ final class AppStateStoreTests: XCTestCase {
         XCTAssertEqual(store.overallStatus, .running)
     }
 
-    func testRemoveThreadsRemovesArchivedThreadAndDescendantsImmediately() {
-        var store = AppStateStore()
-        store.replaceRecentThreads(with: [
-            thread(id: "survivor-thread", updatedAt: 120, status: .idle),
-            thread(id: "parent-thread", updatedAt: 110, status: .idle),
-            thread(
-                id: "child-thread",
-                updatedAt: 100,
-                status: .active(flags: []),
-                source: #"{"subagent":{"thread_spawn":{"parent_thread_id":"parent-thread","depth":1}}}"#
-            )
-        ])
+    func testArchivedParentRemovalRemovesDescendantsImmediately() {
+        let cases: [(inout AppStateStore) -> Void] = [
+            { store in
+                store.removeThreads(threadIDs: ["parent-thread"])
+            },
+            { store in
+                store.apply(notification: .threadArchived(ThreadArchivedNotification(threadId: "parent-thread")))
+            },
+        ]
 
-        store.removeThreads(threadIDs: ["parent-thread"])
+        for removeArchivedParent in cases {
+            var store = AppStateStore()
+            store.replaceRecentThreads(with: [
+                thread(id: "survivor-thread", updatedAt: 120, status: .idle),
+                thread(id: "parent-thread", updatedAt: 110, status: .idle),
+                thread(
+                    id: "child-thread",
+                    updatedAt: 100,
+                    status: .active(flags: []),
+                    source: #"{"subagent":{"thread_spawn":{"parent_thread_id":"parent-thread","depth":1}}}"#
+                )
+            ])
 
-        XCTAssertEqual(store.recentThreads.map(\.id), ["survivor-thread"])
-        XCTAssertEqual(store.visibleRecentThreads.map(\.id), ["survivor-thread"])
+            removeArchivedParent(&store)
+
+            XCTAssertEqual(store.recentThreads.map(\.id), ["survivor-thread"])
+            XCTAssertEqual(store.visibleRecentThreads.map(\.id), ["survivor-thread"])
+        }
     }
 
-    func testThreadArchivedNotificationRemovesArchivedThreadAndDescendantsImmediately() {
+    func testArchivedThreadTombstoneIgnoresLateRuntimeEventsAndStaleLists() {
         var store = AppStateStore()
-        store.replaceRecentThreads(with: [
-            thread(id: "survivor-thread", updatedAt: 120, status: .idle),
-            thread(id: "parent-thread", updatedAt: 110, status: .idle),
-            thread(
-                id: "child-thread",
-                updatedAt: 100,
-                status: .active(flags: []),
-                source: #"{"subagent":{"thread_spawn":{"parent_thread_id":"parent-thread","depth":1}}}"#
-            )
-        ])
+        let archivedThread = thread(id: "archived-thread", updatedAt: 110, status: .active(flags: []))
+        let survivorThread = thread(id: "survivor-thread", updatedAt: 100, status: .idle)
+        store.replaceRecentThreads(with: [archivedThread, survivorThread])
 
-        store.apply(notification: .threadArchived(ThreadArchivedNotification(threadId: "parent-thread")))
+        store.apply(notification: .threadArchived(ThreadArchivedNotification(threadId: "archived-thread")))
+        store.apply(notification: .turnStarted(
+            TurnStartedNotification(
+                threadId: "archived-thread",
+                turn: CodexTurn(id: "late-turn", status: .inProgress, error: nil)
+            )
+        ))
+        store.apply(notification: .threadStatusChanged(
+            ThreadStatusChangedNotification(threadId: "archived-thread", status: .active(flags: []))
+        ))
+        store.replaceRecentThreads(with: [archivedThread, survivorThread])
 
         XCTAssertEqual(store.recentThreads.map(\.id), ["survivor-thread"])
-        XCTAssertEqual(store.visibleRecentThreads.map(\.id), ["survivor-thread"])
+        XCTAssertNotNil(store.archivedThreadTombstonesByID["archived-thread"])
     }
 
     private func thread(
@@ -1570,5 +1586,22 @@ final class AppStateStoreTests: XCTestCase {
             path: path,
             source: source
         )
+    }
+
+    private func applyPendingRequest(
+        _ pendingRequestKind: AppStateStore.PendingRequestKind,
+        to store: inout AppStateStore,
+        threadID: String = "thread-1"
+    ) {
+        switch pendingRequestKind {
+        case .userInput:
+            store.apply(serverRequest: .toolUserInput(
+                ToolRequestUserInputRequest(threadId: threadID, turnId: "turn-1", itemId: "item-1")
+            ))
+        case .approval:
+            store.apply(serverRequest: .approval(
+                ApprovalRequestPayload(threadId: threadID, turnId: "turn-1", itemId: "item-1", reason: nil)
+            ))
+        }
     }
 }

@@ -2,6 +2,66 @@ import XCTest
 @testable import CodexMate
 
 final class DesktopActivityServiceTests: XCTestCase {
+    func testLoadMergesAppServerCompletionHintsFromRuntimeSnapshot() async throws {
+        let tempDirectoryURL = FileManager.default.temporaryDirectory
+            .appending(path: UUID().uuidString, directoryHint: .isDirectory)
+        let logsDirectoryURL = tempDirectoryURL.appending(path: "desktop-logs", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: logsDirectoryURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDirectoryURL) }
+
+        let databaseURL = tempDirectoryURL.appending(path: "state.sqlite")
+        try createStateDatabase(
+            at: databaseURL,
+            sql: """
+            CREATE TABLE threads (
+                id TEXT PRIMARY KEY,
+                first_user_message TEXT NOT NULL DEFAULT '',
+                title TEXT NOT NULL DEFAULT '',
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                cwd TEXT NOT NULL,
+                rollout_path TEXT,
+                archived INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE TABLE logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                process_uuid TEXT,
+                target TEXT,
+                message TEXT,
+                ts INTEGER NOT NULL,
+                ts_nanos INTEGER NOT NULL DEFAULT 0,
+                thread_id TEXT
+            );
+            INSERT INTO threads (id, first_user_message, title, created_at, updated_at, cwd, rollout_path, archived)
+            VALUES ('thread-1', 'Preview', 'Thread 1', 150, 195, '/tmp/project', NULL, 0);
+            INSERT INTO logs (process_uuid, target, message, ts, ts_nanos, thread_id)
+            VALUES ('process-1', 'codex_app_server::outgoing_message', 'app-server event: turn/completed', 198, 0, 'thread-1');
+            """
+        )
+
+        let service = DesktopActivityService(
+            stateReader: CodexDesktopStateReader(
+                now: { Date(timeIntervalSince1970: 200) },
+                stateDatabaseURLOverride: databaseURL
+            ),
+            conversationActivityReader: CodexDesktopConversationActivityReader(
+                logsDirectoryURL: logsDirectoryURL,
+                lookbackDays: 1
+            )
+        )
+
+        let update = await service.load(
+            candidateSessionPaths: ["thread-1": nil],
+            now: Date(timeIntervalSince1970: 200)
+        )
+
+        XCTAssertEqual(update.latestTurnCompletedAtByThreadID["thread-1"], Date(timeIntervalSince1970: 198))
+        XCTAssertEqual(
+            update.runtimeSnapshot?.latestTurnCompletedAtByThreadID["thread-1"],
+            Date(timeIntervalSince1970: 198)
+        )
+    }
+
     func testDatabaseFailureFallsBackToSessionPendingApprovalSnapshot() async throws {
         let tempDirectoryURL = FileManager.default.temporaryDirectory
             .appending(path: UUID().uuidString, directoryHint: .isDirectory)
@@ -64,5 +124,24 @@ final class DesktopActivityServiceTests: XCTestCase {
         )
 
         XCTAssertTrue(error.isRetriableDatabaseOpenFailure)
+    }
+
+    private func createStateDatabase(at databaseURL: URL, sql: String) throws {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/sqlite3")
+        process.arguments = [databaseURL.path, sql]
+
+        let errorPipe = Pipe()
+        process.standardError = errorPipe
+
+        try process.run()
+        process.waitUntilExit()
+
+        guard process.terminationStatus == 0 else {
+            let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
+            let errorMessage = String(data: errorData, encoding: .utf8) ?? "sqlite3 failed"
+            XCTFail(errorMessage)
+            return
+        }
     }
 }

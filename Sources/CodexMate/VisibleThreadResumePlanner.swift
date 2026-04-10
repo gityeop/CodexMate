@@ -8,17 +8,16 @@ struct ThreadSubscriptionPlan: Equatable {
 
 struct ThreadSubscriptionPlanner {
     static func makePlan(
-        recentThreads: [AppStateStore.ThreadRow],
-        liveThreadUpdatedAtByID: [String: Date],
-        maxSubscribedThreads: Int
+        targetThreadIDs: [String],
+        liveThreadUpdatedAtByID: [String: Date]
     ) -> ThreadSubscriptionPlan {
-        let targetThreads = Array(recentThreads.prefix(max(0, maxSubscribedThreads)))
-        let targetThreadIDs = targetThreads.map(\.id)
-        let targetThreadIDSet = Set(targetThreadIDs)
+        var seenThreadIDs: Set<String> = []
+        let deduplicatedTargetThreadIDs = targetThreadIDs.filter { seenThreadIDs.insert($0).inserted }
+        let targetThreadIDSet = Set(deduplicatedTargetThreadIDs)
         let liveThreadIDSet = Set(liveThreadUpdatedAtByID.keys)
 
-        let threadIDsToResume = targetThreads.compactMap { thread in
-            liveThreadIDSet.contains(thread.id) ? nil : thread.id
+        let threadIDsToResume = deduplicatedTargetThreadIDs.compactMap { threadID in
+            liveThreadIDSet.contains(threadID) ? nil : threadID
         }
 
         let threadIDsToUnsubscribe = liveThreadUpdatedAtByID.keys
@@ -26,9 +25,21 @@ struct ThreadSubscriptionPlanner {
             .sorted()
 
         return ThreadSubscriptionPlan(
-            targetThreadIDs: targetThreadIDs,
+            targetThreadIDs: deduplicatedTargetThreadIDs,
             threadIDsToResume: threadIDsToResume,
             threadIDsToUnsubscribe: threadIDsToUnsubscribe
+        )
+    }
+
+    static func makePlan(
+        recentThreads: [AppStateStore.ThreadRow],
+        liveThreadUpdatedAtByID: [String: Date],
+        maxSubscribedThreads: Int
+    ) -> ThreadSubscriptionPlan {
+        let targetThreads = Array(recentThreads.prefix(max(0, maxSubscribedThreads)))
+        return makePlan(
+            targetThreadIDs: targetThreads.map(\.id),
+            liveThreadUpdatedAtByID: liveThreadUpdatedAtByID
         )
     }
 }

@@ -12,6 +12,8 @@ struct CodexDesktopProjectCatalog: Equatable {
     }
 
     static let empty = CodexDesktopProjectCatalog(workspaceRoots: [])
+    static let unknownProjectID = "unknown"
+    static let unknownProjectDisplayName = "Unknown Project"
 
     let workspaceRoots: [WorkspaceRoot]
 
@@ -26,37 +28,22 @@ struct CodexDesktopProjectCatalog: Equatable {
     }
 
     func project(for cwd: String) -> ProjectReference {
-        let normalizedCWD = Self.normalize(path: cwd)
+        let normalizedCWD = CodexDesktopWorktreePath.normalize(path: cwd)
 
-        if let matchedRoot = workspaceRoots.first(where: { Self.matches(root: $0.path, path: normalizedCWD) }) {
+        if let matchedRoot = workspaceRoots.first(where: {
+            CodexDesktopWorktreePath.matches(root: $0.path, path: normalizedCWD)
+        }) {
             return ProjectReference(id: matchedRoot.path, displayName: matchedRoot.displayName)
         }
 
         if normalizedCWD.isEmpty {
-            return ProjectReference(id: "unknown", displayName: "Unknown Project")
+            return ProjectReference(id: Self.unknownProjectID, displayName: Self.unknownProjectDisplayName)
         }
 
         return ProjectReference(
             id: normalizedCWD,
-            displayName: Self.fallbackDisplayName(for: normalizedCWD)
+            displayName: CodexDesktopWorktreePath.fallbackDisplayName(for: normalizedCWD)
         )
-    }
-
-    static func normalize(path: String) -> String {
-        guard !path.isEmpty else { return "" }
-        return URL(fileURLWithPath: path).standardizedFileURL.path
-    }
-
-    static func fallbackDisplayName(for path: String) -> String {
-        let normalizedPath = normalize(path: path)
-        guard !normalizedPath.isEmpty else { return "Unknown Project" }
-
-        let component = URL(fileURLWithPath: normalizedPath).lastPathComponent
-        return component.isEmpty ? normalizedPath : component
-    }
-
-    private static func matches(root: String, path: String) -> Bool {
-        path == root || path.hasPrefix(root + "/")
     }
 }
 
@@ -64,18 +51,21 @@ struct CodexDesktopProjectCatalogReader {
     private let fileManager: FileManager
     private let codexDirectoryURLOverride: URL?
     private let codexDirectoryURLProvider: @Sendable () -> URL
+    private let parser: CodexDesktopWorktreeParser
     private let cache = ProjectCatalogCache()
 
     init(
         fileManager: FileManager = .default,
         codexDirectoryURLOverride: URL? = nil,
-        codexDirectoryURLProvider: (@Sendable () -> URL)? = nil
+        codexDirectoryURLProvider: (@Sendable () -> URL)? = nil,
+        parser: CodexDesktopWorktreeParser = CodexDesktopWorktreeParser()
     ) {
         self.fileManager = fileManager
         self.codexDirectoryURLOverride = codexDirectoryURLOverride
         self.codexDirectoryURLProvider = codexDirectoryURLProvider ?? {
             FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex", isDirectory: true)
         }
+        self.parser = parser
     }
 
     func load() throws -> CodexDesktopProjectCatalog {
@@ -94,27 +84,7 @@ struct CodexDesktopProjectCatalogReader {
         }
 
         let data = try Data(contentsOf: fileURL)
-        let state = try JSONDecoder().decode(GlobalStateFile.self, from: data)
-
-        let normalizedLabels = Dictionary(
-            uniqueKeysWithValues: state.workspaceRootLabels.map { key, value in
-                (CodexDesktopProjectCatalog.normalize(path: key), value)
-            }
-        )
-
-        let roots = state.savedWorkspaceRoots.map { rawPath in
-            let normalizedPath = CodexDesktopProjectCatalog.normalize(path: rawPath)
-            let label = normalizedLabels[normalizedPath]?
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-
-            return CodexDesktopProjectCatalog.WorkspaceRoot(
-                path: normalizedPath,
-                displayName: (label?.isEmpty == false)
-                    ? label!
-                    : CodexDesktopProjectCatalog.fallbackDisplayName(for: normalizedPath)
-            )
-        }
-
+        let roots = try parser.parse(data)
         let catalog = CodexDesktopProjectCatalog(workspaceRoots: roots)
         cache.store(
             catalog,
@@ -123,16 +93,6 @@ struct CodexDesktopProjectCatalogReader {
             fileSize: fileSize
         )
         return catalog
-    }
-}
-
-private struct GlobalStateFile: Decodable {
-    let savedWorkspaceRoots: [String]
-    let workspaceRootLabels: [String: String]
-
-    enum CodingKeys: String, CodingKey {
-        case savedWorkspaceRoots = "electron-saved-workspace-roots"
-        case workspaceRootLabels = "electron-workspace-root-labels"
     }
 }
 

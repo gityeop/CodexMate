@@ -80,6 +80,77 @@ final class CodexDesktopProjectCatalogReaderTests: XCTestCase {
         XCTAssertEqual(catalog.project(for: "/tmp/override-workspace/app").displayName, "Override Label")
     }
 
+    func testWorktreeParserNormalizesDeduplicatesRootsAndTrimsLabels() throws {
+        let parser = CodexDesktopWorktreeParser()
+        let data = try XCTUnwrap(
+            """
+            {
+              "electron-saved-workspace-roots": [
+                "/tmp/worktrees/app",
+                "/tmp/worktrees/../worktrees/app",
+                "/tmp/worktrees/feature"
+              ],
+              "electron-workspace-root-labels": {
+                "/tmp/worktrees/app": "  App Root  ",
+                "/tmp/worktrees/../worktrees/feature": "  Feature Root  "
+              }
+            }
+            """.data(using: .utf8)
+        )
+
+        let roots = try parser.parse(data)
+
+        XCTAssertEqual(
+            roots,
+            [
+                .init(path: "/tmp/worktrees/app", displayName: "App Root"),
+                .init(path: "/tmp/worktrees/feature", displayName: "Feature Root")
+            ]
+        )
+    }
+
+    func testWorktreeParserFallsBackToFolderNameWhenLabelIsBlank() throws {
+        let parser = CodexDesktopWorktreeParser()
+        let data = try XCTUnwrap(
+            """
+            {
+              "electron-saved-workspace-roots": [
+                "/tmp/worktrees/parser-menu"
+              ],
+              "electron-workspace-root-labels": {
+                "/tmp/worktrees/parser-menu": "   "
+              }
+            }
+            """.data(using: .utf8)
+        )
+
+        let roots = try parser.parse(data)
+
+        XCTAssertEqual(
+            roots,
+            [
+                .init(path: "/tmp/worktrees/parser-menu", displayName: "parser-menu")
+            ]
+        )
+    }
+
+    func testCatalogMatchesWorkspaceOnlyAtDirectoryBoundary() {
+        let catalog = CodexDesktopProjectCatalog(
+            workspaceRoots: [
+                .init(path: "/tmp/worktrees/app", displayName: "App")
+            ]
+        )
+
+        XCTAssertEqual(
+            catalog.project(for: "/tmp/worktrees/app/feature").displayName,
+            "App"
+        )
+        XCTAssertEqual(
+            catalog.project(for: "/tmp/worktrees/app-copy").displayName,
+            "app-copy"
+        )
+    }
+
     private func writeGlobalState(to codexDirectoryURL: URL, contents: String) throws {
         let data = try XCTUnwrap(contents.data(using: .utf8))
         try data.write(

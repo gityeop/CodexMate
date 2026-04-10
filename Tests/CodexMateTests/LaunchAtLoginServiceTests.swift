@@ -4,13 +4,6 @@ import XCTest
 
 @MainActor
 final class LaunchAtLoginServiceTests: XCTestCase {
-    func testServiceIsUnavailableOutsideAppBundle() {
-        let service = LaunchAtLoginService(isAppBundle: false)
-
-        XCTAssertEqual(service.snapshot.status, .unavailable)
-        XCTAssertFalse(service.snapshot.isAvailable)
-    }
-
     func testSetEnabledRegistersAndUnregistersMainApp() {
         var isRegistered = false
         let service = LaunchAtLoginService(
@@ -33,14 +26,17 @@ final class LaunchAtLoginServiceTests: XCTestCase {
         XCTAssertEqual(service.snapshot.status, .disabled)
     }
 
-    func testRequiresApprovalStatusIsSurfaced() {
-        let service = LaunchAtLoginService(
+    func testSnapshotReflectsUnavailableAndApprovalStates() {
+        let unavailableService = LaunchAtLoginService(isAppBundle: false)
+        let requiresApprovalService = LaunchAtLoginService(
             isAppBundle: true,
             statusProvider: { .requiresApproval },
             registerHandler: {},
             unregisterHandler: {}
         )
 
-        XCTAssertEqual(service.snapshot.status, .requiresApproval)
+        XCTAssertEqual(unavailableService.snapshot.status, .unavailable)
+        XCTAssertFalse(unavailableService.snapshot.isAvailable)
+        XCTAssertEqual(requiresApprovalService.snapshot.status, .requiresApproval)
     }
 }

@@ -2,50 +2,34 @@ import XCTest
 @testable import CodexMate
 
 final class RefreshSchedulingPolicyTests: XCTestCase {
-    func testIdlePolicyUsesSlowThreadListRefresh() {
-        let policy = RefreshSchedulingPolicy.current(
-            isMenuOpen: false,
-            overallStatus: .idle,
-            hasRecentThreads: true
-        )
+    func testCurrentPolicyMatchesExpectedIntervalsForEachMode() {
+        let cases: [
+            (
+                isMenuOpen: Bool,
+                overallStatus: AppStateStore.OverallStatus,
+                hasRecentThreads: Bool,
+                desktopActivityInterval: TimeInterval,
+                threadListInterval: TimeInterval,
+                timerInterval: TimeInterval
+            )
+        ] = [
+            (false, .idle, true, 5, 60, 5),
+            (false, .running, true, 1, 15, 1),
+            (true, .idle, true, 1, 5, 1),
+            (false, .idle, false, 5, 5, 5),
+        ]
 
-        XCTAssertEqual(policy.desktopActivityInterval, 5)
-        XCTAssertEqual(policy.threadListInterval, 60)
-        XCTAssertEqual(policy.timerInterval, 5)
-    }
+        for testCase in cases {
+            let policy = RefreshSchedulingPolicy.current(
+                isMenuOpen: testCase.isMenuOpen,
+                overallStatus: testCase.overallStatus,
+                hasRecentThreads: testCase.hasRecentThreads
+            )
 
-    func testRunningPolicyKeepsFastDesktopPollingButSlowerThreadListRefresh() {
-        let policy = RefreshSchedulingPolicy.current(
-            isMenuOpen: false,
-            overallStatus: .running,
-            hasRecentThreads: true
-        )
-
-        XCTAssertEqual(policy.desktopActivityInterval, 1)
-        XCTAssertEqual(policy.threadListInterval, 15)
-    }
-
-    func testMenuOpenPolicyRefreshesThreadListMoreFrequently() {
-        let policy = RefreshSchedulingPolicy.current(
-            isMenuOpen: true,
-            overallStatus: .idle,
-            hasRecentThreads: true
-        )
-
-        XCTAssertEqual(policy.desktopActivityInterval, 1)
-        XCTAssertEqual(policy.threadListInterval, 5)
-    }
-
-    func testEmptyRecentThreadListRefreshesMoreFrequentlyUntilRecovered() {
-        let policy = RefreshSchedulingPolicy.current(
-            isMenuOpen: false,
-            overallStatus: .idle,
-            hasRecentThreads: false
-        )
-
-        XCTAssertEqual(policy.desktopActivityInterval, 5)
-        XCTAssertEqual(policy.threadListInterval, 5)
-        XCTAssertEqual(policy.timerInterval, 5)
+            XCTAssertEqual(policy.desktopActivityInterval, testCase.desktopActivityInterval)
+            XCTAssertEqual(policy.threadListInterval, testCase.threadListInterval)
+            XCTAssertEqual(policy.timerInterval, testCase.timerInterval)
+        }
     }
 
     func testShouldRefreshUsesConfiguredIntervals() {

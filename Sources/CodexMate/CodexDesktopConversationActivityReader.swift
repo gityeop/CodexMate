@@ -313,7 +313,7 @@ final class CodexDesktopConversationActivityReader {
         for line in lines where !line.isEmpty {
             if let timestampToken = line.split(separator: " ", maxSplits: 1).first,
                let timestamp = parseTimestamp(String(timestampToken)),
-               let threadID = tokenValue(for: "conversationId=", in: line),
+               let threadID = threadIDToken(in: line),
                threadID != "null" {
                 if line.contains("Conversation created") {
                     let currentLatestViewed = latestViewedAtByThreadID[threadID] ?? .distantPast
@@ -324,7 +324,8 @@ final class CodexDesktopConversationActivityReader {
 
                 // `maybe_resume_success` is emitted when reopening an already-completed thread,
                 // so only the explicit completion notification should advance terminal activity.
-                if line.contains("[desktop-notifications] show turn-complete") {
+                if line.contains("[desktop-notifications] show turn-complete")
+                    || line.contains("app-server event: turn/completed") {
                     let currentLatestCompleted = latestTurnCompletedAtByThreadID[threadID] ?? .distantPast
                     if timestamp > currentLatestCompleted {
                         latestTurnCompletedAtByThreadID[threadID] = timestamp
@@ -374,8 +375,9 @@ final class CodexDesktopConversationActivityReader {
 
         if line.contains("Conversation created")
             || line.contains("maybe_resume_success")
-            || line.contains("[desktop-notifications] show turn-complete") {
-            return tokenValue(for: "conversationId=", in: line) == nil
+            || line.contains("[desktop-notifications] show turn-complete")
+            || line.contains("app-server event: turn/completed") {
+            return threadIDToken(in: line) == nil
         }
 
         return false
@@ -392,6 +394,12 @@ final class CodexDesktopConversationActivityReader {
         }
 
         return String(suffix[..<endIndex])
+    }
+
+    private func threadIDToken(in line: String) -> String? {
+        tokenValue(for: "conversationId=", in: line)
+            ?? tokenValue(for: "thread_id=", in: line)
+            ?? tokenValue(for: "threadId=", in: line)
     }
 
     private func parseTimestamp(_ value: String) -> Date? {

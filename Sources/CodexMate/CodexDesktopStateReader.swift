@@ -12,6 +12,7 @@ struct CodexDesktopRuntimeSnapshot {
     let waitingForInputThreadIDs: Set<String>
     let approvalThreadIDs: Set<String>
     let failedThreads: [String: FailedThreadState]
+    let latestTurnCompletedAtByThreadID: [String: Date]
     let debugSummary: String
 
     init(
@@ -21,6 +22,7 @@ struct CodexDesktopRuntimeSnapshot {
         waitingForInputThreadIDs: Set<String> = [],
         approvalThreadIDs: Set<String> = [],
         failedThreads: [String: FailedThreadState] = [:],
+        latestTurnCompletedAtByThreadID: [String: Date] = [:],
         debugSummary: String = ""
     ) {
         self.activeTurnCount = activeTurnCount
@@ -29,6 +31,7 @@ struct CodexDesktopRuntimeSnapshot {
         self.waitingForInputThreadIDs = waitingForInputThreadIDs
         self.approvalThreadIDs = approvalThreadIDs
         self.failedThreads = failedThreads
+        self.latestTurnCompletedAtByThreadID = latestTurnCompletedAtByThreadID
         self.debugSummary = debugSummary
     }
 }
@@ -57,11 +60,31 @@ struct CodexDesktopStateReader {
         let recentLoggedThreadIDs: [String]
         let pendingLogRows: [PendingLogRow]
         let failedThreads: [String: CodexDesktopRuntimeSnapshot.FailedThreadState]
+        let latestTurnCompletedAtByThreadID: [String: Date]
     }
 
     private struct SQLiteQuerySection {
         let name: String
         let sql: String
+    }
+
+    private enum LogMessageColumn: String {
+        case message
+        case feedbackLogBody = "feedback_log_body"
+    }
+
+    private enum LogQuerySource {
+        case unavailable
+        case embedded(messageColumn: LogMessageColumn)
+        case attached(databaseURL: URL, messageColumn: LogMessageColumn)
+
+        var isAvailable: Bool {
+            if case .unavailable = self {
+                return false
+            }
+
+            return true
+        }
     }
 
     private let fileManager: FileManager
@@ -139,7 +162,8 @@ struct CodexDesktopStateReader {
             return CodexDesktopRuntimeSnapshot(
                 activeTurnCount: activeTurnCount,
                 runningThreadIDs: [],
-                recentActivityThreadIDs: recentActivityThreadIDs
+                recentActivityThreadIDs: recentActivityThreadIDs,
+                latestTurnCompletedAtByThreadID: queryResult.latestTurnCompletedAtByThreadID
             )
         }
 
@@ -173,6 +197,7 @@ struct CodexDesktopStateReader {
             waitingForInputThreadIDs: pendingStates.waitingForInputThreadIDs,
             approvalThreadIDs: pendingStates.approvalThreadIDs,
             failedThreads: failedThreads,
+            latestTurnCompletedAtByThreadID: queryResult.latestTurnCompletedAtByThreadID,
             debugSummary: debugSummary
         )
     }
@@ -408,25 +433,29 @@ struct CodexDesktopStateReader {
         activeTurnCutoff: Int,
         recentProcessCutoff: Int
     ) throws -> SnapshotQueryResult {
+        let logQuerySource = resolveLogQuerySource(stateDatabaseURL: databaseURL)
+        let logsViewName = "codex_logs"
         var sections = [
             SQLiteQuerySection(
                 name: "activeTurnCount",
-                sql: """
-                WITH per_process AS (
-                    SELECT
-                        process_uuid,
-                        MAX(ts) AS last_ts,
-                        COALESCE(SUM(CASE WHEN message = 'app-server event: turn/started' THEN 1 ELSE 0 END), 0) AS started_count,
-                        COALESCE(SUM(CASE WHEN message = 'app-server event: turn/completed' THEN 1 ELSE 0 END), 0) AS completed_count
-                    FROM logs
-                    WHERE target = 'codex_app_server::outgoing_message'
-                      AND ts >= \(activeTurnCutoff)
-                    GROUP BY process_uuid
-                )
-                SELECT MAX(0, COALESCE(MAX(started_count - completed_count), 0))
-                FROM per_process
-                WHERE last_ts >= \(recentProcessCutoff);
-                """
+                sql: logQuerySource.isAvailable
+                    ? """
+                    WITH per_process AS (
+                        SELECT
+                            process_uuid,
+                            MAX(ts) AS last_ts,
+                            COALESCE(SUM(CASE WHEN message = 'app-server event: turn/started' THEN 1 ELSE 0 END), 0) AS started_count,
+                            COALESCE(SUM(CASE WHEN message = 'app-server event: turn/completed' THEN 1 ELSE 0 END), 0) AS completed_count
+                        FROM \(logsViewName)
+                        WHERE target = 'codex_app_server::outgoing_message'
+                          AND ts >= \(activeTurnCutoff)
+                        GROUP BY process_uuid
+                    )
+                    SELECT MAX(0, COALESCE(MAX(started_count - completed_count), 0))
+                    FROM per_process
+                    WHERE last_ts >= \(recentProcessCutoff);
+                    """
+                    : "SELECT 0;"
             ),
             SQLiteQuerySection(
                 name: "recentUpdates",
@@ -438,20 +467,25 @@ struct CodexDesktopStateReader {
                 ORDER BY updated_at DESC
                 LIMIT \(recentActivityThreadLimit);
                 """
-            ),
-            SQLiteQuerySection(
-                name: "recentLogs",
-                sql: """
-                SELECT thread_id
-                FROM logs
-                WHERE thread_id IS NOT NULL
-                  AND ts >= \(logCutoff)
-                GROUP BY thread_id;
-                """
             )
         ]
 
-        if !candidates.isEmpty {
+        if logQuerySource.isAvailable {
+            sections.append(
+                SQLiteQuerySection(
+                    name: "recentLogs",
+                    sql: """
+                    SELECT thread_id
+                    FROM \(logsViewName)
+                    WHERE thread_id IS NOT NULL
+                      AND ts >= \(logCutoff)
+                    GROUP BY thread_id;
+                    """
+                )
+            )
+        }
+
+        if !candidates.isEmpty, logQuerySource.isAvailable {
             let candidateList = candidates
                 .map(sqlQuoted)
                 .sorted()
@@ -465,7 +499,7 @@ struct CodexDesktopStateReader {
                             thread_id,
                             REPLACE(REPLACE(message, char(10), ' '), char(13), ' ') AS message,
                             ROW_NUMBER() OVER (PARTITION BY thread_id ORDER BY ts DESC, ts_nanos DESC, id DESC) AS row_number
-                        FROM logs
+                        FROM \(logsViewName)
                         WHERE thread_id IN (\(candidateList))
                           AND target = 'codex_core::stream_events_utils'
                           AND (
@@ -489,7 +523,7 @@ struct CodexDesktopStateReader {
                             message,
                             ts,
                             ROW_NUMBER() OVER (PARTITION BY thread_id ORDER BY ts DESC, ts_nanos DESC, id DESC) AS row_number
-                        FROM logs
+                        FROM \(logsViewName)
                         WHERE thread_id IN (\(candidateList))
                           AND target = 'codex_core::codex'
                           AND message LIKE 'Turn error:%'
@@ -500,22 +534,162 @@ struct CodexDesktopStateReader {
                     """
                 )
             )
+            sections.append(
+                SQLiteQuerySection(
+                    name: "latestTurnCompleted",
+                    sql: """
+                    WITH ranked AS (
+                        SELECT
+                            thread_id,
+                            ts,
+                            ROW_NUMBER() OVER (PARTITION BY thread_id ORDER BY ts DESC, ts_nanos DESC, id DESC) AS row_number
+                        FROM \(logsViewName)
+                        WHERE thread_id IN (\(candidateList))
+                          AND target = 'codex_app_server::outgoing_message'
+                          AND message = 'app-server event: turn/completed'
+                    )
+                    SELECT json_object('thread_id', thread_id, 'ts', ts)
+                    FROM ranked
+                    WHERE row_number = 1;
+                    """
+                )
+            )
         }
 
-        let sectionedOutput = try runSQLiteSections(sections, databaseURL: databaseURL)
+        let sectionedOutput = try runSQLiteSections(
+            sections,
+            databaseURL: databaseURL,
+            preludeSQL: logsBootstrapSQL(for: logQuerySource, viewName: logsViewName)
+        )
         let activeTurnCount = Int(sectionedOutput["activeTurnCount"]?.first ?? "") ?? 0
         let recentUpdatedThreadIDs = parseSQLiteLines(sectionedOutput["recentUpdates"] ?? [])
         let recentLoggedThreadIDs = parseSQLiteLines(sectionedOutput["recentLogs"] ?? [])
         let pendingLogRows = parsePendingLogRows(sectionedOutput["pendingLogs"] ?? [])
         let failedThreads = parseFailedThreads(sectionedOutput["failedThreads"] ?? [])
+        let latestTurnCompletedAtByThreadID = parseLatestTurnCompleted(sectionedOutput["latestTurnCompleted"] ?? [])
 
         return SnapshotQueryResult(
             activeTurnCount: activeTurnCount,
             recentUpdatedThreadIDs: recentUpdatedThreadIDs,
             recentLoggedThreadIDs: recentLoggedThreadIDs,
             pendingLogRows: pendingLogRows,
-            failedThreads: failedThreads
+            failedThreads: failedThreads,
+            latestTurnCompletedAtByThreadID: latestTurnCompletedAtByThreadID
         )
+    }
+
+    private func resolveLogQuerySource(stateDatabaseURL: URL) -> LogQuerySource {
+        if let messageColumn = logMessageColumn(in: stateDatabaseURL) {
+            return .embedded(messageColumn: messageColumn)
+        }
+
+        guard let logsDatabaseURL = locateLogsDatabaseCandidate(near: stateDatabaseURL),
+              let messageColumn = logMessageColumn(in: logsDatabaseURL)
+        else {
+            return .unavailable
+        }
+
+        return .attached(databaseURL: logsDatabaseURL, messageColumn: messageColumn)
+    }
+
+    private func locateLogsDatabaseCandidate(near stateDatabaseURL: URL) -> URL? {
+        let directoryURL = stateDatabaseURL.deletingLastPathComponent()
+        guard let candidateURLs = try? fileManager.contentsOfDirectory(
+            at: directoryURL,
+            includingPropertiesForKeys: [.contentModificationDateKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return nil
+        }
+
+        let logDatabaseURLs = candidateURLs
+            .filter { url in
+                url.lastPathComponent.hasPrefix("logs_") && url.pathExtension == "sqlite"
+            }
+            .sorted { lhs, rhs in
+                let lhsDate = (try? lhs.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+                let rhsDate = (try? rhs.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+                return lhsDate > rhsDate
+            }
+
+        return logDatabaseURLs.first
+    }
+
+    private func logMessageColumn(in databaseURL: URL) -> LogMessageColumn? {
+        guard let tableOutput = try? runSQLite(
+            sql: """
+            SELECT name
+            FROM sqlite_master
+            WHERE type = 'table'
+              AND name = 'logs';
+            """,
+            databaseURL: databaseURL
+        ) else {
+            return nil
+        }
+
+        let tableNames = parseSQLiteLines(tableOutput.split(separator: "\n").map(String.init))
+        guard tableNames.contains("logs"),
+              let pragmaOutput = try? runSQLite(sql: "PRAGMA table_info(logs);", databaseURL: databaseURL)
+        else {
+            return nil
+        }
+
+        let columnNames = Set<String>(
+            parseSQLiteLines(pragmaOutput.split(separator: "\n").map(String.init))
+                .compactMap { line in
+                    let columns = line.split(separator: "|", omittingEmptySubsequences: false)
+                    guard columns.count > 1 else {
+                        return nil
+                    }
+
+                    return String(columns[1])
+                }
+        )
+
+        if columnNames.contains(LogMessageColumn.message.rawValue) {
+            return .message
+        }
+
+        if columnNames.contains(LogMessageColumn.feedbackLogBody.rawValue) {
+            return .feedbackLogBody
+        }
+
+        return nil
+    }
+
+    private func logsBootstrapSQL(for source: LogQuerySource, viewName: String) -> String? {
+        switch source {
+        case .unavailable:
+            return nil
+        case let .embedded(messageColumn):
+            return """
+            CREATE TEMP VIEW \(viewName) AS
+            SELECT
+                id,
+                ts,
+                ts_nanos,
+                target,
+                \(messageColumn.rawValue) AS message,
+                thread_id,
+                process_uuid
+            FROM logs;
+            """
+        case let .attached(databaseURL, messageColumn):
+            return """
+            ATTACH DATABASE \(sqlQuoted(Self.sqliteDatabaseArgument(for: databaseURL))) AS logsdb;
+            CREATE TEMP VIEW \(viewName) AS
+            SELECT
+                id,
+                ts,
+                ts_nanos,
+                target,
+                \(messageColumn.rawValue) AS message,
+                thread_id,
+                process_uuid
+            FROM logsdb.logs;
+            """
+        }
     }
 
     private func parseSQLiteLines(_ lines: [String]) -> [String] {
@@ -558,6 +732,24 @@ struct CodexDesktopStateReader {
         }
 
         return failedThreads
+    }
+
+    private func parseLatestTurnCompleted(_ lines: [String]) -> [String: Date] {
+        var latestTurnCompletedAtByThreadID: [String: Date] = [:]
+
+        for line in lines {
+            guard let data = line.data(using: .utf8),
+                  let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let threadID = object["thread_id"] as? String,
+                  let timestamp = object["ts"] as? Double ?? (object["ts"] as? NSNumber)?.doubleValue
+            else {
+                continue
+            }
+
+            latestTurnCompletedAtByThreadID[threadID] = Date(timeIntervalSince1970: timestamp)
+        }
+
+        return latestTurnCompletedAtByThreadID
     }
 
     private func queryPendingThreadStates(
@@ -1051,15 +1243,26 @@ struct CodexDesktopStateReader {
 
     private func runSQLiteSections(
         _ sections: [SQLiteQuerySection],
-        databaseURL: URL
+        databaseURL: URL,
+        preludeSQL: String? = nil
     ) throws -> [String: [String]] {
         let markerPrefix = "__codextension_section__:"
-        let combinedSQL = sections
+        let sectionSQL = sections
             .map { section in
                 """
                 SELECT '\(markerPrefix)\(section.name)';
                 \(section.sql)
                 """
+            }
+            .joined(separator: "\n")
+        let combinedSQL = [preludeSQL, sectionSQL]
+            .compactMap { value in
+                guard let value else {
+                    return nil
+                }
+
+                let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+                return trimmed.isEmpty ? nil : trimmed
             }
             .joined(separator: "\n")
 
