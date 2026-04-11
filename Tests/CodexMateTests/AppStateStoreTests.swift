@@ -469,7 +469,7 @@ final class AppStateStoreTests: XCTestCase {
         XCTAssertEqual(store.recentThreads.first?.updatedAt, Date(timeIntervalSince1970: 250))
     }
 
-    func testReplaceRecentThreadsPreservesUnwatchedApprovalThreadOutsideAuthoritativeList() throws {
+    func testReplaceRecentThreadsKeepsListedApprovalThreadForConfiguredOmissionGrace() throws {
         var store = AppStateStore()
         store.replaceRecentThreads(with: [
             thread(id: "parent-thread", updatedAt: 150, status: .idle, cwd: "/tmp/project"),
@@ -485,14 +485,26 @@ final class AppStateStoreTests: XCTestCase {
             observedAt: Date(timeIntervalSince1970: 200)
         )
 
-        store.replaceRecentThreads(with: [
-            thread(id: "parent-thread", updatedAt: 250, status: .idle, cwd: "/tmp/project")
-        ])
+        store.replaceRecentThreads(
+            with: [
+                thread(id: "parent-thread", updatedAt: 250, status: .idle, cwd: "/tmp/project")
+            ],
+            omissionGraceCount: 1
+        )
 
         let child = try XCTUnwrap(store.recentThreads.first(where: { $0.id == "child-thread" }))
         XCTAssertEqual(Set(store.recentThreads.map(\.id)), ["parent-thread", "child-thread"])
         XCTAssertEqual(child.displayStatus, .needsApproval)
         XCTAssertEqual(child.sessionPath, "/tmp/child-thread.jsonl")
+
+        store.replaceRecentThreads(
+            with: [
+                thread(id: "parent-thread", updatedAt: 260, status: .idle, cwd: "/tmp/project")
+            ],
+            omissionGraceCount: 1
+        )
+
+        XCTAssertEqual(store.recentThreads.map(\.id), ["parent-thread"])
     }
 
     func testReplaceRecentThreadsPrunesWatchedIdleThreadMissingFromAuthoritativeList() {
@@ -501,6 +513,18 @@ final class AppStateStoreTests: XCTestCase {
 
         store.replaceRecentThreads(with: [])
 
+        XCTAssertTrue(store.recentThreads.isEmpty)
+    }
+
+    func testReplaceRecentThreadsKeepsListedIdleThreadForConfiguredOmissionGrace() {
+        var store = AppStateStore()
+        store.replaceRecentThreads(with: [thread(id: "thread-1", updatedAt: 100, status: .idle)])
+
+        store.replaceRecentThreads(with: [], omissionGraceCount: 1)
+        XCTAssertEqual(store.recentThreads.map(\.id), ["thread-1"])
+        XCTAssertEqual(store.recentThreads.first?.authoritativeListOmissionCount, 1)
+
+        store.replaceRecentThreads(with: [], omissionGraceCount: 1)
         XCTAssertTrue(store.recentThreads.isEmpty)
     }
 
@@ -531,14 +555,19 @@ final class AppStateStoreTests: XCTestCase {
         XCTAssertTrue(store.recentThreads.isEmpty)
     }
 
-    func testReplaceRecentThreadsPreservesWatchedRunningThreadMissingFromAuthoritativeList() {
+    func testReplaceRecentThreadsKeepsListedRunningThreadForConfiguredOmissionGrace() {
         var store = AppStateStore()
         store.markWatched(thread: thread(id: "thread-1", updatedAt: 100, status: .active(flags: [])))
 
-        store.replaceRecentThreads(with: [])
+        store.replaceRecentThreads(with: [], omissionGraceCount: 1)
 
         XCTAssertEqual(store.recentThreads.map(\.id), ["thread-1"])
         XCTAssertEqual(store.recentThreads.first?.displayStatus, .running)
+        XCTAssertEqual(store.recentThreads.first?.authoritativeListOmissionCount, 1)
+
+        store.replaceRecentThreads(with: [], omissionGraceCount: 1)
+
+        XCTAssertTrue(store.recentThreads.isEmpty)
     }
 
     func testDesktopPendingOverlayUpdatesUnwatchedThreadFromNotLoaded() {

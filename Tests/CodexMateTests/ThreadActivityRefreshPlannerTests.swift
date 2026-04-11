@@ -18,11 +18,24 @@ final class ThreadActivityRefreshPlannerTests: XCTestCase {
         XCTAssertTrue(approvalRefresh)
     }
 
-    func testShouldNotRefreshThreadsForViewOnlyOrStaleUnknownActivity() {
+    func testShouldRefreshThreadsForRecentlyViewedUnknownThread() {
+        XCTAssertTrue(
+            ThreadActivityRefreshPlanner.shouldRefreshThreads(
+                recentThreadIDs: ["thread-1", "thread-2"],
+                latestViewedAtByThreadID: [
+                    "thread-3": Date(timeIntervalSince1970: 205),
+                ],
+                now: Date(timeIntervalSince1970: 210),
+                discoveryLookbackInterval: 30
+            )
+        )
+    }
+
+    func testShouldNotRefreshThreadsForStaleOrAlreadyTrackedDiscoverySignals() {
         let cases: [([String: Date], Bool)] = [
             ([
                 "thread-2": Date(timeIntervalSince1970: 100),
-                "thread-3": Date(timeIntervalSince1970: 200),
+                "thread-3": Date(timeIntervalSince1970: 100),
             ], false),
             ([
                 "thread-1": Date(timeIntervalSince1970: 100),

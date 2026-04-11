@@ -162,6 +162,7 @@ struct AppStateStore {
         var updatedAt: Date
         var statusUpdatedAt: Date = .distantPast
         var authoritativeListPresence: AuthoritativeListPresence = .listed
+        var authoritativeListOmissionCount = 0
         var isWatched: Bool
         var runtimePhase: RuntimePhase = .none
         var pendingRequestKind: PendingRequestKind?
@@ -378,7 +379,7 @@ struct AppStateStore {
         lastDiagnostic = compact
     }
 
-    mutating func replaceRecentThreads(with threads: [CodexThread]) {
+    mutating func replaceRecentThreads(with threads: [CodexThread], omissionGraceCount: Int = 0) {
         let observedAt = Date()
         pruneArchivedThreadTombstones(observedAt: observedAt)
         var updatedThreads: [String: ThreadRow] = [:]
@@ -403,6 +404,7 @@ struct AppStateStore {
             let newStatus = ThreadStatus(threadStatus: thread.status)
             row.listedStatus = newStatus
             row.authoritativeListPresence = .listed
+            row.authoritativeListOmissionCount = 0
             row.updatedAt = max(row.updatedAt, incomingUpdatedAt)
             row.statusUpdatedAt = max(row.statusUpdatedAt, incomingUpdatedAt)
             row.applyListedStatus(newStatus, observedAt: incomingUpdatedAt)
@@ -435,6 +437,19 @@ struct AppStateStore {
 
         for (threadID, row) in threadsByID where updatedThreads[threadID] == nil {
             guard Self.shouldRetainThreadOutsideAuthoritativeList(row) else {
+                if row.authoritativeListPresence != .listed {
+                    continue
+                }
+
+                let nextOmissionCount = row.authoritativeListOmissionCount + 1
+                guard omissionGraceCount > 0,
+                      nextOmissionCount <= omissionGraceCount else {
+                    continue
+                }
+
+                var retainedRow = row
+                retainedRow.authoritativeListOmissionCount = nextOmissionCount
+                updatedThreads[threadID] = retainedRow
                 continue
             }
 
@@ -470,6 +485,7 @@ struct AppStateStore {
         row.statusUpdatedAt = max(row.statusUpdatedAt, incomingUpdatedAt)
         row.listedStatus = newStatus
         row.authoritativeListPresence = .listed
+        row.authoritativeListOmissionCount = 0
         row.isWatched = true
         row.lastRuntimeEventAt = max(row.lastRuntimeEventAt ?? .distantPast, incomingUpdatedAt)
         row.applyListedStatus(newStatus, observedAt: incomingUpdatedAt)
@@ -514,6 +530,7 @@ struct AppStateStore {
         if existingRow == nil || row.authoritativeListPresence == .pendingInclusion {
             row.authoritativeListPresence = .pendingInclusion
         }
+        row.authoritativeListOmissionCount = 0
         row.updatedAt = max(row.updatedAt, incomingUpdatedAt)
         row.statusUpdatedAt = max(row.statusUpdatedAt, incomingUpdatedAt)
         row.applyListedStatus(newStatus, observedAt: incomingUpdatedAt)
@@ -1024,6 +1041,7 @@ struct AppStateStore {
             if existingRow == nil || row.authoritativeListPresence == .pendingInclusion {
                 row.authoritativeListPresence = .pendingInclusion
             }
+            row.authoritativeListOmissionCount = 0
             row.isWatched = true
             row.applyRuntimeStatus(runtimeStatus, observedAt: observedAt)
             row.activeTurnID = updatedActiveTurnID(existing: row.activeTurnID, status: row.displayStatus, allowClearing: false)
@@ -1038,6 +1056,7 @@ struct AppStateStore {
             var row = threadsByID[notification.threadId] ?? defaultThreadRow(threadID: notification.threadId)
             let previousStatus = row.displayStatus
             row.isWatched = true
+            row.authoritativeListOmissionCount = 0
             let runtimeStatus = ThreadStatus(threadStatus: notification.status)
             row.applyRuntimeStatus(runtimeStatus, observedAt: observedAt)
             row.statusUpdatedAt = observedAt
@@ -1057,6 +1076,7 @@ struct AppStateStore {
             var row = threadsByID[notification.threadId] ?? defaultThreadRow(threadID: notification.threadId)
             let previousStatus = row.displayStatus
             row.isWatched = true
+            row.authoritativeListOmissionCount = 0
             row.activeTurnID = notification.turn.id
             row.statusUpdatedAt = observedAt
             row.applyRuntimeStatus(.running, observedAt: observedAt)
@@ -1071,6 +1091,7 @@ struct AppStateStore {
             var row = threadsByID[notification.threadId] ?? defaultThreadRow(threadID: notification.threadId)
             let previousStatus = row.displayStatus
             row.isWatched = true
+            row.authoritativeListOmissionCount = 0
             row.activeTurnID = nil
             row.statusUpdatedAt = observedAt
             row.lastTerminalActivityAt = observedAt
@@ -1100,6 +1121,7 @@ struct AppStateStore {
             var row = threadsByID[notification.threadId] ?? defaultThreadRow(threadID: notification.threadId)
             let previousStatus = row.displayStatus
             row.isWatched = true
+            row.authoritativeListOmissionCount = 0
             row.activeTurnID = nil
             row.statusUpdatedAt = observedAt
             row.lastTerminalActivityAt = observedAt
@@ -1131,6 +1153,7 @@ struct AppStateStore {
             updateThread(threadID: request.threadId) { row in
                 let observedAt = Date()
                 row.isWatched = true
+                row.authoritativeListOmissionCount = 0
                 row.activeTurnID = request.turnId
                 row.status = .waitingForInput
                 row.pendingRequestKind = .userInput
@@ -1143,6 +1166,7 @@ struct AppStateStore {
             updateThread(threadID: request.threadId) { row in
                 let observedAt = Date()
                 row.isWatched = true
+                row.authoritativeListOmissionCount = 0
                 row.activeTurnID = request.turnId
                 row.status = .needsApproval
                 row.pendingRequestKind = .approval
@@ -1455,11 +1479,7 @@ struct AppStateStore {
     }
 
     private static func shouldRetainThreadOutsideAuthoritativeList(_ row: ThreadRow) -> Bool {
-        if row.authoritativeListPresence == .pendingInclusion {
-            return true
-        }
-
-        return shouldRetainThreadOutsidePendingWindow(row)
+        row.authoritativeListPresence == .pendingInclusion
     }
 
     private static func shouldRetainThreadOutsidePendingWindow(_ row: ThreadRow) -> Bool {

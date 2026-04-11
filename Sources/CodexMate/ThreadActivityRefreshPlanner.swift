@@ -9,8 +9,22 @@ struct ThreadActivityRefreshPlanner {
         now: Date = Date(),
         discoveryLookbackInterval: TimeInterval = 90
     ) -> Set<String> {
-        recentActivityThreadIDs
+        let discoveryCutoff = now.addingTimeInterval(-discoveryLookbackInterval)
+        let recentlyViewedUnknownThreadIDs: Set<String> = Set(
+            latestViewedAtByThreadID.compactMap { entry in
+                let (threadID, viewedAt) = entry
+                guard viewedAt >= discoveryCutoff,
+                      !recentThreadIDs.contains(threadID) else {
+                    return nil
+                }
+
+                return threadID
+            }
+        )
+
+        return recentActivityThreadIDs
             .union(attentionThreadIDs)
+            .union(recentlyViewedUnknownThreadIDs)
             .subtracting(recentThreadIDs)
     }
 

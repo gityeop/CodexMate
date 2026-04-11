@@ -115,14 +115,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         client: client,
         fetchPageLimit: ThreadListDisplay.fetchPageLimit
     )
-    private lazy var recentThreadListing = FallbackRecentThreadListing(
-        primary: appServerRecentThreadListing,
-        fallback: DesktopStateRecentThreadListing(
-            codexDirectoryURLProvider: { [codexHomeStore] in
-                codexHomeStore.currentDirectoryURL
-            }
-        )
-    )
     private lazy var desktopThreadMetadataReader = DesktopStateThreadMetadataReader(
         codexDirectoryURLProvider: { [codexHomeStore] in
             codexHomeStore.currentDirectoryURL
@@ -135,7 +127,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     )
     private lazy var controller = MenubarController(
         desktopActivityLoader: desktopActivityService,
-        recentThreadListing: recentThreadListing,
+        recentThreadListing: appServerRecentThreadListing,
         threadMetadataReader: desktopThreadMetadataReader,
         projectCatalogLoader: asyncProjectCatalogLoader,
         initialThreadReadMarkers: AppDelegate.loadThreadReadMarkers(),
@@ -144,6 +136,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             maxTrackedThreads: ThreadListDisplay.maxTrackedThreads,
             projectLimit: preferences.projectLimit,
             visibleThreadLimit: ThreadListDisplay.visibleThreadLimit,
+            authoritativeListOmissionGraceCount: 2,
             maxPendingDiscoveredThreads: RetentionPolicy.maxPendingDiscoveredThreads,
             pendingDiscoveredThreadTTL: RetentionPolicy.pendingDiscoveredThreadSeconds,
             threadReadMarkerRetentionSeconds: RetentionPolicy.threadReadMarkerSeconds
@@ -621,7 +614,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             requestInitialSubscriptionWarmup()
         } catch {
             completeInitialThreadBootstrap(requestBackfill: false)
-            controller.recordDiagnostic("Initial app-server connection failed; continuing desktop-state refresh via fallback")
+            controller.recordDiagnostic("Initial app-server connection failed; thread list unavailable until reconnect")
             controller.setConnection(.failed(message: error.localizedDescription))
             renderMenu()
             scheduleRefreshTimerIfNeeded()
@@ -659,7 +652,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         completeInitialThreadBootstrap(requestBackfill: false)
 
         let message = reason ?? "app-server process exited"
-        controller.recordDiagnostic("app-server terminated; continuing desktop-state refresh via fallback")
+        controller.recordDiagnostic("app-server terminated; authoritative thread list unavailable until reconnect")
         controller.setConnection(.failed(message: message))
         scheduleRefreshTimerIfNeeded()
         requestDesktopActivityRefresh()

@@ -449,6 +449,29 @@ final class CodexDesktopStateReaderTests: XCTestCase {
         )
     }
 
+    func testParseSessionPendingStateTreatsCompletedPlanTurnAsWaitingForUser() {
+        let contents = """
+        {"timestamp":"2026-04-11T13:37:39.449Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-1","collaboration_mode_kind":"plan"}}
+        {"timestamp":"2026-04-11T13:40:09.000Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-1"}}
+        """
+
+        let state = CodexDesktopStateReader.parseSessionPendingState(from: contents)
+
+        XCTAssertEqual(state, .init(waitingForInput: true, needsApproval: false, hasActiveTask: false))
+    }
+
+    func testParseSessionPendingStateClearsCompletedPlanWaitAfterUserReplies() {
+        let contents = """
+        {"timestamp":"2026-04-11T13:37:39.449Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-1","collaboration_mode_kind":"plan"}}
+        {"timestamp":"2026-04-11T13:40:09.000Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-1"}}
+        {"timestamp":"2026-04-11T13:40:10.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"continue"}]}}
+        """
+
+        let state = CodexDesktopStateReader.parseSessionPendingState(from: contents)
+
+        XCTAssertEqual(state, .init(waitingForInput: false, needsApproval: false, hasActiveTask: false))
+    }
+
     func testParseSessionPendingStateClearsActiveTaskWhenTurnIsAborted() {
         let contents = """
         {"timestamp":"2026-03-11T12:25:24.936Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-1"}}
@@ -714,6 +737,40 @@ final class CodexDesktopStateReaderTests: XCTestCase {
         XCTAssertEqual(snapshot?.runningThreadIDs, [])
     }
 
+    func testSessionFallbackIgnoresStaleCompletedPlanWaitWhenAuthoritativeThreadIsNewer() throws {
+        let tempDirectoryURL = FileManager.default.temporaryDirectory
+            .appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: tempDirectoryURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDirectoryURL) }
+
+        let sessionURL = tempDirectoryURL.appending(path: "thread-1.jsonl")
+        try """
+        {"timestamp":"2026-04-11T13:37:39.449Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-1","collaboration_mode_kind":"plan"}}
+        {"timestamp":"2026-04-11T13:40:09.000Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-1"}}
+        """.write(to: sessionURL, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes(
+            [.modificationDate: Date(timeIntervalSince1970: 100)],
+            ofItemAtPath: sessionURL.path
+        )
+
+        let reader = CodexDesktopStateReader()
+
+        let snapshot = reader.sessionFallbackSnapshot(
+            candidateSessionContexts: [
+                "thread-1": ThreadSessionContext(
+                    path: sessionURL.path,
+                    authoritativeUpdatedAt: Date(timeIntervalSince1970: 200),
+                    authoritativeStatusIsPending: false
+                )
+            ],
+            databaseError: "missing db"
+        )
+
+        XCTAssertEqual(snapshot?.waitingForInputThreadIDs, [])
+        XCTAssertEqual(snapshot?.approvalThreadIDs, [])
+        XCTAssertEqual(snapshot?.runningThreadIDs, [])
+    }
+
     func testThreadsLoadSubagentMetadata() throws {
         let tempDirectoryURL = FileManager.default.temporaryDirectory
             .appending(path: UUID().uuidString)
@@ -820,6 +877,105 @@ final class CodexDesktopStateReaderTests: XCTestCase {
         let threads = try reader.recentThreads(limit: 2)
 
         XCTAssertEqual(threads.map(\.id), ["thread-2", "thread-3"])
+    }
+
+    func testThreadsFallsBackToSessionMetadataWhenStateRowIsMissing() throws {
+        let tempDirectoryURL = FileManager.default.temporaryDirectory
+            .appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: tempDirectoryURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDirectoryURL) }
+
+        let databaseURL = tempDirectoryURL.appending(path: "state.sqlite")
+        try createStateDatabase(
+            at: databaseURL,
+            sql: """
+            CREATE TABLE threads (
+                id TEXT PRIMARY KEY,
+                first_user_message TEXT NOT NULL DEFAULT '',
+                title TEXT NOT NULL DEFAULT '',
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                cwd TEXT NOT NULL,
+                rollout_path TEXT,
+                source TEXT NOT NULL DEFAULT 'vscode',
+                agent_role TEXT,
+                agent_nickname TEXT,
+                archived INTEGER NOT NULL DEFAULT 0
+            );
+            """
+        )
+
+        try """
+        {"id":"thread-missing","thread_name":"Recovered Thread","updated_at":"2026-04-11T13:40:10.000Z"}
+        """.write(
+            to: tempDirectoryURL.appending(path: "session_index.jsonl"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        let sessionDirectoryURL = tempDirectoryURL
+            .appending(path: "sessions")
+            .appending(path: "2026")
+            .appending(path: "04")
+            .appending(path: "11")
+        try FileManager.default.createDirectory(at: sessionDirectoryURL, withIntermediateDirectories: true)
+
+        let sessionURL = sessionDirectoryURL.appending(path: "rollout-2026-04-11T22-37-35-thread-missing.jsonl")
+        try """
+        {"timestamp":"2026-04-11T13:37:39.444Z","type":"session_meta","payload":{"id":"thread-missing","timestamp":"2026-04-11T13:37:35.513Z","cwd":"/tmp/recovered","source":"vscode"}}
+        {"timestamp":"2026-04-11T13:37:39.449Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Recovered preview\\n"}]}}
+        """.write(to: sessionURL, atomically: true, encoding: .utf8)
+
+        let reader = CodexDesktopStateReader(
+            stateDatabaseURLOverride: databaseURL,
+            codexDirectoryURLOverride: tempDirectoryURL
+        )
+        let threads = try reader.threads(threadIDs: ["thread-missing"])
+
+        XCTAssertEqual(threads.map(\.id), ["thread-missing"])
+        XCTAssertEqual(threads.first?.cwd, "/tmp/recovered")
+        XCTAssertEqual(threads.first?.name, "Recovered Thread")
+        XCTAssertEqual(threads.first?.preview, "Recovered Thread")
+        XCTAssertEqual(
+            threads.first?.path.map { URL(fileURLWithPath: $0).standardizedFileURL.path },
+            sessionURL.standardizedFileURL.path
+        )
+        XCTAssertEqual(threads.first?.status, .notLoaded)
+    }
+
+    func testArchivedThreadIDsReturnsArchivedRows() throws {
+        let tempDirectoryURL = FileManager.default.temporaryDirectory
+            .appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: tempDirectoryURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDirectoryURL) }
+
+        let databaseURL = tempDirectoryURL.appending(path: "state.sqlite")
+        try createStateDatabase(
+            at: databaseURL,
+            sql: """
+            CREATE TABLE threads (
+                id TEXT PRIMARY KEY,
+                first_user_message TEXT NOT NULL DEFAULT '',
+                title TEXT NOT NULL DEFAULT '',
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                cwd TEXT NOT NULL,
+                rollout_path TEXT,
+                archived INTEGER NOT NULL DEFAULT 0
+            );
+            INSERT INTO threads (id, first_user_message, title, created_at, updated_at, cwd, rollout_path, archived)
+            VALUES
+                ('thread-live', 'Live', 'Live', 100, 150, '/tmp/live', NULL, 0),
+                ('thread-archived', 'Archived', 'Archived', 100, 200, '/tmp/archived', NULL, 1);
+            """
+        )
+
+        let reader = CodexDesktopStateReader(stateDatabaseURLOverride: databaseURL)
+
+        XCTAssertEqual(
+            try reader.archivedThreadIDs(threadIDs: ["thread-live", "thread-archived"]),
+            ["thread-archived"]
+        )
     }
 
     func testSnapshotDoesNotTreatPendingSessionTaskAsRunning() throws {

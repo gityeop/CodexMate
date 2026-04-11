@@ -1,7 +1,7 @@
 import Foundation
 
 protocol DesktopActivityLoading: Sendable {
-    func load(candidateSessionPaths: [String: String?], now: Date) async -> DesktopActivityUpdate
+    func load(candidateSessionContexts: [String: ThreadSessionContext], now: Date) async -> DesktopActivityUpdate
 }
 
 protocol RecentThreadListing: Sendable {
@@ -10,6 +10,13 @@ protocol RecentThreadListing: Sendable {
 
 protocol ThreadMetadataReading: Sendable {
     func threads(threadIDs: Set<String>) async throws -> [CodexThread]
+    func archivedThreadIDs(threadIDs: Set<String>) async throws -> Set<String>
+}
+
+extension ThreadMetadataReading {
+    func archivedThreadIDs(threadIDs: Set<String>) async throws -> Set<String> {
+        []
+    }
 }
 
 protocol ProjectCatalogLoading: Sendable {
@@ -17,18 +24,6 @@ protocol ProjectCatalogLoading: Sendable {
 }
 
 extension DesktopActivityService: DesktopActivityLoading {}
-
-actor DesktopStateRecentThreadListing: RecentThreadListing {
-    private let reader: CodexDesktopStateReader
-
-    init(codexDirectoryURLProvider: @escaping @Sendable () -> URL) {
-        reader = CodexDesktopStateReader(codexDirectoryURLProvider: codexDirectoryURLProvider)
-    }
-
-    func recentThreads(limit: Int) async throws -> [CodexThread] {
-        try reader.recentThreads(limit: limit)
-    }
-}
 
 actor DesktopStateThreadMetadataReader: ThreadMetadataReading {
     private let reader: CodexDesktopStateReader
@@ -39,6 +34,10 @@ actor DesktopStateThreadMetadataReader: ThreadMetadataReading {
 
     func threads(threadIDs: Set<String>) async throws -> [CodexThread] {
         try reader.threads(threadIDs: threadIDs)
+    }
+
+    func archivedThreadIDs(threadIDs: Set<String>) async throws -> Set<String> {
+        try reader.archivedThreadIDs(threadIDs: threadIDs)
     }
 }
 
@@ -87,105 +86,12 @@ actor AppServerRecentThreadListing: RecentThreadListing {
     }
 }
 
-@MainActor
-final class FallbackRecentThreadListing: RecentThreadListing, @unchecked Sendable {
-    private let primary: any RecentThreadListing
-    private let fallback: any RecentThreadListing
-
-    init(primary: any RecentThreadListing, fallback: any RecentThreadListing) {
-        self.primary = primary
-        self.fallback = fallback
-    }
-
-    func recentThreads(limit: Int) async throws -> [CodexThread] {
-        async let primaryOutcome = fetchRecentThreadsResult(using: primary, limit: limit)
-        async let fallbackOutcome = fetchRecentThreadsResult(using: fallback, limit: limit)
-
-        switch await primaryOutcome {
-        case let .success(primaryThreads):
-            switch await fallbackOutcome {
-            case let .success(fallbackThreads):
-                return mergedThreads(
-                    primaryThreads: primaryThreads,
-                    fallbackThreads: fallbackThreads,
-                    limit: limit
-                )
-            case .failure:
-                return Array(primaryThreads.prefix(limit))
-            }
-        case let .failure(primaryError):
-            switch await fallbackOutcome {
-            case let .success(fallbackThreads):
-                return Array(fallbackThreads.prefix(limit))
-            case .failure:
-                throw primaryError
-            }
-        }
-    }
-
-    private func mergedThreads(
-        primaryThreads: [CodexThread],
-        fallbackThreads: [CodexThread],
-        limit: Int
-    ) -> [CodexThread] {
-        guard !primaryThreads.isEmpty else {
-            return Array(fallbackThreads.prefix(limit))
-        }
-
-        let fallbackThreadsByID = Dictionary(uniqueKeysWithValues: fallbackThreads.map { ($0.id, $0) })
-        var mergedThreadsByID: [String: CodexThread] = [:]
-
-        for thread in primaryThreads {
-            guard mergedThreadsByID[thread.id] == nil else {
-                continue
-            }
-
-            if let fallbackThread = fallbackThreadsByID[thread.id] {
-                mergedThreadsByID[thread.id] = thread.mergingMetadata(from: fallbackThread)
-            } else {
-                mergedThreadsByID[thread.id] = thread
-            }
-        }
-
-        for thread in fallbackThreads {
-            guard mergedThreadsByID[thread.id] == nil else {
-                continue
-            }
-
-            mergedThreadsByID[thread.id] = thread
-        }
-
-        return mergedThreadsByID.values
-            .sorted(by: Self.isHigherPriorityRecentThread)
-            .prefix(max(0, limit))
-            .map { $0 }
-    }
-
-    private static func isHigherPriorityRecentThread(_ lhs: CodexThread, _ rhs: CodexThread) -> Bool {
-        if lhs.updatedAt == rhs.updatedAt {
-            return lhs.displayTitle.localizedCaseInsensitiveCompare(rhs.displayTitle) == .orderedAscending
-        }
-
-        return lhs.updatedAt > rhs.updatedAt
-    }
-
-    private func fetchRecentThreadsResult(
-        using listing: any RecentThreadListing,
-        limit: Int
-    ) async -> Result<[CodexThread], Error> {
-        do {
-            return .success(try await listing.recentThreads(limit: limit))
-        } catch {
-            return .failure(error)
-        }
-    }
-}
-
 struct MenubarControllerConfiguration {
     let initialFetchLimit: Int
     let maxTrackedThreads: Int
     let projectLimit: Int
     let visibleThreadLimit: Int
+    let authoritativeListOmissionGraceCount: Int
     let maxPendingDiscoveredThreads: Int
     let pendingDiscoveredThreadTTL: TimeInterval
     let threadReadMarkerRetentionSeconds: TimeInterval
@@ -270,9 +176,10 @@ struct MenubarPreparedSnapshot: Equatable {
 
 @MainActor
 final class MenubarController {
-    private let loadDesktopActivity: @Sendable ([String: String?], Date) async -> DesktopActivityUpdate
+    private let loadDesktopActivity: @Sendable ([String: ThreadSessionContext], Date) async -> DesktopActivityUpdate
     private let loadRecentThreads: @Sendable (Int) async throws -> [CodexThread]
     private let loadThreadsByID: (Set<String>) async throws -> [CodexThread]
+    private let loadArchivedThreadIDs: (Set<String>) async throws -> Set<String>
     private let loadProjectCatalog: () async throws -> CodexDesktopProjectCatalog
     private let configuration: MenubarControllerConfiguration
     private let now: () -> Date
@@ -291,14 +198,17 @@ final class MenubarController {
         configuration: MenubarControllerConfiguration,
         now: @escaping () -> Date = Date.init
     ) {
-        self.loadDesktopActivity = { candidateSessionPaths, now in
-            await desktopActivityLoader.load(candidateSessionPaths: candidateSessionPaths, now: now)
+        self.loadDesktopActivity = { candidateSessionContexts, now in
+            await desktopActivityLoader.load(candidateSessionContexts: candidateSessionContexts, now: now)
         }
         self.loadRecentThreads = { limit in
             try await recentThreadListing.recentThreads(limit: limit)
         }
         self.loadThreadsByID = { threadIDs in
             try await threadMetadataReader.threads(threadIDs: threadIDs)
+        }
+        self.loadArchivedThreadIDs = { threadIDs in
+            try await threadMetadataReader.archivedThreadIDs(threadIDs: threadIDs)
         }
         self.loadProjectCatalog = {
             try await projectCatalogLoader.loadProjectCatalog()
@@ -358,45 +268,50 @@ final class MenubarController {
 
     func refreshThreads() async throws -> MenubarControllerEffects {
         let threads = try await hydratedRecentThreads(limit: configuration.maxTrackedThreads)
-        let authoritativeThreadIDs = Set(threads.map(\.id))
-        let omittedListedThreadIDs = listedThreadIDsMissingFromAuthoritativeList(keeping: authoritativeThreadIDs)
-        var effects = recordDiscoveredThreadRefreshResult(threads: threads)
+        let effects = recordDiscoveredThreadRefreshResult(threads: threads)
         projectCatalog = (try? await loadProjectCatalog()) ?? .empty
-        state.replaceRecentThreads(with: threads)
-        let omissionEffects = await pruneAuthoritativeListOmissions(omittedListedThreadIDs)
-        effects.diagnostics.append(contentsOf: omissionEffects.diagnostics)
-        effects.shouldRequestThreadRefresh = effects.shouldRequestThreadRefresh
-            || omissionEffects.shouldRequestThreadRefresh
-        effects.shouldRequestDesktopActivityRefresh = effects.shouldRequestDesktopActivityRefresh
-            || omissionEffects.shouldRequestDesktopActivityRefresh
-        effects.shouldBoostThreadDiscovery = effects.shouldBoostThreadDiscovery
-            || omissionEffects.shouldBoostThreadDiscovery
+        state.replaceRecentThreads(
+            with: threads,
+            omissionGraceCount: configuration.authoritativeListOmissionGraceCount
+        )
         synchronizePendingAuthoritativeThreads()
         return effects
     }
 
     func pruneThreadsMissingFromDesktopState() async -> MenubarControllerEffects {
+        let rowsByID = Dictionary(uniqueKeysWithValues: state.recentThreads.map { ($0.id, $0) })
         let pruneGraceCutoff = now().addingTimeInterval(-configuration.pendingDiscoveredThreadTTL)
-        let candidateThreadIDs: Set<String> = Set(
-            state.recentThreads
+        let staleThreadIDs = Set(
+            rowsByID.values
                 .filter { $0.updatedAt <= pruneGraceCutoff }
                 .map(\.id)
         )
+        let listedThreadIDs = Set(
+            rowsByID.values.compactMap { row in
+                row.authoritativeListPresence == .listed ? row.id : nil
+            }
+        )
+        let candidateThreadIDs = staleThreadIDs.union(listedThreadIDs)
 
         guard !candidateThreadIDs.isEmpty else {
             return MenubarControllerEffects()
         }
 
         do {
+            let archivedThreadIDs = try await loadArchivedThreadIDs(candidateThreadIDs)
             let presentThreadIDs = Set(try await loadThreadsByID(candidateThreadIDs).map(\.id))
-            let missingThreadIDs = candidateThreadIDs.subtracting(presentThreadIDs)
+            let missingThreadIDs = staleThreadIDs
+                .subtracting(presentThreadIDs)
+                .subtracting(archivedThreadIDs)
+            let removedThreadIDs = archivedThreadIDs.union(missingThreadIDs)
 
-            guard !missingThreadIDs.isEmpty else {
+            guard !removedThreadIDs.isEmpty else {
                 return MenubarControllerEffects()
             }
 
-            state.removeThreads(threadIDs: missingThreadIDs)
-            let diagnostic = "desktop pruned missing threads=\(debugThreadIDs(missingThreadIDs))"
+            state.removeThreads(threadIDs: removedThreadIDs)
+            let diagnostic = "desktop pruned archived=\(debugThreadIDs(archivedThreadIDs)) "
+                + "missing=\(debugThreadIDs(missingThreadIDs))"
             state.recordDiagnostic(diagnostic)
             return MenubarControllerEffects(diagnostics: [diagnostic])
         } catch {
@@ -411,11 +326,20 @@ final class MenubarController {
         synchronizePendingAuthoritativeThreads()
 
         let trackedThreads = state.recentThreads
-        let candidateSessionPaths = Dictionary(
-            uniqueKeysWithValues: trackedThreads.map { ($0.id, $0.sessionPath) }
+        let candidateSessionContexts = Dictionary(
+            uniqueKeysWithValues: trackedThreads.map { row in
+                (
+                    row.id,
+                    ThreadSessionContext(
+                        path: row.sessionPath,
+                        authoritativeUpdatedAt: row.updatedAt,
+                        authoritativeStatusIsPending: row.listedStatus.isPending
+                    )
+                )
+            }
         )
         let activityObservedAt = now()
-        let update = await loadDesktopActivity(candidateSessionPaths, activityObservedAt)
+        let update = await loadDesktopActivity(candidateSessionContexts, activityObservedAt)
         let isConnected = state.connection.isConnected
         let recentThreadIDs = Set(trackedThreads.map(\.id))
         let attentionThreadIDs = Set(update.runtimeSnapshot?.waitingForInputThreadIDs ?? [])
@@ -423,7 +347,7 @@ final class MenubarController {
             .union(Set(update.runtimeSnapshot?.failedThreads.keys.map { $0 } ?? []))
         let discoveredThreadIDs = ThreadActivityRefreshPlanner.discoveredThreadIDsNeedingRefresh(
             recentThreadIDs: recentThreadIDs,
-            latestViewedAtByThreadID: update.latestViewedAtByThreadID,
+            latestViewedAtByThreadID: update.latestTurnStartedAtByThreadID,
             recentActivityThreadIDs: update.runtimeSnapshot?.recentActivityThreadIDs ?? [],
             attentionThreadIDs: attentionThreadIDs,
             now: activityObservedAt
@@ -651,44 +575,6 @@ final class MenubarController {
             diagnostics: [diagnostic],
             shouldBoostThreadDiscovery: !resolution.missingThreadIDs.isEmpty
         )
-    }
-
-    private func listedThreadIDsMissingFromAuthoritativeList(keeping threadIDs: Set<String>) -> Set<String> {
-        Set(
-            state.recentThreads.compactMap { thread in
-                guard thread.authoritativeListPresence == .listed,
-                      thread.parentThreadID == nil,
-                      !threadIDs.contains(thread.id) else {
-                    return nil
-                }
-
-                return thread.id
-            }
-        )
-    }
-
-    private func pruneAuthoritativeListOmissions(_ threadIDs: Set<String>) async -> MenubarControllerEffects {
-        guard !threadIDs.isEmpty else {
-            return MenubarControllerEffects()
-        }
-
-        do {
-            let presentThreadIDs = Set(try await loadThreadsByID(threadIDs).map(\.id))
-            let missingThreadIDs = threadIDs.subtracting(presentThreadIDs)
-
-            guard !missingThreadIDs.isEmpty else {
-                return MenubarControllerEffects()
-            }
-
-            state.archiveThreads(threadIDs: missingThreadIDs)
-            let diagnostic = "thread/list pruned missing listed threads=\(debugThreadIDs(missingThreadIDs))"
-            state.recordDiagnostic(diagnostic)
-            return MenubarControllerEffects(diagnostics: [diagnostic])
-        } catch {
-            let diagnostic = "thread/list omission prune skipped: \(error.localizedDescription)"
-            state.recordDiagnostic(diagnostic)
-            return MenubarControllerEffects(diagnostics: [diagnostic])
-        }
     }
 
     private func seedDiscoveredThreads(_ threadIDs: Set<String>) async -> MenubarControllerEffects {

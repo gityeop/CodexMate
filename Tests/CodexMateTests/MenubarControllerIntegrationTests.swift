@@ -832,12 +832,14 @@ final class MenubarControllerIntegrationTests: XCTestCase {
         XCTAssertEqual(snapshot.projectSections.first?.threads.map(\.id), ["survivor-thread"])
     }
 
-    func testRefreshThreadsPrunesWatchedArchivedThreadWhenAuthoritativeListOmitsIt() async throws {
+    func testRefreshThreadsKeepsWatchedArchivedThreadThroughFirstAuthoritativeOmission() async throws {
         let archivedThread = thread(id: "archived-thread", updatedAt: 200, cwd: "/tmp/B/work")
         let survivorThread = thread(id: "survivor-thread", updatedAt: 100, cwd: "/tmp/A/work")
         let controller = makeController(
             recentThreadResponses: [
                 [archivedThread, survivorThread],
+                [survivorThread],
+                [survivorThread],
                 [survivorThread]
             ],
             projectCatalog: .success(
@@ -852,22 +854,32 @@ final class MenubarControllerIntegrationTests: XCTestCase {
         controller.markWatched(thread: archivedThread)
 
         _ = try await controller.refreshThreads()
-        let snapshot = controller.prepareSnapshot().snapshot
+        var snapshot = controller.prepareSnapshot().snapshot
 
+        XCTAssertEqual(controller.recentThreads.map(\.id), ["archived-thread", "survivor-thread"])
+        XCTAssertEqual(snapshot.projectSections.map(\.section.displayName), ["B", "A"])
+
+        _ = try await controller.refreshThreads()
+        snapshot = controller.prepareSnapshot().snapshot
+
+        XCTAssertEqual(controller.recentThreads.map(\.id), ["archived-thread", "survivor-thread"])
+        XCTAssertEqual(snapshot.projectSections.map(\.section.displayName), ["B", "A"])
+
+        _ = try await controller.refreshThreads()
+        snapshot = controller.prepareSnapshot().snapshot
         XCTAssertEqual(controller.recentThreads.map(\.id), ["survivor-thread"])
         XCTAssertEqual(snapshot.projectSections.map(\.section.displayName), ["A"])
     }
 
-    func testRefreshThreadsImmediatelyPrunesRunningThreadWhenAuthoritativeListAndMetadataOmitIt() async throws {
+    func testRefreshThreadsPrunesRunningThreadAfterAuthoritativeOmissionGrace() async throws {
         let archivedThread = thread(id: "archived-thread", updatedAt: 200, cwd: "/tmp/B/work", status: .active(flags: []))
         let survivorThread = thread(id: "survivor-thread", updatedAt: 100, cwd: "/tmp/A/work")
         let controller = makeController(
             recentThreadResponses: [
                 [archivedThread, survivorThread],
+                [survivorThread],
+                [survivorThread],
                 [survivorThread]
-            ],
-            metadataResponses: [
-                .success([])
             ],
             projectCatalog: .success(
                 CodexDesktopProjectCatalog(workspaceRoots: [
@@ -879,13 +891,24 @@ final class MenubarControllerIntegrationTests: XCTestCase {
         )
 
         try await controller.loadInitialThreads()
-        let effects = try await controller.refreshThreads()
-        let snapshot = controller.prepareSnapshot().snapshot
+        _ = try await controller.refreshThreads()
+        var snapshot = controller.prepareSnapshot().snapshot
 
+        XCTAssertEqual(controller.recentThreads.map(\.id), ["archived-thread", "survivor-thread"])
+        XCTAssertEqual(snapshot.overallStatus, .running)
+        XCTAssertEqual(snapshot.projectSections.map(\.section.displayName), ["B", "A"])
+
+        _ = try await controller.refreshThreads()
+        snapshot = controller.prepareSnapshot().snapshot
+        XCTAssertEqual(controller.recentThreads.map(\.id), ["archived-thread", "survivor-thread"])
+        XCTAssertEqual(snapshot.overallStatus, .running)
+        XCTAssertEqual(snapshot.projectSections.map(\.section.displayName), ["B", "A"])
+
+        _ = try await controller.refreshThreads()
+        snapshot = controller.prepareSnapshot().snapshot
         XCTAssertEqual(controller.recentThreads.map(\.id), ["survivor-thread"])
         XCTAssertEqual(snapshot.overallStatus, .idle)
         XCTAssertEqual(snapshot.projectSections.map(\.section.displayName), ["A"])
-        XCTAssertEqual(effects.diagnostics.count, 1)
     }
 
     func testPruneThreadsMissingFromDesktopStateRemovesThreadKeptOnlyByStaleRecentList() async throws {
@@ -932,6 +955,57 @@ final class MenubarControllerIntegrationTests: XCTestCase {
 
         XCTAssertEqual(controller.recentThreads.map { $0.id }, ["survivor-thread"])
         XCTAssertEqual(snapshot.projectSections.map { $0.section.displayName }, ["A"])
+        XCTAssertEqual(effects.diagnostics.count, 1)
+    }
+
+    func testPruneThreadsMissingFromDesktopStateImmediatelyRemovesArchivedListedThread() async throws {
+        let archivedListed = thread(id: "archived-thread", updatedAt: 495, cwd: "/tmp/B/work")
+        let survivorListed = thread(id: "survivor-thread", updatedAt: 490, cwd: "/tmp/A/work")
+        let archivedMetadata = thread(
+            id: "archived-thread",
+            updatedAt: 495,
+            cwd: "/tmp/B/work",
+            path: "/tmp/B/archived.jsonl",
+            source: "",
+            agentRole: "",
+            agentNickname: ""
+        )
+        let survivorMetadata = thread(
+            id: "survivor-thread",
+            updatedAt: 490,
+            cwd: "/tmp/A/work",
+            path: "/tmp/A/survivor.jsonl",
+            source: "",
+            agentRole: "",
+            agentNickname: ""
+        )
+
+        let controller = makeController(
+            recentThreadResponses: [
+                [archivedListed, survivorListed]
+            ],
+            metadataResponses: [
+                .success([archivedMetadata, survivorMetadata]),
+                .success([survivorMetadata])
+            ],
+            archivedMetadataResponses: [
+                .success(["archived-thread"])
+            ],
+            projectCatalog: .success(
+                CodexDesktopProjectCatalog(workspaceRoots: [
+                    .init(path: "/tmp/A", displayName: "A"),
+                    .init(path: "/tmp/B", displayName: "B")
+                ])
+            ),
+            now: { Date(timeIntervalSince1970: 500) }
+        )
+
+        try await controller.loadInitialThreads()
+        let effects = await controller.pruneThreadsMissingFromDesktopState()
+        let snapshot = controller.prepareSnapshot().snapshot
+
+        XCTAssertEqual(controller.recentThreads.map(\.id), ["survivor-thread"])
+        XCTAssertEqual(snapshot.projectSections.map(\.section.displayName), ["A"])
         XCTAssertEqual(effects.diagnostics.count, 1)
     }
 
@@ -1172,6 +1246,7 @@ final class MenubarControllerIntegrationTests: XCTestCase {
                 maxTrackedThreads: 12,
                 projectLimit: 5,
                 visibleThreadLimit: 2,
+                authoritativeListOmissionGraceCount: 2,
                 maxPendingDiscoveredThreads: 64,
                 pendingDiscoveredThreadTTL: 120,
                 threadReadMarkerRetentionSeconds: 30 * 24 * 60 * 60
@@ -1200,19 +1275,24 @@ final class MenubarControllerIntegrationTests: XCTestCase {
         desktopUpdates: [DesktopActivityUpdate] = [],
         recentThreadResponses: [[CodexThread]],
         metadataResponses: [Result<[CodexThread], Error>] = [],
+        archivedMetadataResponses: [Result<Set<String>, Error>] = [],
         projectCatalog: Result<CodexDesktopProjectCatalog, Error> = .success(.empty),
         now: @escaping () -> Date = Date.init
     ) -> MenubarController {
         MenubarController(
             desktopActivityLoader: FakeDesktopActivityLoader(updates: desktopUpdates),
             recentThreadListing: FakeRecentThreadListing(responses: recentThreadResponses),
-            threadMetadataReader: FakeThreadMetadataReader(results: metadataResponses),
+            threadMetadataReader: FakeThreadMetadataReader(
+                results: metadataResponses,
+                archivedResults: archivedMetadataResponses
+            ),
             projectCatalogLoader: FakeProjectCatalogLoader(result: projectCatalog),
             configuration: MenubarControllerConfiguration(
                 initialFetchLimit: 32,
                 maxTrackedThreads: 256,
                 projectLimit: 5,
                 visibleThreadLimit: 8,
+                authoritativeListOmissionGraceCount: 2,
                 maxPendingDiscoveredThreads: 64,
                 pendingDiscoveredThreadTTL: 120,
                 threadReadMarkerRetentionSeconds: 30 * 24 * 60 * 60
@@ -1227,12 +1307,14 @@ final class MenubarControllerIntegrationTests: XCTestCase {
             runningThreadIDs: []
         ),
         latestViewed: [String: Date] = [:],
+        latestStarted: [String: Date] = [:],
         latestCompleted: [String: Date] = [:],
         runtimeError: String? = nil
     ) -> DesktopActivityUpdate {
         DesktopActivityUpdate(
             runtimeSnapshot: runtimeSnapshot,
             latestViewedAtByThreadID: latestViewed,
+            latestTurnStartedAtByThreadID: latestStarted,
             latestTurnCompletedAtByThreadID: latestCompleted,
             runtimeErrorMessage: runtimeError
         )
@@ -1289,11 +1371,12 @@ private actor FakeDesktopActivityLoader: DesktopActivityLoading {
         self.updates = updates
     }
 
-    func load(candidateSessionPaths: [String: String?], now: Date) async -> DesktopActivityUpdate {
+    func load(candidateSessionContexts: [String: ThreadSessionContext], now: Date) async -> DesktopActivityUpdate {
         guard !updates.isEmpty else {
             return DesktopActivityUpdate(
                 runtimeSnapshot: CodexDesktopRuntimeSnapshot(activeTurnCount: 0, runningThreadIDs: []),
                 latestViewedAtByThreadID: [:],
+                latestTurnStartedAtByThreadID: [:],
                 latestTurnCompletedAtByThreadID: [:],
                 runtimeErrorMessage: nil
             )
@@ -1352,9 +1435,14 @@ private actor RecordingThreadMetadataReader: ThreadMetadataReading {
 
 private final class FakeThreadMetadataReader: ThreadMetadataReading, @unchecked Sendable {
     private var results: [Result<[CodexThread], Error>]
+    private var archivedResults: [Result<Set<String>, Error>]
 
-    init(results: [Result<[CodexThread], Error>]) {
+    init(
+        results: [Result<[CodexThread], Error>],
+        archivedResults: [Result<Set<String>, Error>] = []
+    ) {
         self.results = results
+        self.archivedResults = archivedResults
     }
 
     func threads(threadIDs: Set<String>) async throws -> [CodexThread] {
@@ -1363,6 +1451,14 @@ private final class FakeThreadMetadataReader: ThreadMetadataReading, @unchecked 
         }
 
         return try results.removeFirst().get()
+    }
+
+    func archivedThreadIDs(threadIDs: Set<String>) async throws -> Set<String> {
+        guard !archivedResults.isEmpty else {
+            return []
+        }
+
+        return try archivedResults.removeFirst().get()
     }
 }
 

@@ -1,8 +1,25 @@
 import Foundation
 
+struct ThreadSessionContext: Equatable {
+    let path: String?
+    let authoritativeUpdatedAt: Date?
+    let authoritativeStatusIsPending: Bool
+
+    init(
+        path: String?,
+        authoritativeUpdatedAt: Date? = nil,
+        authoritativeStatusIsPending: Bool = false
+    ) {
+        self.path = path
+        self.authoritativeUpdatedAt = authoritativeUpdatedAt
+        self.authoritativeStatusIsPending = authoritativeStatusIsPending
+    }
+}
+
 struct DesktopActivityUpdate {
     let runtimeSnapshot: CodexDesktopRuntimeSnapshot?
     let latestViewedAtByThreadID: [String: Date]
+    let latestTurnStartedAtByThreadID: [String: Date]
     let latestTurnCompletedAtByThreadID: [String: Date]
     let runtimeErrorMessage: String?
 }
@@ -35,9 +52,9 @@ actor DesktopActivityService {
         self.runningHintInterval = runningHintInterval
     }
 
-    func load(candidateSessionPaths: [String: String?], now: Date = Date()) -> DesktopActivityUpdate {
+    func load(candidateSessionContexts: [String: ThreadSessionContext], now: Date = Date()) -> DesktopActivityUpdate {
         let activitySnapshot = conversationActivityReader.activitySnapshot(now: now)
-        let candidateThreadIDs = Set(candidateSessionPaths.keys)
+        let candidateThreadIDs = Set(candidateSessionContexts.keys)
 
         let activityLatestTurnCompletedAtByThreadID = DesktopActivityHintPlanner.latestTurnCompletedAtByThreadID(
             activitySnapshot: activitySnapshot,
@@ -47,7 +64,7 @@ actor DesktopActivityService {
         )
 
         do {
-            let runtimeSnapshot = try loadRuntimeSnapshot(candidateSessionPaths: candidateSessionPaths)
+            let runtimeSnapshot = try loadRuntimeSnapshot(candidateSessionContexts: candidateSessionContexts)
             let latestTurnCompletedAtByThreadID = mergeLatestDates(
                 activityLatestTurnCompletedAtByThreadID,
                 runtimeSnapshot.latestTurnCompletedAtByThreadID
@@ -81,21 +98,23 @@ actor DesktopActivityService {
             return DesktopActivityUpdate(
                 runtimeSnapshot: combinedSnapshot,
                 latestViewedAtByThreadID: activitySnapshot.latestViewedAtByThreadID,
+                latestTurnStartedAtByThreadID: activitySnapshot.latestTurnStartedAtByThreadID,
                 latestTurnCompletedAtByThreadID: latestTurnCompletedAtByThreadID,
                 runtimeErrorMessage: nil
             )
         } catch {
             let runtimeErrorMessage = throttledRuntimeErrorMessage(for: error, now: now)
             if let fallbackSnapshot = stateReader.sessionFallbackSnapshot(
-                candidateSessionPaths: candidateSessionPaths,
+                candidateSessionContexts: candidateSessionContexts,
                 databaseError: error.localizedDescription
             ) {
                 DebugTraceLogger.log(
-                    "desktop activity using session fallback candidates=\(candidateSessionPaths.count) message=\(error.localizedDescription)"
+                    "desktop activity using session fallback candidates=\(candidateSessionContexts.count) message=\(error.localizedDescription)"
                 )
                 return DesktopActivityUpdate(
                     runtimeSnapshot: fallbackSnapshot,
                     latestViewedAtByThreadID: activitySnapshot.latestViewedAtByThreadID,
+                    latestTurnStartedAtByThreadID: activitySnapshot.latestTurnStartedAtByThreadID,
                     latestTurnCompletedAtByThreadID: activityLatestTurnCompletedAtByThreadID,
                     runtimeErrorMessage: nil
                 )
@@ -103,10 +122,18 @@ actor DesktopActivityService {
             return DesktopActivityUpdate(
                 runtimeSnapshot: nil,
                 latestViewedAtByThreadID: activitySnapshot.latestViewedAtByThreadID,
+                latestTurnStartedAtByThreadID: activitySnapshot.latestTurnStartedAtByThreadID,
                 latestTurnCompletedAtByThreadID: activityLatestTurnCompletedAtByThreadID,
                 runtimeErrorMessage: runtimeErrorMessage
             )
         }
+    }
+
+    func load(candidateSessionPaths: [String: String?], now: Date = Date()) -> DesktopActivityUpdate {
+        load(
+            candidateSessionContexts: candidateSessionPaths.mapValues { ThreadSessionContext(path: $0) },
+            now: now
+        )
     }
 
     private func mergeLatestDates(_ lhs: [String: Date], _ rhs: [String: Date]) -> [String: Date] {
@@ -120,12 +147,12 @@ actor DesktopActivityService {
         return merged
     }
 
-    private func loadRuntimeSnapshot(candidateSessionPaths: [String: String?]) throws -> CodexDesktopRuntimeSnapshot {
+    private func loadRuntimeSnapshot(candidateSessionContexts: [String: ThreadSessionContext]) throws -> CodexDesktopRuntimeSnapshot {
         var attempt = 0
 
         while true {
             do {
-                let snapshot = try stateReader.snapshot(candidateSessionPaths: candidateSessionPaths)
+                let snapshot = try stateReader.snapshot(candidateSessionContexts: candidateSessionContexts)
                 lastRuntimeErrorFingerprint = nil
                 lastRuntimeErrorAt = nil
                 return snapshot
