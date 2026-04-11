@@ -62,6 +62,79 @@ final class DesktopActivityServiceTests: XCTestCase {
         )
     }
 
+    func testLoadPassesThroughDesktopArchiveAndUnarchiveHints() async throws {
+        let tempDirectoryURL = FileManager.default.temporaryDirectory
+            .appending(path: UUID().uuidString, directoryHint: .isDirectory)
+        let logsDirectoryURL = tempDirectoryURL.appending(path: "desktop-logs", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: logsDirectoryURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDirectoryURL) }
+
+        let logDirectoryURL = logsDirectoryURL
+            .appending(path: "2026")
+            .appending(path: "04")
+            .appending(path: "12")
+        try FileManager.default.createDirectory(at: logDirectoryURL, withIntermediateDirectories: true)
+
+        let logURL = logDirectoryURL.appending(path: "archive.log")
+        try """
+        2026-04-12T03:05:25.512Z info [ElectronAppServerConnection] response_routed broadcastFallback=false conversationId=thread-1 durationMs=22 errorCode=null hadInternalHandler=false hadPending=true method=thread/archive originWebcontentsId=1 requestId=a targetDestroyed=false
+        2026-04-12T03:05:30.512Z info [ElectronAppServerConnection] response_routed broadcastFallback=false conversationId=thread-1 durationMs=22 errorCode=null hadInternalHandler=false hadPending=true method=thread/unarchive originWebcontentsId=1 requestId=b targetDestroyed=false
+        """.write(to: logURL, atomically: true, encoding: .utf8)
+
+        let databaseURL = tempDirectoryURL.appending(path: "state.sqlite")
+        try createStateDatabase(
+            at: databaseURL,
+            sql: """
+            CREATE TABLE threads (
+                id TEXT PRIMARY KEY,
+                first_user_message TEXT NOT NULL DEFAULT '',
+                title TEXT NOT NULL DEFAULT '',
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                cwd TEXT NOT NULL,
+                rollout_path TEXT,
+                archived INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE TABLE logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                process_uuid TEXT,
+                target TEXT,
+                message TEXT,
+                ts INTEGER NOT NULL,
+                ts_nanos INTEGER NOT NULL DEFAULT 0,
+                thread_id TEXT
+            );
+            INSERT INTO threads (id, first_user_message, title, created_at, updated_at, cwd, rollout_path, archived)
+            VALUES ('thread-1', 'Preview', 'Thread 1', 150, 195, '/tmp/project', NULL, 0);
+            """
+        )
+
+        let service = DesktopActivityService(
+            stateReader: CodexDesktopStateReader(
+                now: { Date(timeIntervalSince1970: 200) },
+                stateDatabaseURLOverride: databaseURL
+            ),
+            conversationActivityReader: CodexDesktopConversationActivityReader(
+                logsDirectoryURL: logsDirectoryURL,
+                lookbackDays: 1
+            )
+        )
+
+        let update = await service.load(
+            candidateSessionPaths: ["thread-1": nil],
+            now: date("2026-04-12T03:06:00.000Z") ?? .distantPast
+        )
+
+        XCTAssertEqual(
+            update.latestArchiveRequestedAtByThreadID["thread-1"],
+            date("2026-04-12T03:05:25.512Z")
+        )
+        XCTAssertEqual(
+            update.latestUnarchiveRequestedAtByThreadID["thread-1"],
+            date("2026-04-12T03:05:30.512Z")
+        )
+    }
+
     func testDatabaseFailureFallsBackToSessionPendingApprovalSnapshot() async throws {
         let tempDirectoryURL = FileManager.default.temporaryDirectory
             .appending(path: UUID().uuidString, directoryHint: .isDirectory)
@@ -143,5 +216,11 @@ final class DesktopActivityServiceTests: XCTestCase {
             XCTFail(errorMessage)
             return
         }
+    }
+
+    private func date(_ value: String) -> Date? {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter.date(from: value)
     }
 }

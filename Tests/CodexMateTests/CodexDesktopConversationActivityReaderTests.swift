@@ -31,6 +31,9 @@ final class CodexDesktopConversationActivityReaderTests: XCTestCase {
         2026-03-11T12:20:01.000Z info [ElectronAppServerConnection] response_routed broadcastFallback=false conversationId=thread-5 durationMs=1 errorCode=null hadInternalHandler=false hadPending=true method=thread/name/set originWebcontentsId=1 requestId=g targetDestroyed=false
         2026-03-11T12:20:02.000Z info [electron-message-handler] Conversation created conversationId=thread-6
         2026-03-11T12:20:30.000Z info [electron-message-handler] [desktop-notifications] show turn-complete conversationId=thread-3 turnId=turn-b
+        2026-03-11T12:21:00.000Z info [ElectronAppServerConnection] response_routed broadcastFallback=false conversationId=thread-7 durationMs=1 errorCode=null hadInternalHandler=false hadPending=true method=thread/archive originWebcontentsId=1 requestId=h targetDestroyed=false
+        2026-03-11T12:21:30.000Z info [ElectronAppServerConnection] response_routed broadcastFallback=false conversationId=thread-8 durationMs=1 errorCode=null hadInternalHandler=false hadPending=true method=thread/archive originWebcontentsId=1 requestId=i targetDestroyed=false
+        2026-03-11T12:22:00.000Z info [ElectronAppServerConnection] response_routed broadcastFallback=false conversationId=thread-8 durationMs=1 errorCode=null hadInternalHandler=false hadPending=true method=thread/unarchive originWebcontentsId=1 requestId=j targetDestroyed=false
         """.write(to: secondLogURL, atomically: true, encoding: .utf8)
 
         let reader = CodexDesktopConversationActivityReader(
@@ -55,6 +58,9 @@ final class CodexDesktopConversationActivityReaderTests: XCTestCase {
         XCTAssertNil(snapshot.latestTurnStartedAtByThreadID["thread-4"])
         XCTAssertNil(snapshot.latestTurnStartedAtByThreadID["thread-5"])
         XCTAssertNil(snapshot.latestTurnStartedAtByThreadID["thread-6"])
+        XCTAssertEqual(snapshot.latestArchiveRequestedAtByThreadID["thread-7"], date("2026-03-11T12:21:00.000Z"))
+        XCTAssertEqual(snapshot.latestArchiveRequestedAtByThreadID["thread-8"], date("2026-03-11T12:21:30.000Z"))
+        XCTAssertEqual(snapshot.latestUnarchiveRequestedAtByThreadID["thread-8"], date("2026-03-11T12:22:00.000Z"))
     }
 
     func testActivitySnapshotDoesNotTreatMaybeResumeSuccessAsTurnCompletion() throws {
@@ -153,6 +159,7 @@ final class CodexDesktopConversationActivityReaderTests: XCTestCase {
         let appendedData = """
         2026-03-11T12:17:12.000Z info [ElectronAppServerConnection] response_routed broadcastFallback=false conversationId=thread-2 durationMs=157 errorCode=null hadInternalHandler=false hadPending=true method=turn/start originWebcontentsId=1 requestId=b targetDestroyed=false
         2026-03-11T12:17:13.000Z info [electron-message-handler] [desktop-notifications] show turn-complete conversationId=thread-2 turnId=turn-1
+        2026-03-11T12:17:14.000Z info [ElectronAppServerConnection] response_routed broadcastFallback=false conversationId=thread-2 durationMs=157 errorCode=null hadInternalHandler=false hadPending=true method=thread/archive originWebcontentsId=1 requestId=c targetDestroyed=false
         """
         if let handle = try? FileHandle(forWritingTo: logURL) {
             handle.seekToEndOfFile()
@@ -165,9 +172,10 @@ final class CodexDesktopConversationActivityReaderTests: XCTestCase {
         let secondSnapshot = reader.activitySnapshot(
             now: Date(timeIntervalSince1970: 1_773_195_200)
         )
-        XCTAssertEqual(secondSnapshot.latestViewedAtByThreadID["thread-2"], date("2026-03-11T12:17:12.000Z"))
+        XCTAssertEqual(secondSnapshot.latestViewedAtByThreadID["thread-2"], date("2026-03-11T12:17:14.000Z"))
         XCTAssertEqual(secondSnapshot.latestTurnStartedAtByThreadID["thread-2"], date("2026-03-11T12:17:12.000Z"))
         XCTAssertEqual(secondSnapshot.latestTurnCompletedAtByThreadID["thread-2"], date("2026-03-11T12:17:13.000Z"))
+        XCTAssertEqual(secondSnapshot.latestArchiveRequestedAtByThreadID["thread-2"], date("2026-03-11T12:17:14.000Z"))
     }
 
     func testActivitySnapshotWaitsForCompletedTrailingLineBeforeParsing() throws {

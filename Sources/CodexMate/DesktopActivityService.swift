@@ -21,7 +21,27 @@ struct DesktopActivityUpdate {
     let latestViewedAtByThreadID: [String: Date]
     let latestTurnStartedAtByThreadID: [String: Date]
     let latestTurnCompletedAtByThreadID: [String: Date]
+    let latestArchiveRequestedAtByThreadID: [String: Date]
+    let latestUnarchiveRequestedAtByThreadID: [String: Date]
     let runtimeErrorMessage: String?
+
+    init(
+        runtimeSnapshot: CodexDesktopRuntimeSnapshot?,
+        latestViewedAtByThreadID: [String: Date],
+        latestTurnStartedAtByThreadID: [String: Date],
+        latestTurnCompletedAtByThreadID: [String: Date],
+        latestArchiveRequestedAtByThreadID: [String: Date] = [:],
+        latestUnarchiveRequestedAtByThreadID: [String: Date] = [:],
+        runtimeErrorMessage: String?
+    ) {
+        self.runtimeSnapshot = runtimeSnapshot
+        self.latestViewedAtByThreadID = latestViewedAtByThreadID
+        self.latestTurnStartedAtByThreadID = latestTurnStartedAtByThreadID
+        self.latestTurnCompletedAtByThreadID = latestTurnCompletedAtByThreadID
+        self.latestArchiveRequestedAtByThreadID = latestArchiveRequestedAtByThreadID
+        self.latestUnarchiveRequestedAtByThreadID = latestUnarchiveRequestedAtByThreadID
+        self.runtimeErrorMessage = runtimeErrorMessage
+    }
 }
 
 actor DesktopActivityService {
@@ -100,6 +120,8 @@ actor DesktopActivityService {
                 latestViewedAtByThreadID: activitySnapshot.latestViewedAtByThreadID,
                 latestTurnStartedAtByThreadID: activitySnapshot.latestTurnStartedAtByThreadID,
                 latestTurnCompletedAtByThreadID: latestTurnCompletedAtByThreadID,
+                latestArchiveRequestedAtByThreadID: activitySnapshot.latestArchiveRequestedAtByThreadID,
+                latestUnarchiveRequestedAtByThreadID: activitySnapshot.latestUnarchiveRequestedAtByThreadID,
                 runtimeErrorMessage: nil
             )
         } catch {
@@ -116,6 +138,8 @@ actor DesktopActivityService {
                     latestViewedAtByThreadID: activitySnapshot.latestViewedAtByThreadID,
                     latestTurnStartedAtByThreadID: activitySnapshot.latestTurnStartedAtByThreadID,
                     latestTurnCompletedAtByThreadID: activityLatestTurnCompletedAtByThreadID,
+                    latestArchiveRequestedAtByThreadID: activitySnapshot.latestArchiveRequestedAtByThreadID,
+                    latestUnarchiveRequestedAtByThreadID: activitySnapshot.latestUnarchiveRequestedAtByThreadID,
                     runtimeErrorMessage: nil
                 )
             }
@@ -124,6 +148,8 @@ actor DesktopActivityService {
                 latestViewedAtByThreadID: activitySnapshot.latestViewedAtByThreadID,
                 latestTurnStartedAtByThreadID: activitySnapshot.latestTurnStartedAtByThreadID,
                 latestTurnCompletedAtByThreadID: activityLatestTurnCompletedAtByThreadID,
+                latestArchiveRequestedAtByThreadID: activitySnapshot.latestArchiveRequestedAtByThreadID,
+                latestUnarchiveRequestedAtByThreadID: activitySnapshot.latestUnarchiveRequestedAtByThreadID,
                 runtimeErrorMessage: runtimeErrorMessage
             )
         }

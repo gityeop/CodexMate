@@ -397,6 +397,14 @@ final class MenubarController {
             effects.shouldBoostThreadDiscovery = true
         }
 
+        let unarchivedThreadIDs = desktopUnarchiveHintThreadIDs(
+            trackedThreads: trackedThreads,
+            update: update
+        )
+        for threadID in unarchivedThreadIDs.sorted() {
+            state.apply(notification: .threadUnarchived(ThreadUnarchivedNotification(threadId: threadID)))
+        }
+
         if isConnected {
             let completionHintThreadIDs = Set(trackedThreads.compactMap { thread -> String? in
                 guard let completedAt = update.latestTurnCompletedAtByThreadID[thread.id],
@@ -417,6 +425,20 @@ final class MenubarController {
             }
         }
         state.apply(desktopCompletionHints: update.latestTurnCompletedAtByThreadID)
+
+        let archivedThreadIDs = desktopArchiveHintThreadIDs(
+            trackedThreads: trackedThreads,
+            update: update
+        )
+        if !archivedThreadIDs.isEmpty {
+            for threadID in archivedThreadIDs.sorted() {
+                state.apply(notification: .threadArchived(ThreadArchivedNotification(threadId: threadID)))
+            }
+
+            let diagnostic = "desktop hinted archive threads=" + debugThreadIDs(archivedThreadIDs)
+            state.recordDiagnostic(diagnostic)
+            effects.diagnostics.append(diagnostic)
+        }
 
         synchronizeThreadReadMarkers(from: update.latestViewedAtByThreadID)
 
@@ -619,6 +641,48 @@ final class MenubarController {
                 viewedAt: viewedAt
             )
         }
+    }
+
+    private func desktopArchiveHintThreadIDs(
+        trackedThreads: [AppStateStore.ThreadRow],
+        update: DesktopActivityUpdate
+    ) -> Set<String> {
+        Set(trackedThreads.compactMap { thread in
+            guard let archivedAt = update.latestArchiveRequestedAtByThreadID[thread.id] else {
+                return nil
+            }
+
+            let latestUnarchivedAt = update.latestUnarchiveRequestedAtByThreadID[thread.id] ?? .distantPast
+            guard archivedAt > latestUnarchivedAt else {
+                return nil
+            }
+
+            let freshnessFloor = max(thread.updatedAt, thread.lastRuntimeEventAt ?? .distantPast)
+            guard archivedAt >= freshnessFloor else {
+                return nil
+            }
+
+            return thread.id
+        })
+    }
+
+    private func desktopUnarchiveHintThreadIDs(
+        trackedThreads: [AppStateStore.ThreadRow],
+        update: DesktopActivityUpdate
+    ) -> Set<String> {
+        let trackedThreadIDs = Set(trackedThreads.map(\.id))
+        return Set(update.latestUnarchiveRequestedAtByThreadID.compactMap { threadID, unarchivedAt in
+            guard trackedThreadIDs.contains(threadID) else {
+                return nil
+            }
+
+            let archivedAt = update.latestArchiveRequestedAtByThreadID[threadID] ?? .distantPast
+            guard unarchivedAt > archivedAt else {
+                return nil
+            }
+
+            return threadID
+        })
     }
 
     private func synchronizePendingAuthoritativeThreads() {

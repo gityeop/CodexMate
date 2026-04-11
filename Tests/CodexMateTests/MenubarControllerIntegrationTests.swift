@@ -832,6 +832,70 @@ final class MenubarControllerIntegrationTests: XCTestCase {
         XCTAssertEqual(snapshot.projectSections.first?.threads.map(\.id), ["survivor-thread"])
     }
 
+    func testRefreshDesktopActivityImmediatelyDropsTrackedThreadFromDesktopArchiveHint() async throws {
+        let controller = makeController(
+            desktopUpdates: [
+                desktopUpdate(
+                    latestArchiveRequested: [
+                        "archived-thread": Date(timeIntervalSince1970: 250)
+                    ]
+                )
+            ],
+            recentThreadResponses: [
+                [
+                    thread(id: "archived-thread", updatedAt: 200, cwd: "/tmp/B/work", status: .active(flags: [])),
+                    thread(id: "survivor-thread", updatedAt: 100, cwd: "/tmp/A/work")
+                ]
+            ],
+            projectCatalog: .success(
+                CodexDesktopProjectCatalog(workspaceRoots: [
+                    .init(path: "/tmp/A", displayName: "A"),
+                    .init(path: "/tmp/B", displayName: "B")
+                ])
+            )
+        )
+
+        try await controller.loadInitialThreads()
+        let effects = await controller.refreshDesktopActivity()
+        let snapshot = controller.prepareSnapshot().snapshot
+
+        XCTAssertTrue(effects.diagnostics.contains(where: { $0.contains("desktop hinted archive threads=[archived") }))
+        XCTAssertEqual(snapshot.overallStatus, .idle)
+        XCTAssertEqual(snapshot.projectSections.map(\.section.displayName), ["A"])
+        XCTAssertEqual(snapshot.projectSections.first?.threads.map(\.id), ["survivor-thread"])
+    }
+
+    func testRefreshDesktopActivityIgnoresStaleDesktopArchiveHintOlderThanTrackedThread() async throws {
+        let controller = makeController(
+            desktopUpdates: [
+                desktopUpdate(
+                    latestArchiveRequested: [
+                        "survivor-thread": Date(timeIntervalSince1970: 150)
+                    ]
+                )
+            ],
+            recentThreadResponses: [
+                [
+                    thread(id: "survivor-thread", updatedAt: 200, cwd: "/tmp/A/work", status: .active(flags: []))
+                ]
+            ],
+            projectCatalog: .success(
+                CodexDesktopProjectCatalog(workspaceRoots: [
+                    .init(path: "/tmp/A", displayName: "A")
+                ])
+            )
+        )
+
+        try await controller.loadInitialThreads()
+        let effects = await controller.refreshDesktopActivity()
+        let snapshot = controller.prepareSnapshot().snapshot
+
+        XCTAssertFalse(effects.diagnostics.contains(where: { $0.contains("desktop hinted archive") }))
+        XCTAssertEqual(snapshot.projectSections.map(\.section.displayName), ["A"])
+        XCTAssertEqual(snapshot.projectSections.first?.threads.map(\.id), ["survivor-thread"])
+        XCTAssertEqual(snapshot.projectSections.first?.threads.first?.thread.displayStatus, .running)
+    }
+
     func testRefreshThreadsKeepsWatchedArchivedThreadThroughFirstAuthoritativeOmission() async throws {
         let archivedThread = thread(id: "archived-thread", updatedAt: 200, cwd: "/tmp/B/work")
         let survivorThread = thread(id: "survivor-thread", updatedAt: 100, cwd: "/tmp/A/work")
@@ -1309,6 +1373,8 @@ final class MenubarControllerIntegrationTests: XCTestCase {
         latestViewed: [String: Date] = [:],
         latestStarted: [String: Date] = [:],
         latestCompleted: [String: Date] = [:],
+        latestArchiveRequested: [String: Date] = [:],
+        latestUnarchiveRequested: [String: Date] = [:],
         runtimeError: String? = nil
     ) -> DesktopActivityUpdate {
         DesktopActivityUpdate(
@@ -1316,6 +1382,8 @@ final class MenubarControllerIntegrationTests: XCTestCase {
             latestViewedAtByThreadID: latestViewed,
             latestTurnStartedAtByThreadID: latestStarted,
             latestTurnCompletedAtByThreadID: latestCompleted,
+            latestArchiveRequestedAtByThreadID: latestArchiveRequested,
+            latestUnarchiveRequestedAtByThreadID: latestUnarchiveRequested,
             runtimeErrorMessage: runtimeError
         )
     }
@@ -1378,6 +1446,8 @@ private actor FakeDesktopActivityLoader: DesktopActivityLoading {
                 latestViewedAtByThreadID: [:],
                 latestTurnStartedAtByThreadID: [:],
                 latestTurnCompletedAtByThreadID: [:],
+                latestArchiveRequestedAtByThreadID: [:],
+                latestUnarchiveRequestedAtByThreadID: [:],
                 runtimeErrorMessage: nil
             )
         }

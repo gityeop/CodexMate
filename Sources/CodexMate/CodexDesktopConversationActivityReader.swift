@@ -7,13 +7,51 @@ final class CodexDesktopConversationActivityReader {
         let latestViewedAtByThreadID: [String: Date]
         let latestTurnStartedAtByThreadID: [String: Date]
         let latestTurnCompletedAtByThreadID: [String: Date]
+        let latestArchiveRequestedAtByThreadID: [String: Date]
+        let latestUnarchiveRequestedAtByThreadID: [String: Date]
         let trailingFragment: String
+
+        init(
+            fileSize: UInt64,
+            modificationDate: Date,
+            latestViewedAtByThreadID: [String: Date],
+            latestTurnStartedAtByThreadID: [String: Date],
+            latestTurnCompletedAtByThreadID: [String: Date],
+            latestArchiveRequestedAtByThreadID: [String: Date] = [:],
+            latestUnarchiveRequestedAtByThreadID: [String: Date] = [:],
+            trailingFragment: String
+        ) {
+            self.fileSize = fileSize
+            self.modificationDate = modificationDate
+            self.latestViewedAtByThreadID = latestViewedAtByThreadID
+            self.latestTurnStartedAtByThreadID = latestTurnStartedAtByThreadID
+            self.latestTurnCompletedAtByThreadID = latestTurnCompletedAtByThreadID
+            self.latestArchiveRequestedAtByThreadID = latestArchiveRequestedAtByThreadID
+            self.latestUnarchiveRequestedAtByThreadID = latestUnarchiveRequestedAtByThreadID
+            self.trailingFragment = trailingFragment
+        }
     }
 
     struct ActivitySnapshot {
         let latestViewedAtByThreadID: [String: Date]
         let latestTurnStartedAtByThreadID: [String: Date]
         let latestTurnCompletedAtByThreadID: [String: Date]
+        let latestArchiveRequestedAtByThreadID: [String: Date]
+        let latestUnarchiveRequestedAtByThreadID: [String: Date]
+
+        init(
+            latestViewedAtByThreadID: [String: Date],
+            latestTurnStartedAtByThreadID: [String: Date],
+            latestTurnCompletedAtByThreadID: [String: Date],
+            latestArchiveRequestedAtByThreadID: [String: Date] = [:],
+            latestUnarchiveRequestedAtByThreadID: [String: Date] = [:]
+        ) {
+            self.latestViewedAtByThreadID = latestViewedAtByThreadID
+            self.latestTurnStartedAtByThreadID = latestTurnStartedAtByThreadID
+            self.latestTurnCompletedAtByThreadID = latestTurnCompletedAtByThreadID
+            self.latestArchiveRequestedAtByThreadID = latestArchiveRequestedAtByThreadID
+            self.latestUnarchiveRequestedAtByThreadID = latestUnarchiveRequestedAtByThreadID
+        }
     }
 
     private let logsDirectoryURL: URL
@@ -62,6 +100,8 @@ final class CodexDesktopConversationActivityReader {
         var latestViewedAtByThreadID: [String: Date] = [:]
         var latestTurnStartedAtByThreadID: [String: Date] = [:]
         var latestTurnCompletedAtByThreadID: [String: Date] = [:]
+        var latestArchiveRequestedAtByThreadID: [String: Date] = [:]
+        var latestUnarchiveRequestedAtByThreadID: [String: Date] = [:]
 
         for logFileURL in logFiles {
             let snapshot = parsedLogSnapshot(for: logFileURL)
@@ -83,12 +123,26 @@ final class CodexDesktopConversationActivityReader {
                     latestTurnCompletedAtByThreadID[threadID] = turnCompletedAt
                 }
             }
+            for (threadID, archivedAt) in snapshot.latestArchiveRequestedAtByThreadID {
+                let currentLatest = latestArchiveRequestedAtByThreadID[threadID] ?? .distantPast
+                if archivedAt > currentLatest {
+                    latestArchiveRequestedAtByThreadID[threadID] = archivedAt
+                }
+            }
+            for (threadID, unarchivedAt) in snapshot.latestUnarchiveRequestedAtByThreadID {
+                let currentLatest = latestUnarchiveRequestedAtByThreadID[threadID] ?? .distantPast
+                if unarchivedAt > currentLatest {
+                    latestUnarchiveRequestedAtByThreadID[threadID] = unarchivedAt
+                }
+            }
         }
 
         return ActivitySnapshot(
             latestViewedAtByThreadID: latestViewedAtByThreadID,
             latestTurnStartedAtByThreadID: latestTurnStartedAtByThreadID,
-            latestTurnCompletedAtByThreadID: latestTurnCompletedAtByThreadID
+            latestTurnCompletedAtByThreadID: latestTurnCompletedAtByThreadID,
+            latestArchiveRequestedAtByThreadID: latestArchiveRequestedAtByThreadID,
+            latestUnarchiveRequestedAtByThreadID: latestUnarchiveRequestedAtByThreadID
         )
     }
 
@@ -194,6 +248,14 @@ final class CodexDesktopConversationActivityReader {
                     existing: cachedSnapshot.latestTurnCompletedAtByThreadID,
                     updates: deltaSnapshot.latestTurnCompletedAtByThreadID
                 ),
+                latestArchiveRequestedAtByThreadID: mergeLatestDates(
+                    existing: cachedSnapshot.latestArchiveRequestedAtByThreadID,
+                    updates: deltaSnapshot.latestArchiveRequestedAtByThreadID
+                ),
+                latestUnarchiveRequestedAtByThreadID: mergeLatestDates(
+                    existing: cachedSnapshot.latestUnarchiveRequestedAtByThreadID,
+                    updates: deltaSnapshot.latestUnarchiveRequestedAtByThreadID
+                ),
                 trailingFragment: deltaSnapshot.trailingFragment
             )
         } else {
@@ -204,6 +266,8 @@ final class CodexDesktopConversationActivityReader {
                 latestViewedAtByThreadID: fullSnapshot.latestViewedAtByThreadID,
                 latestTurnStartedAtByThreadID: fullSnapshot.latestTurnStartedAtByThreadID,
                 latestTurnCompletedAtByThreadID: fullSnapshot.latestTurnCompletedAtByThreadID,
+                latestArchiveRequestedAtByThreadID: fullSnapshot.latestArchiveRequestedAtByThreadID,
+                latestUnarchiveRequestedAtByThreadID: fullSnapshot.latestUnarchiveRequestedAtByThreadID,
                 trailingFragment: fullSnapshot.trailingFragment
             )
         }
@@ -247,6 +311,8 @@ final class CodexDesktopConversationActivityReader {
                 latestViewedAtByThreadID: [:],
                 latestTurnStartedAtByThreadID: [:],
                 latestTurnCompletedAtByThreadID: [:],
+                latestArchiveRequestedAtByThreadID: [:],
+                latestUnarchiveRequestedAtByThreadID: [:],
                 trailingFragment: carryover
             )
         }
@@ -275,6 +341,8 @@ final class CodexDesktopConversationActivityReader {
             latestViewedAtByThreadID: parsed.latestViewedAtByThreadID,
             latestTurnStartedAtByThreadID: parsed.latestTurnStartedAtByThreadID,
             latestTurnCompletedAtByThreadID: parsed.latestTurnCompletedAtByThreadID,
+            latestArchiveRequestedAtByThreadID: parsed.latestArchiveRequestedAtByThreadID,
+            latestUnarchiveRequestedAtByThreadID: parsed.latestUnarchiveRequestedAtByThreadID,
             trailingFragment: parsed.trailingFragment
         )
         return parsedSnapshot
@@ -288,6 +356,8 @@ final class CodexDesktopConversationActivityReader {
                 latestViewedAtByThreadID: [:],
                 latestTurnStartedAtByThreadID: [:],
                 latestTurnCompletedAtByThreadID: [:],
+                latestArchiveRequestedAtByThreadID: [:],
+                latestUnarchiveRequestedAtByThreadID: [:],
                 trailingFragment: ""
             )
         }
@@ -309,6 +379,8 @@ final class CodexDesktopConversationActivityReader {
         var latestViewedAtByThreadID: [String: Date] = [:]
         var latestTurnStartedAtByThreadID: [String: Date] = [:]
         var latestTurnCompletedAtByThreadID: [String: Date] = [:]
+        var latestArchiveRequestedAtByThreadID: [String: Date] = [:]
+        var latestUnarchiveRequestedAtByThreadID: [String: Date] = [:]
 
         for line in lines where !line.isEmpty {
             if let timestampToken = line.split(separator: " ", maxSplits: 1).first,
@@ -349,6 +421,20 @@ final class CodexDesktopConversationActivityReader {
                 latestViewedAtByThreadID[threadID] = viewedAt
             }
 
+            if method == "thread/archive" {
+                let currentLatestArchive = latestArchiveRequestedAtByThreadID[threadID] ?? .distantPast
+                if viewedAt > currentLatestArchive {
+                    latestArchiveRequestedAtByThreadID[threadID] = viewedAt
+                }
+            }
+
+            if method == "thread/unarchive" {
+                let currentLatestUnarchive = latestUnarchiveRequestedAtByThreadID[threadID] ?? .distantPast
+                if viewedAt > currentLatestUnarchive {
+                    latestUnarchiveRequestedAtByThreadID[threadID] = viewedAt
+                }
+            }
+
             if method == "turn/start" {
                 let currentLatestTurnStart = latestTurnStartedAtByThreadID[threadID] ?? .distantPast
                 if viewedAt > currentLatestTurnStart {
@@ -363,6 +449,8 @@ final class CodexDesktopConversationActivityReader {
             latestViewedAtByThreadID: latestViewedAtByThreadID,
             latestTurnStartedAtByThreadID: latestTurnStartedAtByThreadID,
             latestTurnCompletedAtByThreadID: latestTurnCompletedAtByThreadID,
+            latestArchiveRequestedAtByThreadID: latestArchiveRequestedAtByThreadID,
+            latestUnarchiveRequestedAtByThreadID: latestUnarchiveRequestedAtByThreadID,
             trailingFragment: trailingFragment
         )
     }
