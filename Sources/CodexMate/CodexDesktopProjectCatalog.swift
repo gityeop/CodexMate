@@ -40,6 +40,12 @@ struct CodexDesktopProjectCatalog: Equatable {
             return ProjectReference(id: Self.unknownProjectID, displayName: Self.unknownProjectDisplayName)
         }
 
+        // When the user has an active workspace catalog, unmatched thread paths should not
+        // revive removed projects by reusing the folder name as a synthetic project section.
+        if !workspaceRoots.isEmpty {
+            return ProjectReference(id: Self.unknownProjectID, displayName: Self.unknownProjectDisplayName)
+        }
+
         return ProjectReference(
             id: normalizedCWD,
             displayName: CodexDesktopWorktreePath.fallbackDisplayName(for: normalizedCWD)

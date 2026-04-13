@@ -147,7 +147,7 @@ final class CodexDesktopProjectCatalogReaderTests: XCTestCase {
         )
         XCTAssertEqual(
             catalog.project(for: "/tmp/worktrees/app-copy").displayName,
-            "app-copy"
+            CodexDesktopProjectCatalog.unknownProjectDisplayName
         )
     }
 

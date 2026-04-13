@@ -96,6 +96,24 @@ final class AppStateStoreTests: XCTestCase {
         XCTAssertEqual(sections.map(\.displayName), ["scratch-area"])
     }
 
+    func testProjectSectionsUseUnknownProjectForUnmatchedCWDWhenCatalogHasKnownRoots() {
+        var store = AppStateStore()
+        store.replaceRecentThreads(with: [
+            thread(id: "thread-1", updatedAt: 100, status: .idle, cwd: "/Users/imsang-yeob/test_project")
+        ])
+
+        let catalog = CodexDesktopProjectCatalog(
+            workspaceRoots: [
+                .init(path: "/Users/imsang-yeob/codextension", displayName: "codextension")
+            ]
+        )
+
+        let sections = store.projectSections(using: catalog)
+
+        XCTAssertEqual(sections.map(\.id), [CodexDesktopProjectCatalog.unknownProjectID])
+        XCTAssertEqual(sections.map(\.displayName), [CodexDesktopProjectCatalog.unknownProjectDisplayName])
+    }
+
     func testProjectSectionsLimitToFiveProjectsAndEightThreads() {
         var store = AppStateStore()
         store.replaceRecentThreads(with: [
