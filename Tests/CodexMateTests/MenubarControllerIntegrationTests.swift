@@ -1138,6 +1138,97 @@ final class MenubarControllerIntegrationTests: XCTestCase {
         XCTAssertTrue(effects.diagnostics.isEmpty)
     }
 
+    func testPruneThreadsMissingFromDesktopStateKeepsCompletedPendingThreadWhileDiscoveryIsStillPending() async throws {
+        let newThread = thread(id: "new-thread", updatedAt: 250, cwd: "/tmp/B/work", status: .active(flags: []))
+        let controller = makeController(
+            desktopUpdates: [
+                desktopUpdate(
+                    runtimeSnapshot: CodexDesktopRuntimeSnapshot(
+                        activeTurnCount: 0,
+                        runningThreadIDs: []
+                    ),
+                    latestCompleted: [
+                        "new-thread": Date(timeIntervalSince1970: 260)
+                    ]
+                )
+            ],
+            recentThreadResponses: [
+                []
+            ],
+            metadataResponses: [
+                .success([])
+            ],
+            projectCatalog: .success(
+                CodexDesktopProjectCatalog(workspaceRoots: [
+                    .init(path: "/tmp/B", displayName: "B")
+                ])
+            ),
+            now: { Date(timeIntervalSince1970: 500) }
+        )
+
+        try await controller.loadInitialThreads()
+        controller.setConnection(.connected(binaryPath: "/tmp/codex"))
+        controller.apply(notification: .threadStarted(
+            ThreadStartedNotification(thread: newThread)
+        ))
+        _ = await controller.refreshDesktopActivity()
+
+        let effects = await controller.pruneThreadsMissingFromDesktopState()
+        let snapshot = controller.prepareSnapshot().snapshot
+
+        XCTAssertEqual(controller.recentThreads.map(\.id), ["new-thread"])
+        XCTAssertEqual(snapshot.projectSections.map(\.section.displayName), ["B"])
+        XCTAssertEqual(snapshot.projectSections.first?.threads.first?.thread.displayStatus, .idle)
+        XCTAssertTrue(effects.diagnostics.isEmpty)
+    }
+
+    func testRefreshDesktopActivityKeepsRediscoveredPendingThreadWhenPendingTTLExpires() async throws {
+        var currentTime = Date(timeIntervalSince1970: 100)
+        let controller = makeController(
+            desktopUpdates: [
+                desktopUpdate(
+                    runtimeSnapshot: CodexDesktopRuntimeSnapshot(
+                        activeTurnCount: 0,
+                        runningThreadIDs: [],
+                        recentActivityThreadIDs: ["new-thread"]
+                    )
+                ),
+                desktopUpdate(
+                    runtimeSnapshot: CodexDesktopRuntimeSnapshot(
+                        activeTurnCount: 0,
+                        runningThreadIDs: [],
+                        recentActivityThreadIDs: ["new-thread"]
+                    )
+                )
+            ],
+            recentThreadResponses: [
+                []
+            ],
+            metadataResponses: [
+                .success([
+                    thread(id: "new-thread", updatedAt: 250, cwd: "/tmp/B/work")
+                ])
+            ],
+            projectCatalog: .success(
+                CodexDesktopProjectCatalog(workspaceRoots: [
+                    .init(path: "/tmp/B", displayName: "B")
+                ])
+            ),
+            now: { currentTime }
+        )
+
+        try await controller.loadInitialThreads()
+        _ = await controller.refreshDesktopActivity()
+        XCTAssertEqual(controller.recentThreads.map(\.id), ["new-thread"])
+
+        currentTime = Date(timeIntervalSince1970: 221)
+        _ = await controller.refreshDesktopActivity()
+
+        let snapshot = controller.prepareSnapshot().snapshot
+        XCTAssertEqual(controller.recentThreads.map(\.id), ["new-thread"])
+        XCTAssertEqual(snapshot.projectSections.map(\.section.displayName), ["B"])
+    }
+
     func testPrepareSnapshotAppliesVisibleThreadLimitOverridePerProject() async throws {
         let controller = makeController(
             recentThreadResponses: [

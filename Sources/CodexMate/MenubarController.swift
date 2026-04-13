@@ -281,6 +281,8 @@ final class MenubarController {
     func pruneThreadsMissingFromDesktopState() async -> MenubarControllerEffects {
         let rowsByID = Dictionary(uniqueKeysWithValues: state.recentThreads.map { ($0.id, $0) })
         let pruneGraceCutoff = now().addingTimeInterval(-configuration.pendingDiscoveredThreadTTL)
+        let pendingDiscoveryThreadIDs = pendingDiscoveredThreads.pendingThreadIDs
+        let protectedPendingThreadIDs = Set(rowsByID.keys).intersection(pendingDiscoveryThreadIDs)
         let staleThreadIDs = Set(
             rowsByID.values
                 .filter { $0.updatedAt <= pruneGraceCutoff }
@@ -303,6 +305,7 @@ final class MenubarController {
             let missingThreadIDs = staleThreadIDs
                 .subtracting(presentThreadIDs)
                 .subtracting(archivedThreadIDs)
+                .subtracting(protectedPendingThreadIDs)
             let removedThreadIDs = archivedThreadIDs.union(missingThreadIDs)
 
             guard !removedThreadIDs.isEmpty else {
@@ -322,10 +325,12 @@ final class MenubarController {
     }
 
     func refreshDesktopActivity() async -> MenubarControllerEffects {
-        pendingDiscoveredThreads.prune(now: now())
-        synchronizePendingAuthoritativeThreads()
-
         let trackedThreads = state.recentThreads
+        let trackedPendingThreadIDs = Set(
+            trackedThreads.compactMap { row in
+                row.authoritativeListPresence == .pendingInclusion ? row.id : nil
+            }
+        )
         let candidateSessionContexts = Dictionary(
             uniqueKeysWithValues: trackedThreads.map { row in
                 (
@@ -352,9 +357,14 @@ final class MenubarController {
             attentionThreadIDs: attentionThreadIDs,
             now: activityObservedAt
         )
-        let newlyDiscoveredThreadIDs = pendingDiscoveredThreads.observe(discoveredThreadIDs, now: activityObservedAt)
+        let newlyObservedThreadIDs = pendingDiscoveredThreads.observe(
+            discoveredThreadIDs.union(trackedPendingThreadIDs),
+            now: activityObservedAt
+        )
+        let newlyDiscoveredThreadIDs = newlyObservedThreadIDs.subtracting(trackedPendingThreadIDs)
         let unresolvedPendingThreadIDs = pendingDiscoveredThreads.pendingThreadIDs.subtracting(recentThreadIDs)
         let threadIDsToSeed = newlyDiscoveredThreadIDs.union(unresolvedPendingThreadIDs)
+        synchronizePendingAuthoritativeThreads()
 
         var effects = MenubarControllerEffects()
 
