@@ -56,6 +56,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         static let minimumInterval: TimeInterval = 1
     }
 
+    private enum DesktopPrunePolicy {
+        static let minimumInterval: TimeInterval = 30
+    }
+
     private enum ThreadDiscoveryBoostPolicy {
         static let duration: TimeInterval = 10
         static let desktopActivityInterval: TimeInterval = 1
@@ -160,6 +164,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var fastThreadDiscoveryRefreshUntil: Date?
     private var lastDesktopActivityRefreshRequestAt: Date?
     private var lastThreadRefreshRequestAt: Date?
+    private var lastDesktopPruneAt: Date?
     private var desktopActivityRefreshGate = RefreshRequestGate()
     private var desktopActivityRefreshTask: Task<Void, Never>?
     private var threadRefreshGate = RefreshRequestGate()
@@ -981,7 +986,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func refreshDesktopActivity() async {
         let effects = await controller.refreshDesktopActivity()
-        let pruneEffects = await controller.pruneThreadsMissingFromDesktopState()
+        let pruneEffects: MenubarControllerEffects
+        if shouldPruneDesktopThreads(now: Date()) {
+            pruneEffects = await controller.pruneThreadsMissingFromDesktopState()
+        } else {
+            pruneEffects = MenubarControllerEffects()
+        }
         applyControllerEffects(effects)
         applyControllerEffects(pruneEffects)
         renderMenu()
@@ -1496,12 +1506,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         if effects.shouldRequestDesktopActivityRefresh {
-            requestDesktopActivityRefresh()
+            requestDesktopActivityRefresh(force: false)
         }
 
         if effects.shouldRequestThreadRefresh {
-            requestThreadRefresh()
+            requestThreadRefresh(force: false)
         }
+    }
+
+    private func shouldPruneDesktopThreads(now: Date) -> Bool {
+        guard let lastDesktopPruneAt else {
+            self.lastDesktopPruneAt = now
+            return true
+        }
+
+        guard now.timeIntervalSince(lastDesktopPruneAt) >= DesktopPrunePolicy.minimumInterval else {
+            return false
+        }
+
+        self.lastDesktopPruneAt = now
+        return true
     }
 
     private func shortThreadID(_ threadID: String) -> String {
@@ -1579,7 +1603,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             defer {
                 threadRefreshTask = nil
                 if threadRefreshGate.finish() {
-                    requestThreadRefresh()
+                    requestThreadRefresh(force: false, now: Date())
                 }
             }
 
@@ -1609,7 +1633,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             defer {
                 desktopActivityRefreshTask = nil
                 if desktopActivityRefreshGate.finish() {
-                    requestDesktopActivityRefresh()
+                    requestDesktopActivityRefresh(force: false, now: Date())
                 }
             }
 

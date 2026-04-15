@@ -176,6 +176,11 @@ struct MenubarPreparedSnapshot: Equatable {
 
 @MainActor
 final class MenubarController {
+    private enum DesktopActivityScanPolicy {
+        static let candidateLimit = 64
+        static let recentRuntimeLookback: TimeInterval = 5 * 60
+    }
+
     private let loadDesktopActivity: @Sendable ([String: ThreadSessionContext], Date) async -> DesktopActivityUpdate
     private let loadRecentThreads: @Sendable (Int) async throws -> [CodexThread]
     private let loadThreadsByID: (Set<String>) async throws -> [CodexThread]
@@ -326,24 +331,29 @@ final class MenubarController {
 
     func refreshDesktopActivity() async -> MenubarControllerEffects {
         let trackedThreads = state.recentThreads
+        let activityObservedAt = now()
+        let desktopActivityCandidateRows = prioritizedDesktopActivityCandidateRows(
+            from: trackedThreads,
+            observedAt: activityObservedAt
+        )
         let trackedPendingThreadIDs = Set(
             trackedThreads.compactMap { row in
                 row.authoritativeListPresence == .pendingInclusion ? row.id : nil
             }
         )
         let candidateSessionContexts = Dictionary(
-            uniqueKeysWithValues: trackedThreads.map { row in
+            uniqueKeysWithValues: desktopActivityCandidateRows.map { row in
                 (
                     row.id,
                     ThreadSessionContext(
                         path: row.sessionPath,
                         authoritativeUpdatedAt: row.updatedAt,
-                        authoritativeStatusIsPending: row.listedStatus.isPending
+                        authoritativeStatusIsPending: row.listedStatus.isPending,
+                        authoritativeStatusIsActive: row.presentationStatus == .running || row.activeTurnID != nil
                     )
                 )
             }
         )
-        let activityObservedAt = now()
         let update = await loadDesktopActivity(candidateSessionContexts, activityObservedAt)
         let isConnected = state.connection.isConnected
         let recentThreadIDs = Set(trackedThreads.map(\.id))
@@ -469,6 +479,41 @@ final class MenubarController {
         }
 
         return effects
+    }
+
+    private func prioritizedDesktopActivityCandidateRows(
+        from trackedThreads: [AppStateStore.ThreadRow],
+        observedAt: Date
+    ) -> [AppStateStore.ThreadRow] {
+        guard trackedThreads.count > DesktopActivityScanPolicy.candidateLimit else {
+            return trackedThreads
+        }
+
+        let runtimeCutoff = observedAt.addingTimeInterval(-DesktopActivityScanPolicy.recentRuntimeLookback)
+        let actionableRows = trackedThreads.filter { row in
+            row.authoritativeListPresence == .pendingInclusion
+                || row.listedStatus.isPending
+                || row.presentationStatus == .running
+                || row.presentationStatus == .failed
+                || row.activeTurnID != nil
+                || (row.lastRuntimeEventAt ?? .distantPast) >= runtimeCutoff
+        }
+
+        var candidateRows: [AppStateStore.ThreadRow] = []
+        var seenThreadIDs: Set<String> = []
+
+        func appendRows(_ rows: [AppStateStore.ThreadRow]) {
+            for row in rows where candidateRows.count < DesktopActivityScanPolicy.candidateLimit {
+                guard seenThreadIDs.insert(row.id).inserted else {
+                    continue
+                }
+                candidateRows.append(row)
+            }
+        }
+
+        appendRows(actionableRows)
+        appendRows(trackedThreads)
+        return candidateRows
     }
 
     func apply(notification: AppStateStore.NotificationEvent) {

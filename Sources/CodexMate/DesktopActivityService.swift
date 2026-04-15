@@ -4,15 +4,18 @@ struct ThreadSessionContext: Equatable {
     let path: String?
     let authoritativeUpdatedAt: Date?
     let authoritativeStatusIsPending: Bool
+    let authoritativeStatusIsActive: Bool
 
     init(
         path: String?,
         authoritativeUpdatedAt: Date? = nil,
-        authoritativeStatusIsPending: Bool = false
+        authoritativeStatusIsPending: Bool = false,
+        authoritativeStatusIsActive: Bool = false
     ) {
         self.path = path
         self.authoritativeUpdatedAt = authoritativeUpdatedAt
         self.authoritativeStatusIsPending = authoritativeStatusIsPending
+        self.authoritativeStatusIsActive = authoritativeStatusIsActive
     }
 }
 

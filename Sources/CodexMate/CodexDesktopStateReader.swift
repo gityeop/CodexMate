@@ -1155,12 +1155,19 @@ struct CodexDesktopStateReader {
 
             let sessionURL = URL(fileURLWithPath: rawPath)
             let sessionModifiedAt = (try? sessionURL.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
+            let shortID = String(threadID.prefix(8))
+            if shouldSkipSessionPendingStateRead(
+                context: context,
+                sessionModifiedAt: sessionModifiedAt
+            ) {
+                debugRows.append("\(shortID):session-preflight-stale")
+                continue
+            }
+
             guard let state = sessionPendingState(forSessionFileAt: sessionURL)
             else {
                 continue
             }
-
-            let shortID = String(threadID.prefix(8))
 
             if isStaleSessionPendingState(
                 state,
@@ -1190,6 +1197,21 @@ struct CodexDesktopStateReader {
         return (waitingThreadIDs, approvalThreadIDs, activeTaskThreadIDs, debugRows)
     }
 
+    func shouldSkipSessionPendingStateRead(
+        context: ThreadSessionContext,
+        sessionModifiedAt: Date?
+    ) -> Bool {
+        guard !context.authoritativeStatusIsPending,
+              !context.authoritativeStatusIsActive,
+              let sessionModifiedAt,
+              let authoritativeUpdatedAt = context.authoritativeUpdatedAt
+        else {
+            return false
+        }
+
+        return authoritativeUpdatedAt.timeIntervalSince(sessionModifiedAt) > Self.staleSessionPendingTolerance
+    }
+
     private func isStaleSessionPendingState(
         _ state: SessionPendingState,
         context: ThreadSessionContext,
@@ -1198,6 +1220,7 @@ struct CodexDesktopStateReader {
         guard (state.waitingForInput || state.needsApproval),
               !state.hasActiveTask,
               !context.authoritativeStatusIsPending,
+              !context.authoritativeStatusIsActive,
               let sessionModifiedAt,
               let authoritativeUpdatedAt = context.authoritativeUpdatedAt
         else {
