@@ -243,6 +243,15 @@ final class MenubarController {
         state.visibleRecentThreads
     }
 
+    var hasUnreadThreads: Bool {
+        state.recentThreads.contains { thread in
+            threadReadMarkers.hasUnreadContent(
+                threadID: thread.id,
+                lastTerminalActivityAt: thread.lastTerminalActivityAt
+            )
+        }
+    }
+
     var persistedThreadReadMarkers: [String: TimeInterval] {
         threadReadMarkers.lastReadTerminalAtByThreadID
     }

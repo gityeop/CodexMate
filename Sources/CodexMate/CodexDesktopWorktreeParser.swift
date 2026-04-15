@@ -3,7 +3,12 @@ import Foundation
 enum CodexDesktopWorktreePath {
     static func normalize(path: String) -> String {
         guard !path.isEmpty else { return "" }
-        return URL(fileURLWithPath: path).standardizedFileURL.path
+        let standardizedPath = (path as NSString).standardizingPath
+        guard standardizedPath.count > 1, standardizedPath.hasSuffix("/") else {
+            return standardizedPath
+        }
+
+        return String(standardizedPath.dropLast())
     }
 
     static func fallbackDisplayName(for path: String) -> String {
@@ -12,7 +17,7 @@ enum CodexDesktopWorktreePath {
             return CodexDesktopProjectCatalog.unknownProjectDisplayName
         }
 
-        let component = URL(fileURLWithPath: normalizedPath).lastPathComponent
+        let component = (normalizedPath as NSString).lastPathComponent
         return component.isEmpty ? normalizedPath : component
     }
 

@@ -243,25 +243,52 @@ struct AppStateStore {
         case pendingInclusion
     }
 
+    private final class ThreadOrderingCache {
+        var recentThreads: [ThreadRow]?
+        var visibleRecentThreads: [ThreadRow]?
+
+        func invalidate() {
+            recentThreads = nil
+            visibleRecentThreads = nil
+        }
+    }
+
     private(set) var connection: ConnectionState = .disconnected
-    private(set) var threadsByID: [String: ThreadRow] = [:]
+    private(set) var threadsByID: [String: ThreadRow] = [:] {
+        didSet {
+            threadOrderingCache.invalidate()
+        }
+    }
     private(set) var lastDiagnostic: String?
     private(set) var desktopActiveTurnCount: Int = 0
     private(set) var desktopDebugSummary: String?
     private(set) var archivedThreadTombstonesByID: [String: Date] = [:]
+    private var threadOrderingCache = ThreadOrderingCache()
 
     var recentThreads: [ThreadRow] {
-        threadsByID.values.sorted { lhs, rhs in
+        if let cached = threadOrderingCache.recentThreads {
+            return cached
+        }
+
+        let sortedThreads = threadsByID.values.sorted { lhs, rhs in
             if lhs.activityUpdatedAt == rhs.activityUpdatedAt {
                 return lhs.displayTitle.localizedCaseInsensitiveCompare(rhs.displayTitle) == .orderedAscending
             }
 
             return lhs.activityUpdatedAt > rhs.activityUpdatedAt
         }
+        threadOrderingCache.recentThreads = sortedThreads
+        return sortedThreads
     }
 
     var visibleRecentThreads: [ThreadRow] {
-        recentThreads.filter { !$0.isSubagent }
+        if let cached = threadOrderingCache.visibleRecentThreads {
+            return cached
+        }
+
+        let visibleThreads = recentThreads.filter { !$0.isSubagent }
+        threadOrderingCache.visibleRecentThreads = visibleThreads
+        return visibleThreads
     }
 
     func projectSections(

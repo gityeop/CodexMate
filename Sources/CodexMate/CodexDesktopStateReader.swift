@@ -38,6 +38,7 @@ struct CodexDesktopRuntimeSnapshot {
 
 struct CodexDesktopStateReader {
     private static let staleSessionPendingTolerance: TimeInterval = 1
+    private static let sessionReadChunkSize = 64 * 1024
 
     struct SessionPendingState: Equatable {
         let waitingForInput: Bool
@@ -76,6 +77,17 @@ struct CodexDesktopStateReader {
         let pendingLogRows: [PendingLogRow]
         let failedThreads: [String: CodexDesktopRuntimeSnapshot.FailedThreadState]
         let latestTurnCompletedAtByThreadID: [String: Date]
+    }
+
+    private enum SessionEvent {
+        case taskStarted(turnID: String, collaborationModeKind: String?)
+        case taskComplete(turnID: String)
+        case turnAborted(turnID: String)
+        case execApprovalRequest(callID: String)
+        case execCommandResolution(callID: String)
+        case userMessage
+        case functionCall(name: String, callID: String, arguments: Any?)
+        case functionCallOutput(callID: String)
     }
 
     private struct SQLiteQuerySection {
@@ -1239,11 +1251,10 @@ struct CodexDesktopStateReader {
             return cached
         }
 
-        guard let contents = try? String(contentsOf: sessionURL, encoding: .utf8) else {
+        guard let state = sessionPendingStateByScanningTail(forSessionFileAt: sessionURL) else {
             return nil
         }
 
-        let state = Self.parseSessionPendingState(from: contents)
         sessionPendingStateCache.store(state, for: sessionURL.path, modificationDate: modificationDate, fileSize: fileSize)
         return state
     }
@@ -1256,90 +1267,54 @@ struct CodexDesktopStateReader {
         var waitingForPlanReply = false
 
         for line in contents.split(whereSeparator: \.isNewline) {
-            guard let data = String(line).data(using: .utf8),
-                  let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let type = object["type"] as? String,
-                  let payload = object["payload"] as? [String: Any],
-                  let payloadType = payload["type"] as? String
-            else {
+            guard let event = sessionEvent(for: line) else {
                 continue
             }
 
-            switch type {
-            case "event_msg":
-                if payloadType == "task_started" {
-                    guard let turnID = payload["turn_id"] as? String else {
-                        continue
-                    }
-
-                    // A thread only executes one turn at a time; a newer task start
-                    // supersedes any orphaned active turn that never emitted completion.
-                    activeTaskIDs = [turnID]
-                    unresolvedRequestUserInputCallIDs.removeAll()
-                    unresolvedApprovalCallIDs.removeAll()
-                    waitingForPlanReply = false
-                    collaborationModeKindByTurnID = [:]
-                    if let collaborationModeKind = payload["collaboration_mode_kind"] as? String {
-                        collaborationModeKindByTurnID[turnID] = collaborationModeKind
-                    }
-                } else if payloadType == "task_complete" || payloadType == "turn_aborted" {
-                    guard let turnID = payload["turn_id"] as? String else {
-                        continue
-                    }
-
-                    let collaborationModeKind = collaborationModeKindByTurnID[turnID]
-                    activeTaskIDs.remove(turnID)
-                    unresolvedRequestUserInputCallIDs.removeAll()
-                    unresolvedApprovalCallIDs.removeAll()
-                    collaborationModeKindByTurnID.removeValue(forKey: turnID)
-                    waitingForPlanReply = payloadType == "task_complete" && collaborationModeKind == "plan"
-                } else if payloadType == "exec_approval_request" {
-                    guard let callID = payload["call_id"] as? String else {
-                        continue
-                    }
-
+            switch event {
+            case let .taskStarted(turnID, collaborationModeKind):
+                // A thread only executes one turn at a time; a newer task start
+                // supersedes any orphaned active turn that never emitted completion.
+                activeTaskIDs = [turnID]
+                unresolvedRequestUserInputCallIDs.removeAll()
+                unresolvedApprovalCallIDs.removeAll()
+                waitingForPlanReply = false
+                collaborationModeKindByTurnID = [:]
+                if let collaborationModeKind {
+                    collaborationModeKindByTurnID[turnID] = collaborationModeKind
+                }
+            case let .taskComplete(turnID):
+                let collaborationModeKind = collaborationModeKindByTurnID[turnID]
+                activeTaskIDs.remove(turnID)
+                unresolvedRequestUserInputCallIDs.removeAll()
+                unresolvedApprovalCallIDs.removeAll()
+                collaborationModeKindByTurnID.removeValue(forKey: turnID)
+                waitingForPlanReply = collaborationModeKind == "plan"
+            case let .turnAborted(turnID):
+                activeTaskIDs.remove(turnID)
+                unresolvedRequestUserInputCallIDs.removeAll()
+                unresolvedApprovalCallIDs.removeAll()
+                collaborationModeKindByTurnID.removeValue(forKey: turnID)
+                waitingForPlanReply = false
+            case let .execApprovalRequest(callID):
+                unresolvedApprovalCallIDs.insert(callID)
+            case let .execCommandResolution(callID):
+                unresolvedApprovalCallIDs.remove(callID)
+            case .userMessage:
+                waitingForPlanReply = false
+            case let .functionCall(name, callID, arguments):
+                waitingForPlanReply = false
+                if name == "request_user_input" {
+                    unresolvedRequestUserInputCallIDs.insert(callID)
+                } else if name == "request_approval" || name == "requestApproval" {
                     unresolvedApprovalCallIDs.insert(callID)
-                } else if payloadType == "exec_command_begin" || payloadType == "exec_command_end" {
-                    guard let callID = payload["call_id"] as? String else {
-                        continue
-                    }
-
-                    unresolvedApprovalCallIDs.remove(callID)
+                } else if isEscalatedExecCommandCall(name: name, arguments: arguments) {
+                    unresolvedApprovalCallIDs.insert(callID)
                 }
-            case "response_item":
-                switch payloadType {
-                case "message":
-                    if payload["role"] as? String == "user" {
-                        waitingForPlanReply = false
-                    }
-                case "function_call":
-                    guard let name = payload["name"] as? String,
-                          let callID = payload["call_id"] as? String
-                    else {
-                        continue
-                    }
-
-                    waitingForPlanReply = false
-                    if name == "request_user_input" {
-                        unresolvedRequestUserInputCallIDs.insert(callID)
-                    } else if name == "request_approval" || name == "requestApproval" {
-                        unresolvedApprovalCallIDs.insert(callID)
-                    } else if isEscalatedExecCommandCall(name: name, arguments: payload["arguments"]) {
-                        unresolvedApprovalCallIDs.insert(callID)
-                    }
-                case "function_call_output":
-                    guard let callID = payload["call_id"] as? String else {
-                        continue
-                    }
-
-                    waitingForPlanReply = false
-                    unresolvedRequestUserInputCallIDs.remove(callID)
-                    unresolvedApprovalCallIDs.remove(callID)
-                default:
-                    continue
-                }
-            default:
-                continue
+            case let .functionCallOutput(callID):
+                waitingForPlanReply = false
+                unresolvedRequestUserInputCallIDs.remove(callID)
+                unresolvedApprovalCallIDs.remove(callID)
             }
         }
 
@@ -1348,6 +1323,131 @@ struct CodexDesktopStateReader {
             needsApproval: !unresolvedApprovalCallIDs.isEmpty,
             hasActiveTask: !activeTaskIDs.isEmpty
         )
+    }
+
+    private func sessionPendingStateByScanningTail(forSessionFileAt sessionURL: URL) -> SessionPendingState? {
+        guard let handle = try? FileHandle(forReadingFrom: sessionURL) else {
+            return nil
+        }
+
+        defer { try? handle.close() }
+
+        let totalBytes = handle.seekToEndOfFile()
+        var offset = Int(totalBytes)
+        var buffer = Data()
+        var resolvedRequestUserInputCallIDs: Set<String> = []
+        var resolvedApprovalCallIDs: Set<String> = []
+        var unresolvedRequestUserInputCallIDs: Set<String> = []
+        var unresolvedApprovalCallIDs: Set<String> = []
+        var pendingCompletedTurnIDForPlanLookup: String?
+        var waitingForPlanReply = false
+        var sawLaterPlanReplyClearer = false
+
+        func finalState(hasActiveTask: Bool) -> SessionPendingState {
+            SessionPendingState(
+                waitingForInput: waitingForPlanReply || !unresolvedRequestUserInputCallIDs.isEmpty,
+                needsApproval: !unresolvedApprovalCallIDs.isEmpty,
+                hasActiveTask: hasActiveTask
+            )
+        }
+
+        func consume(_ line: String) -> SessionPendingState? {
+            guard let event = Self.sessionEvent(for: line) else {
+                return nil
+            }
+
+            if let pendingCompletedTurnIDForPlanLookup {
+                if case let .taskStarted(turnID, collaborationModeKind) = event,
+                   turnID == pendingCompletedTurnIDForPlanLookup {
+                    waitingForPlanReply = collaborationModeKind == "plan"
+                    return finalState(hasActiveTask: false)
+                }
+
+                return nil
+            }
+
+            switch event {
+            case .taskStarted:
+                return finalState(hasActiveTask: true)
+            case let .taskComplete(turnID):
+                if sawLaterPlanReplyClearer {
+                    return finalState(hasActiveTask: false)
+                }
+
+                pendingCompletedTurnIDForPlanLookup = turnID
+                return nil
+            case .turnAborted:
+                return finalState(hasActiveTask: false)
+            case let .execApprovalRequest(callID):
+                if !resolvedApprovalCallIDs.contains(callID) {
+                    unresolvedApprovalCallIDs.insert(callID)
+                }
+            case let .execCommandResolution(callID):
+                resolvedApprovalCallIDs.insert(callID)
+                unresolvedApprovalCallIDs.remove(callID)
+            case .userMessage:
+                sawLaterPlanReplyClearer = true
+            case let .functionCall(name, callID, arguments):
+                sawLaterPlanReplyClearer = true
+                if name == "request_user_input" {
+                    if !resolvedRequestUserInputCallIDs.contains(callID) {
+                        unresolvedRequestUserInputCallIDs.insert(callID)
+                    }
+                } else if name == "request_approval" || name == "requestApproval" {
+                    if !resolvedApprovalCallIDs.contains(callID) {
+                        unresolvedApprovalCallIDs.insert(callID)
+                    }
+                } else if Self.isEscalatedExecCommandCall(name: name, arguments: arguments),
+                          !resolvedApprovalCallIDs.contains(callID) {
+                    unresolvedApprovalCallIDs.insert(callID)
+                }
+            case let .functionCallOutput(callID):
+                sawLaterPlanReplyClearer = true
+                resolvedRequestUserInputCallIDs.insert(callID)
+                resolvedApprovalCallIDs.insert(callID)
+                unresolvedRequestUserInputCallIDs.remove(callID)
+                unresolvedApprovalCallIDs.remove(callID)
+            }
+
+            return nil
+        }
+
+        while offset > 0 {
+            let chunkSize = min(Self.sessionReadChunkSize, offset)
+            offset -= chunkSize
+
+            do {
+                try handle.seek(toOffset: UInt64(offset))
+                let chunk = try handle.read(upToCount: chunkSize) ?? Data()
+                if chunk.isEmpty {
+                    continue
+                }
+                buffer.insert(contentsOf: chunk, at: 0)
+            } catch {
+                return nil
+            }
+
+            while let newlineIndex = buffer.lastIndex(of: 0x0A) {
+                let lineStart = buffer.index(after: newlineIndex)
+                let lineData = buffer.subdata(in: lineStart..<buffer.endIndex)
+                buffer.removeSubrange(newlineIndex..<buffer.endIndex)
+
+                guard let line = Self.decodedJSONLine(from: lineData) else {
+                    continue
+                }
+
+                if let state = consume(line) {
+                    return state
+                }
+            }
+        }
+
+        if let line = Self.decodedJSONLine(from: buffer),
+           let state = consume(line) {
+            return state
+        }
+
+        return finalState(hasActiveTask: false)
     }
 
     private func sessionBackedThreads(threadIDs: Set<String>) -> [CodexThread] {
@@ -1552,6 +1652,105 @@ struct CodexDesktopStateReader {
         let fallbackFormatter = ISO8601DateFormatter()
         fallbackFormatter.formatOptions = [.withInternetDateTime]
         return fallbackFormatter.date(from: value)
+    }
+
+    private static func sessionEvent<S: StringProtocol>(for line: S) -> SessionEvent? {
+        guard let data = String(line).data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let type = object["type"] as? String,
+              let payload = object["payload"] as? [String: Any],
+              let payloadType = payload["type"] as? String
+        else {
+            return nil
+        }
+
+        switch type {
+        case "event_msg":
+            switch payloadType {
+            case "task_started":
+                guard let turnID = payload["turn_id"] as? String else {
+                    return nil
+                }
+                return .taskStarted(
+                    turnID: turnID,
+                    collaborationModeKind: payload["collaboration_mode_kind"] as? String
+                )
+            case "task_complete":
+                guard let turnID = payload["turn_id"] as? String else {
+                    return nil
+                }
+                return .taskComplete(turnID: turnID)
+            case "turn_aborted":
+                guard let turnID = payload["turn_id"] as? String else {
+                    return nil
+                }
+                return .turnAborted(turnID: turnID)
+            case "exec_approval_request":
+                guard let callID = payload["call_id"] as? String else {
+                    return nil
+                }
+                return .execApprovalRequest(callID: callID)
+            case "exec_command_begin", "exec_command_end":
+                guard let callID = payload["call_id"] as? String else {
+                    return nil
+                }
+                return .execCommandResolution(callID: callID)
+            default:
+                return nil
+            }
+        case "response_item":
+            switch payloadType {
+            case "message":
+                guard payload["role"] as? String == "user" else {
+                    return nil
+                }
+                return .userMessage
+            case "function_call":
+                guard let name = payload["name"] as? String,
+                      let callID = payload["call_id"] as? String
+                else {
+                    return nil
+                }
+                return .functionCall(name: name, callID: callID, arguments: payload["arguments"])
+            case "function_call_output":
+                guard let callID = payload["call_id"] as? String else {
+                    return nil
+                }
+                return .functionCallOutput(callID: callID)
+            default:
+                return nil
+            }
+        default:
+            return nil
+        }
+    }
+
+    private static func decodedJSONLine(from data: Data) -> String? {
+        guard !data.isEmpty else {
+            return nil
+        }
+
+        var startIndex = data.startIndex
+        var endIndex = data.endIndex
+
+        while startIndex < endIndex && (data[startIndex] == 0x0A || data[startIndex] == 0x0D) {
+            startIndex = data.index(after: startIndex)
+        }
+
+        while startIndex < endIndex {
+            let previousIndex = data.index(before: endIndex)
+            let byte = data[previousIndex]
+            guard byte == 0x0A || byte == 0x0D else {
+                break
+            }
+            endIndex = previousIndex
+        }
+
+        guard startIndex < endIndex else {
+            return nil
+        }
+
+        return String(data: data.subdata(in: startIndex..<endIndex), encoding: .utf8)
     }
 
     private static func isEscalatedExecCommandCall(name: String, arguments: Any?) -> Bool {

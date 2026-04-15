@@ -684,6 +684,67 @@ final class CodexDesktopStateReaderTests: XCTestCase {
         XCTAssertFalse(snapshot.debugSummary.contains("session-preflight-stale"))
     }
 
+    func testSessionPendingStateScansLargeActiveSessionFromTail() throws {
+        let tempDirectoryURL = FileManager.default.temporaryDirectory
+            .appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: tempDirectoryURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDirectoryURL) }
+
+        let sessionURL = tempDirectoryURL.appending(path: "thread-1.jsonl")
+        var contents = """
+        {"timestamp":"2026-04-12T03:05:00.000Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-1"}}
+        """
+        for index in 0..<5000 {
+            contents += "\n{\"timestamp\":\"2026-04-12T03:05:00.000Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":\"line-\(index)\"}}"
+        }
+        try contents.write(to: sessionURL, atomically: true, encoding: .utf8)
+
+        let reader = CodexDesktopStateReader()
+        let state = reader.sessionPendingState(forSessionFileAt: sessionURL)
+
+        XCTAssertEqual(
+            state,
+            CodexDesktopStateReader.SessionPendingState(
+                waitingForInput: false,
+                needsApproval: false,
+                hasActiveTask: true
+            )
+        )
+    }
+
+    func testSessionPendingStateScansLargePlanCompletionFromTail() throws {
+        let tempDirectoryURL = FileManager.default.temporaryDirectory
+            .appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: tempDirectoryURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDirectoryURL) }
+
+        let sessionURL = tempDirectoryURL.appending(path: "thread-1.jsonl")
+        var lines = [
+            #"{"timestamp":"2026-04-12T03:05:00.000Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-1","collaboration_mode_kind":"plan"}}"#
+        ]
+        lines.append(
+            contentsOf: (0..<5000).map { index in
+                #"{"timestamp":"2026-04-12T03:05:00.000Z","type":"response_item","payload":{"type":"message","role":"assistant","content":"line-\#(index)"}}"#
+            }
+        )
+        lines.append(
+            #"{"timestamp":"2026-04-12T03:10:00.000Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-1"}}"#
+        )
+        try lines.joined(separator: "\n").write(to: sessionURL, atomically: true, encoding: .utf8)
+
+        let reader = CodexDesktopStateReader()
+        let state = reader.sessionPendingState(forSessionFileAt: sessionURL)
+
+        XCTAssertEqual(
+            state,
+            CodexDesktopStateReader.SessionPendingState(
+                waitingForInput: true,
+                needsApproval: false,
+                hasActiveTask: false
+            )
+        )
+    }
+
     func testSnapshotUsesDesktopCommandExecutionApprovalToSuppressRunning() throws {
         let tempDirectoryURL = FileManager.default.temporaryDirectory
             .appending(path: UUID().uuidString)

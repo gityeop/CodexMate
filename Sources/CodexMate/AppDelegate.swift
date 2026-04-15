@@ -1090,6 +1090,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hoverTooltipWorkItem?.cancel()
         hoverTooltipWorkItem = nil
 
+        guard isMenuOpen else {
+            let statusOverride = debugStatusOverride
+            renderStatusItem(
+                overallStatus: statusOverride ?? controller.overallStatus,
+                hasUnreadThreads: statusOverride == nil ? controller.hasUnreadThreads : false
+            )
+            scheduleRefreshTimerIfNeeded()
+            return
+        }
+
         let preparedSnapshot = controller.prepareSnapshot(
             additionalTrackedThreadIDs: Set(liveSubscribedThreadUpdatedAtByID.keys),
             projectLimit: preferences.projectLimit,

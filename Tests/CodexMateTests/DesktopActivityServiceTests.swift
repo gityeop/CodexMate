@@ -190,6 +190,44 @@ final class DesktopActivityServiceTests: XCTestCase {
         XCTAssertNotNil(third.runtimeErrorMessage)
     }
 
+    func testFallbackSnapshotCacheInvalidatesWhenSessionFileChanges() async throws {
+        let tempDirectoryURL = FileManager.default.temporaryDirectory
+            .appending(path: UUID().uuidString, directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: tempDirectoryURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDirectoryURL) }
+
+        let missingDatabaseURL = tempDirectoryURL.appending(path: "missing-state.sqlite")
+        let sessionURL = tempDirectoryURL.appending(path: "thread-1.jsonl")
+
+        try """
+        {"timestamp":"2026-03-29T08:44:27.014Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-1"}}
+        {"timestamp":"2026-03-29T08:44:27.015Z","type":"response_item","payload":{"type":"function_call","name":"request_approval","arguments":"{}","call_id":"call-approval"}}
+        """.write(to: sessionURL, atomically: true, encoding: .utf8)
+
+        let service = DesktopActivityService(
+            stateReader: CodexDesktopStateReader(stateDatabaseURLOverride: missingDatabaseURL)
+        )
+
+        let first = await service.load(
+            candidateSessionPaths: ["thread-1": sessionURL.path],
+            now: Date(timeIntervalSince1970: 100)
+        )
+        XCTAssertEqual(first.runtimeSnapshot?.approvalThreadIDs, ["thread-1"])
+
+        try """
+        {"timestamp":"2026-03-29T08:44:27.014Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-1"}}
+        {"timestamp":"2026-03-29T08:44:27.015Z","type":"response_item","payload":{"type":"function_call","name":"request_user_input","arguments":"{}","call_id":"call-input"}}
+        """.write(to: sessionURL, atomically: true, encoding: .utf8)
+
+        let second = await service.load(
+            candidateSessionPaths: ["thread-1": sessionURL.path],
+            now: Date(timeIntervalSince1970: 101)
+        )
+
+        XCTAssertEqual(second.runtimeSnapshot?.approvalThreadIDs, [])
+        XCTAssertEqual(second.runtimeSnapshot?.waitingForInputThreadIDs, ["thread-1"])
+    }
+
     func testLockedDatabaseErrorsAreRetriable() {
         let error = CodexDesktopStateReader.ReaderError.queryFailed(
             message: "Error: in prepare, database is locked (5)",

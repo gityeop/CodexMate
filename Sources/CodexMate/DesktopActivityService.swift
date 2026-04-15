@@ -51,6 +51,14 @@ actor DesktopActivityService {
     private enum RuntimeErrorPolicy {
         static let retryableOpenFailureAttempts = 2
         static let diagnosticThrottleInterval: TimeInterval = 30
+        static let fallbackSnapshotReuseInterval: TimeInterval = 3
+    }
+
+    private struct FallbackSnapshotCacheEntry {
+        let key: String
+        let errorFingerprint: String
+        let snapshot: CodexDesktopRuntimeSnapshot
+        let cachedAt: Date
     }
 
     private let stateReader: CodexDesktopStateReader
@@ -59,6 +67,7 @@ actor DesktopActivityService {
     private let runningHintInterval: TimeInterval
     private var lastRuntimeErrorFingerprint: String?
     private var lastRuntimeErrorAt: Date?
+    private var fallbackSnapshotCacheEntry: FallbackSnapshotCacheEntry?
 
     init(
         stateReader: CodexDesktopStateReader? = nil,
@@ -129,10 +138,33 @@ actor DesktopActivityService {
             )
         } catch {
             let runtimeErrorMessage = throttledRuntimeErrorMessage(for: error, now: now)
+            let errorFingerprint = runtimeErrorFingerprint(for: error)
+            if let fallbackSnapshot = cachedFallbackSnapshot(
+                for: candidateSessionContexts,
+                errorFingerprint: errorFingerprint,
+                now: now
+            ) {
+                return DesktopActivityUpdate(
+                    runtimeSnapshot: fallbackSnapshot,
+                    latestViewedAtByThreadID: activitySnapshot.latestViewedAtByThreadID,
+                    latestTurnStartedAtByThreadID: activitySnapshot.latestTurnStartedAtByThreadID,
+                    latestTurnCompletedAtByThreadID: activityLatestTurnCompletedAtByThreadID,
+                    latestArchiveRequestedAtByThreadID: activitySnapshot.latestArchiveRequestedAtByThreadID,
+                    latestUnarchiveRequestedAtByThreadID: activitySnapshot.latestUnarchiveRequestedAtByThreadID,
+                    runtimeErrorMessage: nil
+                )
+            }
+
             if let fallbackSnapshot = stateReader.sessionFallbackSnapshot(
                 candidateSessionContexts: candidateSessionContexts,
                 databaseError: error.localizedDescription
             ) {
+                storeFallbackSnapshot(
+                    fallbackSnapshot,
+                    for: candidateSessionContexts,
+                    errorFingerprint: errorFingerprint,
+                    now: now
+                )
                 DebugTraceLogger.log(
                     "desktop activity using session fallback candidates=\(candidateSessionContexts.count) message=\(error.localizedDescription)"
                 )
@@ -184,6 +216,7 @@ actor DesktopActivityService {
                 let snapshot = try stateReader.snapshot(candidateSessionContexts: candidateSessionContexts)
                 lastRuntimeErrorFingerprint = nil
                 lastRuntimeErrorAt = nil
+                fallbackSnapshotCacheEntry = nil
                 return snapshot
             } catch let error as CodexDesktopStateReader.ReaderError
                 where error.isRetriableDatabaseOpenFailure && attempt + 1 < RuntimeErrorPolicy.retryableOpenFailureAttempts {
@@ -223,5 +256,64 @@ actor DesktopActivityService {
         }
 
         return error.localizedDescription
+    }
+
+    private func cachedFallbackSnapshot(
+        for candidateSessionContexts: [String: ThreadSessionContext],
+        errorFingerprint: String,
+        now: Date
+    ) -> CodexDesktopRuntimeSnapshot? {
+        guard let fallbackSnapshotCacheEntry,
+              fallbackSnapshotCacheEntry.errorFingerprint == errorFingerprint,
+              now.timeIntervalSince(fallbackSnapshotCacheEntry.cachedAt) < RuntimeErrorPolicy.fallbackSnapshotReuseInterval,
+              fallbackSnapshotCacheEntry.key == fallbackSnapshotCacheKey(for: candidateSessionContexts)
+        else {
+            return nil
+        }
+
+        return fallbackSnapshotCacheEntry.snapshot
+    }
+
+    private func storeFallbackSnapshot(
+        _ snapshot: CodexDesktopRuntimeSnapshot,
+        for candidateSessionContexts: [String: ThreadSessionContext],
+        errorFingerprint: String,
+        now: Date
+    ) {
+        fallbackSnapshotCacheEntry = FallbackSnapshotCacheEntry(
+            key: fallbackSnapshotCacheKey(for: candidateSessionContexts),
+            errorFingerprint: errorFingerprint,
+            snapshot: snapshot,
+            cachedAt: now
+        )
+    }
+
+    private func fallbackSnapshotCacheKey(for candidateSessionContexts: [String: ThreadSessionContext]) -> String {
+        candidateSessionContexts
+            .sorted(by: { $0.key < $1.key })
+            .map { threadID, context in
+                let authoritativeUpdatedAt = context.authoritativeUpdatedAt?.timeIntervalSince1970 ?? -1
+                guard let rawPath = context.path else {
+                    return "\(threadID)|path=nil|pending=\(context.authoritativeStatusIsPending)|active=\(context.authoritativeStatusIsActive)|updated=\(authoritativeUpdatedAt)"
+                }
+
+                let sessionURL = URL(fileURLWithPath: rawPath)
+                let values = (try? sessionURL.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])) ?? URLResourceValues()
+                let modificationDate = values.contentModificationDate?.timeIntervalSince1970 ?? -1
+                let fileSize = values.fileSize ?? -1
+                let exists = FileManager.default.fileExists(atPath: rawPath)
+
+                return [
+                    threadID,
+                    rawPath,
+                    "exists=\(exists)",
+                    "mod=\(modificationDate)",
+                    "size=\(fileSize)",
+                    "pending=\(context.authoritativeStatusIsPending)",
+                    "active=\(context.authoritativeStatusIsActive)",
+                    "updated=\(authoritativeUpdatedAt)"
+                ].joined(separator: "|")
+            }
+            .joined(separator: "||")
     }
 }
