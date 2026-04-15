@@ -223,6 +223,87 @@ final class CodexDesktopConversationActivityReaderTests: XCTestCase {
         XCTAssertEqual(secondSnapshot.latestViewedAtByThreadID["thread-1"], date("2026-03-11T12:17:11.346Z"))
     }
 
+    func testActivitySnapshotPrefersRecentlyModifiedLogsWhenAvailable() throws {
+        let tempDirectoryURL = FileManager.default.temporaryDirectory
+            .appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: tempDirectoryURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDirectoryURL) }
+
+        let recentLogDirectoryURL = tempDirectoryURL
+            .appending(path: "2026")
+            .appending(path: "03")
+            .appending(path: "11")
+        let staleLogDirectoryURL = tempDirectoryURL
+            .appending(path: "2026")
+            .appending(path: "03")
+            .appending(path: "09")
+        try FileManager.default.createDirectory(at: recentLogDirectoryURL, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: staleLogDirectoryURL, withIntermediateDirectories: true)
+
+        let recentLogURL = recentLogDirectoryURL.appending(path: "recent.log")
+        try """
+        2026-03-11T11:58:00.000Z info [ElectronAppServerConnection] response_routed broadcastFallback=false conversationId=thread-recent durationMs=1 errorCode=null hadInternalHandler=false hadPending=true method=thread/resume originWebcontentsId=1 requestId=a targetDestroyed=false
+        """.write(to: recentLogURL, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes(
+            [.modificationDate: date("2026-03-11T11:58:30.000Z") as Any],
+            ofItemAtPath: recentLogURL.path
+        )
+
+        let staleLogURL = staleLogDirectoryURL.appending(path: "stale.log")
+        try """
+        2026-03-09T08:15:00.000Z info [ElectronAppServerConnection] response_routed broadcastFallback=false conversationId=thread-stale durationMs=1 errorCode=null hadInternalHandler=false hadPending=true method=thread/resume originWebcontentsId=1 requestId=b targetDestroyed=false
+        """.write(to: staleLogURL, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes(
+            [.modificationDate: date("2026-03-09T08:15:30.000Z") as Any],
+            ofItemAtPath: staleLogURL.path
+        )
+
+        let reader = CodexDesktopConversationActivityReader(
+            logsDirectoryURL: tempDirectoryURL,
+            lookbackDays: 3
+        )
+
+        let snapshot = reader.activitySnapshot(
+            now: Date(timeIntervalSince1970: 1_773_195_200)
+        )
+
+        XCTAssertEqual(snapshot.latestViewedAtByThreadID["thread-recent"], date("2026-03-11T11:58:00.000Z"))
+        XCTAssertNil(snapshot.latestViewedAtByThreadID["thread-stale"])
+    }
+
+    func testActivitySnapshotFallsBackToOlderLogsWhenNoRecentFilesExist() throws {
+        let tempDirectoryURL = FileManager.default.temporaryDirectory
+            .appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: tempDirectoryURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDirectoryURL) }
+
+        let logDirectoryURL = tempDirectoryURL
+            .appending(path: "2026")
+            .appending(path: "03")
+            .appending(path: "09")
+        try FileManager.default.createDirectory(at: logDirectoryURL, withIntermediateDirectories: true)
+
+        let logURL = logDirectoryURL.appending(path: "older.log")
+        try """
+        2026-03-09T08:15:00.000Z info [ElectronAppServerConnection] response_routed broadcastFallback=false conversationId=thread-older durationMs=1 errorCode=null hadInternalHandler=false hadPending=true method=thread/resume originWebcontentsId=1 requestId=a targetDestroyed=false
+        """.write(to: logURL, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes(
+            [.modificationDate: date("2026-03-09T08:15:30.000Z") as Any],
+            ofItemAtPath: logURL.path
+        )
+
+        let reader = CodexDesktopConversationActivityReader(
+            logsDirectoryURL: tempDirectoryURL,
+            lookbackDays: 3
+        )
+
+        let snapshot = reader.activitySnapshot(
+            now: Date(timeIntervalSince1970: 1_773_195_200)
+        )
+
+        XCTAssertEqual(snapshot.latestViewedAtByThreadID["thread-older"], date("2026-03-09T08:15:00.000Z"))
+    }
+
     private func date(_ value: String) -> Date? {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]

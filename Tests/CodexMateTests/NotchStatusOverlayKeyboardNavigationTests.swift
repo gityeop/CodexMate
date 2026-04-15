@@ -276,6 +276,24 @@ final class NotchStatusOverlayKeyboardNavigationTests: XCTestCase {
         XCTAssertEqual(try selectedRowTitle(in: view), "Thread 2")
     }
 
+    func testSettingIdenticalMenuItemsReusesExistingRowViews() {
+        let view = NotchStatusOverlayView(frame: NSRect(x: 0, y: 0, width: 520, height: 220))
+        let menuItems = makeStableIdentifierMenuItems()
+
+        view.setMenuItems(menuItems)
+        view.layoutSubtreeIfNeeded()
+        let initialRows = allRowViews(in: view)
+
+        view.setMenuItems(menuItems)
+        view.layoutSubtreeIfNeeded()
+        let updatedRows = allRowViews(in: view)
+
+        XCTAssertEqual(initialRows.count, updatedRows.count)
+        for (initialRow, updatedRow) in zip(initialRows, updatedRows) {
+            XCTAssertTrue(initialRow === updatedRow)
+        }
+    }
+
     func testHoveredRowDoesNotVisuallyOverrideKeyboardSelection() throws {
         let view = NotchStatusOverlayView(frame: NSRect(x: 0, y: 0, width: 520, height: 220))
         view.setMenuItems([

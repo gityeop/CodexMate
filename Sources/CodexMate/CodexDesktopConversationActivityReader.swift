@@ -1,6 +1,17 @@
 import Foundation
 
 final class CodexDesktopConversationActivityReader {
+    private enum RecentLogFilePolicy {
+        static let recentWindow: TimeInterval = 18 * 60 * 60
+        static let maxRecentFiles = 12
+        static let maxFallbackFiles = 4
+    }
+
+    private struct LogFileMetadata {
+        let url: URL
+        let modificationDate: Date
+    }
+
     private struct ParsedLogSnapshot {
         let fileSize: UInt64
         let modificationDate: Date
@@ -154,7 +165,7 @@ final class CodexDesktopConversationActivityReader {
             return cachedRecentLogFiles.files
         }
 
-        var logFiles: [URL] = []
+        var logFiles: [LogFileMetadata] = []
         let calendar = Calendar(identifier: .gregorian)
 
         for dayOffset in 0..<lookbackDays {
@@ -174,7 +185,7 @@ final class CodexDesktopConversationActivityReader {
 
             guard let enumerator = fileManager.enumerator(
                 at: directoryURL,
-                includingPropertiesForKeys: [.isRegularFileKey],
+                includingPropertiesForKeys: [.isRegularFileKey, .contentModificationDateKey],
                 options: [.skipsHiddenFiles]
             ) else {
                 continue
@@ -182,13 +193,43 @@ final class CodexDesktopConversationActivityReader {
 
             for case let fileURL as URL in enumerator {
                 guard fileURL.pathExtension == "log" else { continue }
-                logFiles.append(fileURL)
+                let resourceValues = try? fileURL.resourceValues(
+                    forKeys: [.isRegularFileKey, .contentModificationDateKey]
+                )
+                guard resourceValues?.isRegularFile == true else {
+                    continue
+                }
+
+                logFiles.append(
+                    LogFileMetadata(
+                        url: fileURL,
+                        modificationDate: resourceValues?.contentModificationDate ?? .distantPast
+                    )
+                )
             }
         }
 
-        let sortedLogFiles = logFiles.sorted(by: { $0.path < $1.path })
-        cachedRecentLogFiles = (key: cacheKey, checkedAt: now, files: sortedLogFiles)
-        return sortedLogFiles
+        let sortedLogFiles = logFiles.sorted {
+            if $0.modificationDate == $1.modificationDate {
+                return $0.url.path > $1.url.path
+            }
+
+            return $0.modificationDate > $1.modificationDate
+        }
+        let recentCutoff = now.addingTimeInterval(-RecentLogFilePolicy.recentWindow)
+        let recentLogFiles = sortedLogFiles.filter { $0.modificationDate >= recentCutoff }
+        let selectedLogFiles: [LogFileMetadata]
+        if !recentLogFiles.isEmpty {
+            selectedLogFiles = Array(recentLogFiles.prefix(RecentLogFilePolicy.maxRecentFiles))
+        } else {
+            selectedLogFiles = Array(sortedLogFiles.prefix(RecentLogFilePolicy.maxFallbackFiles))
+        }
+
+        let candidateLogFiles = selectedLogFiles
+            .map(\.url)
+            .sorted(by: { $0.path < $1.path })
+        cachedRecentLogFiles = (key: cacheKey, checkedAt: now, files: candidateLogFiles)
+        return candidateLogFiles
     }
 
     private func recentLogFileCacheKey(now: Date) -> String {

@@ -7,7 +7,7 @@ fileprivate struct NotchStatusOverlayGeometry {
 }
 
 struct NotchStatusOverlayMenuEntry {
-    enum Kind {
+    enum Kind: Equatable {
         case item
         case header
         case separator
@@ -304,8 +304,11 @@ final class NotchStatusOverlayController {
     }
 
     func setMenuItems(_ menuItems: [NotchStatusOverlayMenuEntry]) {
+        guard overlayView.setMenuItems(menuItems) else {
+            return
+        }
+
         DebugTraceLogger.log("overlay setMenuItems count=\(menuItems.count)")
-        overlayView.setMenuItems(menuItems)
     }
 
     func handleKeyboardEvent(_ event: NSEvent) -> Bool {
@@ -597,6 +600,30 @@ private final class NotchMenuScrollView: NSScrollView {
 }
 
 final class NotchStatusOverlayView: NSView {
+    private struct MenuItemSignature: Equatable {
+        let kind: NotchStatusOverlayMenuEntry.Kind
+        let primaryText: String
+        let secondaryText: String?
+        let identifier: String?
+        let indicatorText: String?
+        let indicatorImageIdentity: ObjectIdentifier?
+        let navigationIndex: Int?
+        let indentationLevel: Int
+        let isEnabled: Bool
+
+        init(_ item: NotchStatusOverlayMenuEntry) {
+            self.kind = item.kind
+            self.primaryText = item.primaryText
+            self.secondaryText = item.secondaryText
+            self.identifier = item.identifier
+            self.indicatorText = item.indicatorText
+            self.indicatorImageIdentity = item.indicatorImage.map(ObjectIdentifier.init)
+            self.navigationIndex = item.navigationIndex
+            self.indentationLevel = item.indentationLevel
+            self.isEnabled = item.isEnabled
+        }
+    }
+
     private enum Layout {
         static let notchSpriteOffsetFromHardwareNotch: CGFloat = 12
         static let notchSpriteTrailingInset: CGFloat = 18
@@ -647,6 +674,8 @@ final class NotchStatusOverlayView: NSView {
     private var flashedMenuIdentifier: String?
     private var highlightResetWorkItem: DispatchWorkItem?
     private var lastLaidOutMenuContentWidth: CGFloat = -1
+    private var lastMenuItemSignatures: [MenuItemSignature] = []
+    private var hasAppliedMenuItems = false
     fileprivate var geometry: NotchStatusOverlayGeometry?
     var onKeyDown: ((NSEvent) -> Bool)?
 
@@ -806,8 +835,17 @@ final class NotchStatusOverlayView: NSView {
         super.keyDown(with: event)
     }
 
-    func setMenuItems(_ menuItems: [NotchStatusOverlayMenuEntry]) {
+    @discardableResult
+    func setMenuItems(_ menuItems: [NotchStatusOverlayMenuEntry]) -> Bool {
+        let signatures = menuItems.map(MenuItemSignature.init)
+        if hasAppliedMenuItems, signatures == lastMenuItemSignatures {
+            return false
+        }
+
+        lastMenuItemSignatures = signatures
+        hasAppliedMenuItems = true
         rebuildMenuRows(menuItems)
+        return true
     }
 
     private func syncMenuBackgrounds() {
