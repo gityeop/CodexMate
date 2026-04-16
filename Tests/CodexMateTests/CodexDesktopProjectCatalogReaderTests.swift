@@ -98,13 +98,78 @@ final class CodexDesktopProjectCatalogReaderTests: XCTestCase {
             """.data(using: .utf8)
         )
 
-        let roots = try parser.parse(data)
+        let parsedState = try parser.parse(data)
 
         XCTAssertEqual(
-            roots,
+            parsedState.workspaceRoots,
             [
                 .init(path: "/tmp/worktrees/app", displayName: "App Root"),
                 .init(path: "/tmp/worktrees/feature", displayName: "Feature Root")
+            ]
+        )
+        XCTAssertTrue(parsedState.threadWorkspaceRootHints.isEmpty)
+        XCTAssertTrue(parsedState.projectlessThreadIDs.isEmpty)
+    }
+
+    func testWorktreeParserAcceptsNullLabelsAndPreservesThreadWorkspaceHints() throws {
+        let parser = CodexDesktopWorktreeParser()
+        let data = try XCTUnwrap(
+            """
+            {
+              "electron-saved-workspace-roots": [
+                "/Users/tester/문서/Coding/guldin_keyboard/guldin"
+              ],
+              "electron-workspace-root-labels": null,
+              "thread-workspace-root-hints": {
+                "thread-1": "/Users/tester/문서/Coding/guldin_keyboard/guldin"
+              }
+            }
+            """.data(using: .utf8)
+        )
+
+        let parsedState = try parser.parse(data)
+
+        XCTAssertEqual(
+            parsedState.workspaceRoots,
+            [
+                .init(
+                    path: "/Users/tester/문서/Coding/guldin_keyboard/guldin",
+                    displayName: "guldin"
+                )
+            ]
+        )
+        XCTAssertEqual(
+            parsedState.threadWorkspaceRootHints,
+            [
+                "thread-1": "/Users/tester/문서/Coding/guldin_keyboard/guldin"
+            ]
+        )
+    }
+
+    func testWorktreeParserDeduplicatesUnicodeEquivalentRoots() throws {
+        let parser = CodexDesktopWorktreeParser()
+        let decomposed = "/Users/tester/문서/Coding/guldin"
+        let composed = "/Users/tester/문서/Coding/guldin"
+        let data = try XCTUnwrap(
+            """
+            {
+              "electron-saved-workspace-roots": [
+                "\(decomposed)",
+                "\(composed)"
+              ],
+              "electron-workspace-root-labels": {
+                "\(decomposed)": "Guldin"
+              }
+            }
+            """.data(using: .utf8)
+        )
+
+        let parsedState = try parser.parse(data)
+
+        XCTAssertEqual(
+            parsedState.workspaceRoots,
+            [
+                .init(path: composed, displayName: "Guldin")
             ]
         )
     }
@@ -124,14 +189,99 @@ final class CodexDesktopProjectCatalogReaderTests: XCTestCase {
             """.data(using: .utf8)
         )
 
-        let roots = try parser.parse(data)
+        let parsedState = try parser.parse(data)
 
         XCTAssertEqual(
-            roots,
+            parsedState.workspaceRoots,
             [
                 .init(path: "/tmp/worktrees/parser-menu", displayName: "parser-menu")
             ]
         )
+    }
+
+    func testWorktreeParserReadsThreadWorkspaceRootHintsAndProjectlessThreadIDs() throws {
+        let parser = CodexDesktopWorktreeParser()
+        let data = try XCTUnwrap(
+            """
+            {
+              "electron-saved-workspace-roots": [
+                "/tmp/workspaces/codextension"
+              ],
+              "electron-workspace-root-labels": {},
+              "thread-workspace-root-hints": {
+                "thread-1": "/tmp/workspaces/codextension",
+                "thread-2": "/tmp/workspaces/../workspaces/codextension"
+              },
+              "projectless-thread-ids": [
+                "chat-1",
+                "chat-2"
+              ]
+            }
+            """.data(using: .utf8)
+        )
+
+        let parsedState = try parser.parse(data)
+
+        XCTAssertEqual(
+            parsedState.threadWorkspaceRootHints,
+            [
+                "thread-1": "/tmp/workspaces/codextension",
+                "thread-2": "/tmp/workspaces/codextension"
+            ]
+        )
+        XCTAssertEqual(parsedState.projectlessThreadIDs, ["chat-1", "chat-2"])
+    }
+
+    func testCatalogUsesThreadWorkspaceRootHintBeforeWorktreeCWD() {
+        let catalog = CodexDesktopProjectCatalog(
+            workspaceRoots: [
+                .init(path: "/tmp/workspaces/codextension", displayName: "codextension")
+            ],
+            threadWorkspaceRootHints: [
+                "thread-1": "/tmp/workspaces/codextension"
+            ]
+        )
+
+        let project = catalog.project(
+            forThreadID: "thread-1",
+            cwd: "/tmp/.codex/worktrees/3a2e/codextension"
+        )
+
+        XCTAssertEqual(project.id, "/tmp/workspaces/codextension")
+        XCTAssertEqual(project.displayName, "codextension")
+    }
+
+    func testCatalogMatchesUnicodeEquivalentWorkspacePath() {
+        let catalog = CodexDesktopProjectCatalog(
+            workspaceRoots: [
+                .init(path: "/Users/tester/문서/Coding/guldin", displayName: "guldin")
+            ]
+        )
+
+        let project = catalog.project(
+            forThreadID: "thread-1",
+            cwd: "/Users/tester/문서/Coding/guldin/worktree"
+        )
+
+        XCTAssertEqual(project.id, "/Users/tester/문서/Coding/guldin")
+        XCTAssertEqual(project.displayName, "guldin")
+    }
+
+    func testCatalogPlacesProjectlessThreadsInChatsProject() {
+        let catalog = CodexDesktopProjectCatalog(
+            workspaceRoots: [
+                .init(path: "/tmp/workspaces/codextension", displayName: "codextension")
+            ],
+            projectlessThreadIDs: ["chat-1"]
+        )
+
+        let project = catalog.project(
+            forThreadID: "chat-1",
+            cwd: "/tmp/.codex/threads"
+        )
+
+        XCTAssertEqual(project.id, CodexDesktopProjectCatalog.chatsProjectID)
+        XCTAssertEqual(project.displayName, CodexDesktopProjectCatalog.chatsProjectDisplayName)
     }
 
     func testCatalogMatchesWorkspaceOnlyAtDirectoryBoundary() {

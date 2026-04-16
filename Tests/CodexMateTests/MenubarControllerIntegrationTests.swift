@@ -39,6 +39,55 @@ final class MenubarControllerIntegrationTests: XCTestCase {
         XCTAssertEqual(snapshot.projectSections.first?.threads.map(\.id), ["thread-b"])
     }
 
+    func testRefreshDesktopActivityReloadsProjectCatalogForThreadWorkspaceRootHints() async throws {
+        let controller = makeController(
+            desktopUpdates: [
+                desktopUpdate(
+                    runtimeSnapshot: CodexDesktopRuntimeSnapshot(
+                        activeTurnCount: 0,
+                        runningThreadIDs: []
+                    )
+                )
+            ],
+            recentThreadResponses: [
+                [
+                    thread(id: "worktree-thread", updatedAt: 200, cwd: "/tmp/.codex/worktrees/faa7/guldin"),
+                    thread(id: "root-thread", updatedAt: 100, cwd: "/tmp/guldin/root")
+                ]
+            ],
+            projectCatalogResponses: [
+                .success(
+                    CodexDesktopProjectCatalog(workspaceRoots: [
+                        .init(path: "/tmp/guldin", displayName: "guldin")
+                    ])
+                ),
+                .success(
+                    CodexDesktopProjectCatalog(
+                        workspaceRoots: [
+                            .init(path: "/tmp/guldin", displayName: "guldin")
+                        ],
+                        threadWorkspaceRootHints: [
+                            "worktree-thread": "/tmp/guldin"
+                        ]
+                    )
+                )
+            ]
+        )
+
+        try await controller.loadInitialThreads()
+        let initialSnapshot = controller.prepareSnapshot().snapshot
+
+        XCTAssertEqual(initialSnapshot.projectSections.count, 2)
+        XCTAssertEqual(initialSnapshot.projectSections.map(\.section.displayName), ["Unknown Project", "guldin"])
+
+        _ = await controller.refreshDesktopActivity()
+        let snapshot = controller.prepareSnapshot().snapshot
+
+        XCTAssertEqual(snapshot.projectSections.count, 1)
+        XCTAssertEqual(snapshot.projectSections.map(\.section.displayName), ["guldin"])
+        XCTAssertEqual(snapshot.projectSections.first?.threads.map(\.id), ["worktree-thread", "root-thread"])
+    }
+
     func testRefreshDesktopActivityDoesNotDiscoverUnknownProjectFromViewOnlyActivity() async throws {
         let controller = makeController(
             desktopUpdates: [
@@ -1386,15 +1435,17 @@ final class MenubarControllerIntegrationTests: XCTestCase {
             recentThreadListing: recentThreadListing,
             threadMetadataReader: threadMetadataReader,
             projectCatalogLoader: FakeProjectCatalogLoader(
-                result: .success(
-                    CodexDesktopProjectCatalog(workspaceRoots: [
-                        .init(path: "/tmp/A", displayName: "A"),
-                        .init(path: "/tmp/B", displayName: "B"),
-                        .init(path: "/tmp/C", displayName: "C"),
-                        .init(path: "/tmp/D", displayName: "D"),
-                        .init(path: "/tmp/E", displayName: "E")
-                    ])
-                )
+                results: [
+                    .success(
+                        CodexDesktopProjectCatalog(workspaceRoots: [
+                            .init(path: "/tmp/A", displayName: "A"),
+                            .init(path: "/tmp/B", displayName: "B"),
+                            .init(path: "/tmp/C", displayName: "C"),
+                            .init(path: "/tmp/D", displayName: "D"),
+                            .init(path: "/tmp/E", displayName: "E")
+                        ])
+                    )
+                ]
             ),
             configuration: MenubarControllerConfiguration(
                 initialFetchLimit: 2,
@@ -1432,6 +1483,7 @@ final class MenubarControllerIntegrationTests: XCTestCase {
         metadataResponses: [Result<[CodexThread], Error>] = [],
         archivedMetadataResponses: [Result<Set<String>, Error>] = [],
         projectCatalog: Result<CodexDesktopProjectCatalog, Error> = .success(.empty),
+        projectCatalogResponses: [Result<CodexDesktopProjectCatalog, Error>] = [],
         now: @escaping () -> Date = Date.init
     ) -> MenubarController {
         MenubarController(
@@ -1441,7 +1493,9 @@ final class MenubarControllerIntegrationTests: XCTestCase {
                 results: metadataResponses,
                 archivedResults: archivedMetadataResponses
             ),
-            projectCatalogLoader: FakeProjectCatalogLoader(result: projectCatalog),
+            projectCatalogLoader: FakeProjectCatalogLoader(
+                results: projectCatalogResponses.isEmpty ? [projectCatalog] : projectCatalogResponses
+            ),
             configuration: MenubarControllerConfiguration(
                 initialFetchLimit: 32,
                 maxTrackedThreads: 256,
@@ -1624,14 +1678,22 @@ private final class FakeThreadMetadataReader: ThreadMetadataReading, @unchecked 
 }
 
 private final class FakeProjectCatalogLoader: ProjectCatalogLoading, @unchecked Sendable {
-    private let result: Result<CodexDesktopProjectCatalog, Error>
+    private var results: [Result<CodexDesktopProjectCatalog, Error>]
 
-    init(result: Result<CodexDesktopProjectCatalog, Error>) {
-        self.result = result
+    init(results: [Result<CodexDesktopProjectCatalog, Error>]) {
+        self.results = results
     }
 
     func loadProjectCatalog() async throws -> CodexDesktopProjectCatalog {
-        try result.get()
+        guard !results.isEmpty else {
+            return .empty
+        }
+
+        if results.count == 1 {
+            return try results[0].get()
+        }
+
+        return try results.removeFirst().get()
     }
 }
 

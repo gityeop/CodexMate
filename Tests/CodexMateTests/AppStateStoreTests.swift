@@ -261,6 +261,51 @@ final class AppStateStoreTests: XCTestCase {
         XCTAssertEqual(project.displayName, "web")
     }
 
+    func testProjectSectionsUseThreadWorkspaceRootHintForWorktreeThread() {
+        var store = AppStateStore()
+        store.replaceRecentThreads(with: [
+            thread(
+                id: "thread-1",
+                updatedAt: 100,
+                status: .idle,
+                cwd: "/Users/tester/.codex/worktrees/3a2e/codextension"
+            )
+        ])
+
+        let catalog = CodexDesktopProjectCatalog(
+            workspaceRoots: [
+                .init(path: "/Users/tester/codextension", displayName: "codextension")
+            ],
+            threadWorkspaceRootHints: [
+                "thread-1": "/Users/tester/codextension"
+            ]
+        )
+
+        let sections = store.projectSections(using: catalog)
+
+        XCTAssertEqual(sections.map(\.id), ["/Users/tester/codextension"])
+        XCTAssertEqual(sections.map(\.displayName), ["codextension"])
+    }
+
+    func testProjectSectionsPlaceProjectlessThreadsInChatsSection() {
+        var store = AppStateStore()
+        store.replaceRecentThreads(with: [
+            thread(id: "chat-1", updatedAt: 100, status: .idle, cwd: "/Users/tester/.codex/threads")
+        ])
+
+        let catalog = CodexDesktopProjectCatalog(
+            workspaceRoots: [
+                .init(path: "/Users/tester/codextension", displayName: "codextension")
+            ],
+            projectlessThreadIDs: ["chat-1"]
+        )
+
+        let sections = store.projectSections(using: catalog)
+
+        XCTAssertEqual(sections.map(\.id), [CodexDesktopProjectCatalog.chatsProjectID])
+        XCTAssertEqual(sections.map(\.displayName), [CodexDesktopProjectCatalog.chatsProjectDisplayName])
+    }
+
     func testThreadStatusIconsMatchMenuGlyphs() {
         XCTAssertEqual(AppStateStore.ThreadStatus.waitingForInput.icon, "💬")
         XCTAssertEqual(AppStateStore.ThreadStatus.needsApproval.icon, "💬")

@@ -339,6 +339,10 @@ final class MenubarController {
     }
 
     func refreshDesktopActivity() async -> MenubarControllerEffects {
+        if let reloadedProjectCatalog = try? await loadProjectCatalog() {
+            projectCatalog = reloadedProjectCatalog
+        }
+
         let trackedThreads = state.recentThreads
         let activityObservedAt = now()
         let desktopActivityCandidateRows = prioritizedDesktopActivityCandidateRows(
@@ -848,7 +852,7 @@ final class MenubarController {
     }
 
     private func bootstrapProjectCount(in threads: [CodexThread]) -> Int {
-        Set(threads.map { projectCatalog.project(for: $0.cwd).id }).count
+        Set(threads.map { projectCatalog.project(forThreadID: $0.id, cwd: $0.cwd).id }).count
     }
 
     private func debugThreadIDs<S: Sequence>(_ threadIDs: S) -> String where S.Element == String {

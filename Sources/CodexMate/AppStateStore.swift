@@ -1351,7 +1351,7 @@ struct AppStateStore {
         var buckets: [String: Bucket] = [:]
 
         for thread in threads {
-            let project = catalog.project(for: thread.cwd)
+            let project = catalog.project(forThreadID: thread.id, cwd: thread.cwd)
             if var bucket = buckets[project.id] {
                 if thread.activityUpdatedAt > bucket.latestUpdatedAt {
                     bucket.latestUpdatedAt = thread.activityUpdatedAt

@@ -53,7 +53,7 @@ enum MenubarSnapshotSelector {
         var bucketsByProjectID: [String: Bucket] = [:]
 
         for thread in allThreads {
-            let project = projectCatalog.project(for: thread.cwd)
+            let project = projectCatalog.project(forThreadID: thread.id, cwd: thread.cwd)
             if var bucket = bucketsByProjectID[project.id] {
                 bucket.latestUpdatedAt = max(bucket.latestUpdatedAt, thread.activityUpdatedAt)
                 bucket.threadRowsByID[thread.id] = thread

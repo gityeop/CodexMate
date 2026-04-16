@@ -12,12 +12,20 @@ struct CodexDesktopProjectCatalog: Equatable {
     }
 
     static let empty = CodexDesktopProjectCatalog(workspaceRoots: [])
+    static let chatsProjectID = "chats"
+    static let chatsProjectDisplayName = "Chats"
     static let unknownProjectID = "unknown"
     static let unknownProjectDisplayName = "Unknown Project"
 
     let workspaceRoots: [WorkspaceRoot]
+    let threadWorkspaceRootHints: [String: String]
+    let projectlessThreadIDs: Set<String>
 
-    init(workspaceRoots: [WorkspaceRoot]) {
+    init(
+        workspaceRoots: [WorkspaceRoot],
+        threadWorkspaceRootHints: [String: String] = [:],
+        projectlessThreadIDs: Set<String> = []
+    ) {
         self.workspaceRoots = workspaceRoots.sorted { lhs, rhs in
             if lhs.path.count == rhs.path.count {
                 return lhs.path.localizedCaseInsensitiveCompare(rhs.path) == .orderedAscending
@@ -25,10 +33,27 @@ struct CodexDesktopProjectCatalog: Equatable {
 
             return lhs.path.count > rhs.path.count
         }
+        self.threadWorkspaceRootHints = threadWorkspaceRootHints.reduce(into: [:]) { result, entry in
+            guard !entry.key.isEmpty else { return }
+
+            let normalizedPath = CodexDesktopWorktreePath.normalize(path: entry.value)
+            guard !normalizedPath.isEmpty else { return }
+
+            result[entry.key] = normalizedPath
+        }
+        self.projectlessThreadIDs = Set(projectlessThreadIDs.filter { !$0.isEmpty })
     }
 
     func project(for cwd: String) -> ProjectReference {
-        let normalizedCWD = CodexDesktopWorktreePath.normalize(path: cwd)
+        project(forThreadID: nil, cwd: cwd)
+    }
+
+    func project(forThreadID threadID: String?, cwd: String) -> ProjectReference {
+        if let threadID, projectlessThreadIDs.contains(threadID) {
+            return ProjectReference(id: Self.chatsProjectID, displayName: Self.chatsProjectDisplayName)
+        }
+
+        let normalizedCWD = normalizedProjectPath(forThreadID: threadID, cwd: cwd)
 
         if let matchedRoot = workspaceRoots.first(where: {
             CodexDesktopWorktreePath.matches(root: $0.path, path: normalizedCWD)
@@ -50,6 +75,14 @@ struct CodexDesktopProjectCatalog: Equatable {
             id: normalizedCWD,
             displayName: CodexDesktopWorktreePath.fallbackDisplayName(for: normalizedCWD)
         )
+    }
+
+    private func normalizedProjectPath(forThreadID threadID: String?, cwd: String) -> String {
+        if let threadID, let hintedRoot = threadWorkspaceRootHints[threadID] {
+            return hintedRoot
+        }
+
+        return CodexDesktopWorktreePath.normalize(path: cwd)
     }
 }
 
@@ -90,8 +123,12 @@ struct CodexDesktopProjectCatalogReader {
         }
 
         let data = try Data(contentsOf: fileURL)
-        let roots = try parser.parse(data)
-        let catalog = CodexDesktopProjectCatalog(workspaceRoots: roots)
+        let parsedState = try parser.parse(data)
+        let catalog = CodexDesktopProjectCatalog(
+            workspaceRoots: parsedState.workspaceRoots,
+            threadWorkspaceRootHints: parsedState.threadWorkspaceRootHints,
+            projectlessThreadIDs: parsedState.projectlessThreadIDs
+        )
         cache.store(
             catalog,
             for: fileURL.path,

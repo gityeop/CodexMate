@@ -50,6 +50,37 @@ final class MenubarSnapshotSelectorTests: XCTestCase {
         XCTAssertEqual(snapshot.menuSections.map(\.threadCount), [1, 1])
     }
 
+    func testSnapshotUsesThreadWorkspaceRootHintForProjectGrouping() {
+        var state = AppStateStore()
+        state.replaceRecentThreads(
+            with: [
+                codexThread(id: "local-thread", updatedAt: 100, cwd: "/tmp/A/work"),
+                codexThread(id: "worktree-thread", updatedAt: 300, cwd: "/tmp/.codex/worktrees/3a2e/codextension")
+            ]
+        )
+
+        let snapshot = MenubarSnapshotSelector.makeSnapshot(
+            state: state,
+            projectCatalog: CodexDesktopProjectCatalog(
+                workspaceRoots: [
+                    .init(path: "/tmp/A", displayName: "A")
+                ],
+                threadWorkspaceRootHints: [
+                    "worktree-thread": "/tmp/A"
+                ]
+            ),
+            threadReadMarkers: ThreadReadMarkerStore(),
+            projectLimit: 1,
+            visibleThreadLimit: 2
+        )
+
+        XCTAssertEqual(snapshot.projectSections.map(\.section.displayName), ["A"])
+        XCTAssertEqual(
+            snapshot.menuSections.first?.threads.map(\.thread.id),
+            ["worktree-thread", "local-thread"]
+        )
+    }
+
     private let projectCatalog = CodexDesktopProjectCatalog(
         workspaceRoots: [
             .init(path: "/tmp/A", displayName: "A"),
