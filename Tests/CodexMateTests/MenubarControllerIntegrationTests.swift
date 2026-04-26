@@ -77,8 +77,9 @@ final class MenubarControllerIntegrationTests: XCTestCase {
         try await controller.loadInitialThreads()
         let initialSnapshot = controller.prepareSnapshot().snapshot
 
-        XCTAssertEqual(initialSnapshot.projectSections.count, 2)
-        XCTAssertEqual(initialSnapshot.projectSections.map(\.section.displayName), ["Unknown Project", "guldin"])
+        XCTAssertEqual(initialSnapshot.projectSections.count, 1)
+        XCTAssertEqual(initialSnapshot.projectSections.map(\.section.displayName), ["guldin"])
+        XCTAssertEqual(initialSnapshot.projectSections.first?.threads.map(\.id), ["root-thread"])
 
         _ = await controller.refreshDesktopActivity()
         let snapshot = controller.prepareSnapshot().snapshot
@@ -322,6 +323,7 @@ final class MenubarControllerIntegrationTests: XCTestCase {
         let snapshot = controller.prepareSnapshot().snapshot
 
         XCTAssertTrue(effects.shouldRequestThreadRefresh)
+        XCTAssertTrue(effects.shouldRequestDesktopActivityAfterThreadRefresh)
         XCTAssertEqual(snapshot.overallStatus, .running)
         XCTAssertEqual(snapshot.projectSections.first?.threads.first?.thread.displayStatus, .idle)
     }

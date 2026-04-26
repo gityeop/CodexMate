@@ -1,21 +1,26 @@
 import Foundation
 
 enum MenubarSnapshotSelector {
+    private static let unmatchedProjectGraceInterval: TimeInterval = 2 * 60
+
     static func makeSnapshot(
         state: AppStateStore,
         projectCatalog: CodexDesktopProjectCatalog,
         threadReadMarkers: ThreadReadMarkerStore,
         projectLimit: Int,
-        visibleThreadLimit: Int
+        visibleThreadLimit: Int,
+        now: Date = Date()
     ) -> MenubarSnapshot {
         let projectSections = projectSectionsWithSubagentThreads(
             state: state,
             projectCatalog: projectCatalog,
             threadReadMarkers: threadReadMarkers,
             projectLimit: projectLimit,
-            visibleThreadLimit: visibleThreadLimit
+            visibleThreadLimit: visibleThreadLimit,
+            now: now
         )
         let menuSections = ThreadMenuBuilder.build(snapshotSections: projectSections)
+        let hasVisibleSnapshotThreads = projectSections.contains { !$0.allThreads.isEmpty }
 
         return MenubarSnapshot(
             overallStatus: displayedOverallStatus(
@@ -27,8 +32,8 @@ enum MenubarSnapshotSelector {
                 .contains(where: hasUnreadContent),
             projectSections: projectSections,
             menuSections: menuSections,
-            hasRecentThreads: !state.recentThreads.isEmpty,
-            isWatchLatestThreadEnabled: !state.visibleRecentThreads.isEmpty
+            hasRecentThreads: hasVisibleSnapshotThreads,
+            isWatchLatestThreadEnabled: hasVisibleSnapshotThreads
         )
     }
 
@@ -37,7 +42,8 @@ enum MenubarSnapshotSelector {
         projectCatalog: CodexDesktopProjectCatalog,
         threadReadMarkers: ThreadReadMarkerStore,
         projectLimit: Int,
-        visibleThreadLimit: Int
+        visibleThreadLimit: Int,
+        now: Date
     ) -> [MenubarProjectSectionSnapshot] {
         let allThreads = state.recentThreads
         guard !allThreads.isEmpty else { return [] }
@@ -53,7 +59,16 @@ enum MenubarSnapshotSelector {
         var bucketsByProjectID: [String: Bucket] = [:]
 
         for thread in allThreads {
-            let project = projectCatalog.project(forThreadID: thread.id, cwd: thread.cwd)
+            let catalogProject = projectCatalog.project(forThreadID: thread.id, cwd: thread.cwd)
+            guard shouldShowThread(thread, project: catalogProject, projectCatalog: projectCatalog, now: now) else {
+                continue
+            }
+
+            let project = displayProject(
+                for: thread,
+                catalogProject: catalogProject,
+                projectCatalog: projectCatalog
+            )
             if var bucket = bucketsByProjectID[project.id] {
                 bucket.latestUpdatedAt = max(bucket.latestUpdatedAt, thread.activityUpdatedAt)
                 bucket.threadRowsByID[thread.id] = thread
@@ -215,6 +230,66 @@ enum MenubarSnapshotSelector {
 
             return isNewerThread(lhs.thread, rhs.thread)
         }
+    }
+
+    private static func shouldShowThread(
+        _ thread: AppStateStore.ThreadRow,
+        project: CodexDesktopProjectCatalog.ProjectReference,
+        projectCatalog: CodexDesktopProjectCatalog,
+        now: Date
+    ) -> Bool {
+        if project.id == CodexDesktopProjectCatalog.unknownProjectID,
+           !projectCatalog.workspaceRoots.isEmpty {
+            return shouldKeepUnmatchedThread(thread, now: now)
+        }
+
+        if isKnownProject(project, in: projectCatalog) {
+            return true
+        }
+
+        guard !projectCatalog.workspaceRoots.isEmpty else {
+            return true
+        }
+
+        return shouldKeepUnmatchedThread(thread, now: now)
+    }
+
+    private static func displayProject(
+        for thread: AppStateStore.ThreadRow,
+        catalogProject: CodexDesktopProjectCatalog.ProjectReference,
+        projectCatalog: CodexDesktopProjectCatalog
+    ) -> CodexDesktopProjectCatalog.ProjectReference {
+        guard catalogProject.id == CodexDesktopProjectCatalog.unknownProjectID,
+              !projectCatalog.workspaceRoots.isEmpty
+        else {
+            return catalogProject
+        }
+
+        let normalizedCWD = CodexDesktopWorktreePath.normalize(path: thread.cwd)
+        guard !normalizedCWD.isEmpty else {
+            return catalogProject
+        }
+
+        return CodexDesktopProjectCatalog.ProjectReference(
+            id: normalizedCWD,
+            displayName: CodexDesktopWorktreePath.fallbackDisplayName(for: normalizedCWD)
+        )
+    }
+
+    private static func shouldKeepUnmatchedThread(
+        _ thread: AppStateStore.ThreadRow,
+        now: Date
+    ) -> Bool {
+        thread.authoritativeListPresence == .pendingInclusion
+            || now.timeIntervalSince(thread.activityUpdatedAt) <= unmatchedProjectGraceInterval
+    }
+
+    private static func isKnownProject(
+        _ project: CodexDesktopProjectCatalog.ProjectReference,
+        in projectCatalog: CodexDesktopProjectCatalog
+    ) -> Bool {
+        project.id == CodexDesktopProjectCatalog.chatsProjectID
+            || projectCatalog.workspaceRoots.contains { $0.path == project.id }
     }
 
     private static func visibilityPriority(for section: MenubarProjectSectionSnapshot) -> Int {

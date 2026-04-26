@@ -81,6 +81,113 @@ final class MenubarSnapshotSelectorTests: XCTestCase {
         )
     }
 
+    func testSnapshotHidesStaleListedThreadForRemovedProjectRoot() {
+        var state = AppStateStore()
+        state.replaceRecentThreads(
+            with: [
+                codexThread(id: "removed-thread", updatedAt: 100, cwd: "/tmp/Removed Project"),
+                codexThread(id: "survivor-thread", updatedAt: 90, cwd: "/tmp/A/work")
+            ]
+        )
+
+        let snapshot = MenubarSnapshotSelector.makeSnapshot(
+            state: state,
+            projectCatalog: CodexDesktopProjectCatalog(
+                workspaceRoots: [
+                    .init(path: "/tmp/A", displayName: "A")
+                ]
+            ),
+            threadReadMarkers: ThreadReadMarkerStore(),
+            projectLimit: 3,
+            visibleThreadLimit: 3,
+            now: Date(timeIntervalSince1970: 1_000)
+        )
+
+        XCTAssertEqual(snapshot.projectSections.map(\.section.displayName), ["A"])
+        XCTAssertEqual(snapshot.projectSections.first?.threads.map(\.id), ["survivor-thread"])
+        XCTAssertTrue(snapshot.hasRecentThreads)
+        XCTAssertTrue(snapshot.isWatchLatestThreadEnabled)
+    }
+
+    func testSnapshotKeepsRecentUnmatchedThreadWhileProjectCatalogCatchesUp() {
+        var state = AppStateStore()
+        state.replaceRecentThreads(
+            with: [
+                codexThread(id: "new-thread", updatedAt: 950, cwd: "/tmp/New Project"),
+                codexThread(id: "survivor-thread", updatedAt: 900, cwd: "/tmp/A/work")
+            ]
+        )
+
+        let snapshot = MenubarSnapshotSelector.makeSnapshot(
+            state: state,
+            projectCatalog: CodexDesktopProjectCatalog(
+                workspaceRoots: [
+                    .init(path: "/tmp/A", displayName: "A")
+                ]
+            ),
+            threadReadMarkers: ThreadReadMarkerStore(),
+            projectLimit: 3,
+            visibleThreadLimit: 3,
+            now: Date(timeIntervalSince1970: 1_000)
+        )
+
+        XCTAssertEqual(snapshot.projectSections.map(\.section.displayName), ["New Project", "A"])
+        XCTAssertEqual(snapshot.projectSections.first?.threads.map(\.id), ["new-thread"])
+    }
+
+    func testSnapshotKeepsPendingUnmatchedThreadWhileProjectCatalogCatchesUp() {
+        var state = AppStateStore()
+        state.apply(
+            notification: .threadStarted(
+                ThreadStartedNotification(
+                    thread: codexThread(id: "pending-thread", updatedAt: 100, cwd: "/tmp/New Project")
+                )
+            )
+        )
+
+        let snapshot = MenubarSnapshotSelector.makeSnapshot(
+            state: state,
+            projectCatalog: CodexDesktopProjectCatalog(
+                workspaceRoots: [
+                    .init(path: "/tmp/A", displayName: "A")
+                ]
+            ),
+            threadReadMarkers: ThreadReadMarkerStore(),
+            projectLimit: 3,
+            visibleThreadLimit: 3,
+            now: Date(timeIntervalSince1970: 1_000)
+        )
+
+        XCTAssertEqual(snapshot.projectSections.map(\.section.displayName), ["New Project"])
+        XCTAssertEqual(snapshot.projectSections.first?.threads.map(\.id), ["pending-thread"])
+    }
+
+    func testSnapshotReportsNoVisibleRecentThreadsWhenOnlyRemovedProjectThreadsRemain() {
+        var state = AppStateStore()
+        state.replaceRecentThreads(
+            with: [
+                codexThread(id: "removed-thread", updatedAt: 100, cwd: "/tmp/Removed Project")
+            ]
+        )
+
+        let snapshot = MenubarSnapshotSelector.makeSnapshot(
+            state: state,
+            projectCatalog: CodexDesktopProjectCatalog(
+                workspaceRoots: [
+                    .init(path: "/tmp/A", displayName: "A")
+                ]
+            ),
+            threadReadMarkers: ThreadReadMarkerStore(),
+            projectLimit: 3,
+            visibleThreadLimit: 3,
+            now: Date(timeIntervalSince1970: 1_000)
+        )
+
+        XCTAssertTrue(snapshot.projectSections.isEmpty)
+        XCTAssertFalse(snapshot.hasRecentThreads)
+        XCTAssertFalse(snapshot.isWatchLatestThreadEnabled)
+    }
+
     private let projectCatalog = CodexDesktopProjectCatalog(
         workspaceRoots: [
             .init(path: "/tmp/A", displayName: "A"),

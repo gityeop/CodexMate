@@ -39,6 +39,11 @@ struct CodexDesktopRuntimeSnapshot {
 struct CodexDesktopStateReader {
     private static let staleSessionPendingTolerance: TimeInterval = 1
     private static let sessionReadChunkSize = 64 * 1024
+    private static let desktopLogDirectoryCalendar: Calendar = {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        return calendar
+    }()
 
     struct SessionPendingState: Equatable {
         let waitingForInput: Bool
@@ -892,7 +897,7 @@ struct CodexDesktopStateReader {
             return []
         }
 
-        let calendar = Calendar.current
+        let calendar = Self.desktopLogDirectoryCalendar
         let currentDate = now()
         let cacheKey = desktopLogCandidateCacheKey(
             logsRootURL: logsRootURL,
@@ -953,7 +958,7 @@ struct CodexDesktopStateReader {
         maxDays: Int,
         limit: Int
     ) -> String {
-        let calendar = Calendar.current
+        let calendar = Self.desktopLogDirectoryCalendar
         let dayTokens = (0..<maxDays).compactMap { dayOffset in
             calendar.date(byAdding: .day, value: -dayOffset, to: now)
         }.map { day in

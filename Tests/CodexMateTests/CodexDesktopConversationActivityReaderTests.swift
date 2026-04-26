@@ -304,6 +304,39 @@ final class CodexDesktopConversationActivityReaderTests: XCTestCase {
         XCTAssertEqual(snapshot.latestViewedAtByThreadID["thread-older"], date("2026-03-09T08:15:00.000Z"))
     }
 
+    func testActivitySnapshotUsesUTCLogDirectoryDate() throws {
+        let tempDirectoryURL = FileManager.default.temporaryDirectory
+            .appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: tempDirectoryURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDirectoryURL) }
+
+        let logDirectoryURL = tempDirectoryURL
+            .appending(path: "2026")
+            .appending(path: "04")
+            .appending(path: "26")
+        try FileManager.default.createDirectory(at: logDirectoryURL, withIntermediateDirectories: true)
+
+        let logURL = logDirectoryURL.appending(path: "utc-boundary.log")
+        try """
+        2026-04-26T16:59:30.000Z info [ElectronAppServerConnection] response_routed broadcastFallback=false conversationId=thread-utc durationMs=1 errorCode=null hadInternalHandler=false hadPending=true method=turn/start originWebcontentsId=1 requestId=a targetDestroyed=false
+        """.write(to: logURL, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes(
+            [.modificationDate: date("2026-04-26T16:59:30.000Z") as Any],
+            ofItemAtPath: logURL.path
+        )
+
+        let reader = CodexDesktopConversationActivityReader(
+            logsDirectoryURL: tempDirectoryURL,
+            lookbackDays: 1
+        )
+
+        let snapshot = reader.activitySnapshot(
+            now: date("2026-04-26T17:00:00.000Z")!
+        )
+
+        XCTAssertEqual(snapshot.latestTurnStartedAtByThreadID["thread-utc"], date("2026-04-26T16:59:30.000Z"))
+    }
+
     private func date(_ value: String) -> Date? {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]

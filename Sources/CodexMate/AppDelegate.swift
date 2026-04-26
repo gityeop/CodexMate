@@ -169,6 +169,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var desktopActivityRefreshTask: Task<Void, Never>?
     private var threadRefreshGate = RefreshRequestGate()
     private var threadRefreshTask: Task<Void, Never>?
+    private var shouldRefreshDesktopActivityAfterNextThreadRefresh = false
     private var hoverTooltipContentsByThreadID: [String: MenubarStatusPresentation.ThreadTooltipContent] = [:]
     private var hoverTooltipWorkItem: DispatchWorkItem?
     private var highlightedThreadID: String?
@@ -597,6 +598,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             codexHomeStore.update(codexHomePath: initializeResponse.codexHome)
             connectedBinaryPath = binaryURL.path
             controller.setConnection(.connected(binaryPath: binaryURL.path))
+            shouldRefreshDesktopActivityAfterNextThreadRefresh = true
             renderMenu()
 
             do {
@@ -631,6 +633,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func refreshThreads() async throws {
         let effects = try await controller.refreshThreads()
         let pruneEffects = await controller.pruneThreadsMissingFromDesktopState()
+        let shouldFollowUpWithDesktopActivity = shouldRefreshDesktopActivityAfterNextThreadRefresh
+        shouldRefreshDesktopActivityAfterNextThreadRefresh = false
         if await client.isConnected() {
             markConnectionHealthy()
         }
@@ -638,6 +642,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         applyControllerEffects(pruneEffects)
         await reconcileLiveSubscriptions()
         renderMenu()
+        if shouldFollowUpWithDesktopActivity {
+            requestDesktopActivityRefresh()
+        }
     }
 
     private func loadInitialThreads() async throws {
@@ -684,18 +691,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 guard let self else { return }
                 controller.apply(notification: .threadStarted(notification))
                 debugLog("received thread/started thread=\(shortThreadID(notification.thread.id))")
-                if isMenuOpen {
-                    renderMenu()
-                }
-                armFastThreadDiscoveryRefreshWindow()
-                requestImmediateThreadSubscription(threadID: notification.thread.id)
-                requestThreadRefresh()
+                trackLiveThread(
+                    notification.thread.id,
+                    boostDiscovery: true,
+                    requestThreadMetadataRefresh: true
+                )
             }
         case "thread/status/changed":
             decodeAndApply(payload, as: ThreadStatusChangedNotification.self) { [weak self] notification in
                 guard let self else { return }
                 controller.apply(notification: .threadStatusChanged(notification))
-                requestThreadRefresh()
+                trackLiveThread(notification.threadId)
             }
         case "thread/archived":
             decodeAndApply(payload, as: ThreadArchivedNotification.self) { [weak self] notification in
@@ -710,18 +716,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             decodeAndApply(payload, as: ThreadUnarchivedNotification.self) { [weak self] notification in
                 guard let self else { return }
                 controller.apply(notification: .threadUnarchived(notification))
-                armFastThreadDiscoveryRefreshWindow()
-                requestThreadRefresh()
+                trackLiveThread(
+                    notification.threadId,
+                    boostDiscovery: true,
+                    requestThreadMetadataRefresh: true
+                )
+            }
+        case "thread/name/updated":
+            decodeAndApply(payload, as: ThreadNameUpdatedNotification.self) { [weak self] notification in
+                guard let self else { return }
+                controller.apply(notification: .threadNameUpdated(notification))
+                trackLiveThread(notification.threadId, subscribe: false)
             }
         case "turn/started":
             decodeAndApply(payload, as: TurnStartedNotification.self) { [weak self] notification in
                 guard let self else { return }
                 controller.apply(notification: .turnStarted(notification))
+                trackLiveThread(
+                    notification.threadId,
+                    boostDiscovery: true,
+                    requestThreadMetadataRefresh: true
+                )
+            }
+        case "item/started":
+            decodeAndApply(payload, as: ItemStartedNotification.self) { [weak self] notification in
+                guard let self else { return }
+                controller.apply(notification: .itemStarted(notification))
+                trackLiveThread(notification.threadId)
             }
         case "turn/completed":
             decodeAndApply(payload, as: TurnCompletedNotification.self) { [weak self] notification in
                 guard let self else { return }
                 controller.apply(notification: .turnCompleted(notification))
+                trackLiveThread(
+                    notification.threadId,
+                    requestThreadMetadataRefresh: true
+                )
                 requestDesktopActivityRefresh()
                 if preferences.completionNotificationsEnabled {
                     sendNotification(
@@ -737,6 +767,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             decodeAndApply(payload, as: ErrorNotificationPayload.self) { [weak self] notification in
                 guard let self else { return }
                 controller.apply(notification: .error(notification))
+                trackLiveThread(notification.threadId, requestThreadMetadataRefresh: true)
                 requestDesktopActivityRefresh()
 
                 if !notification.willRetry && preferences.failureNotificationsEnabled {
@@ -755,6 +786,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             decodeAndApply(payload, as: ServerRequestResolvedNotification.self) { [weak self] notification in
                 guard let self else { return }
                 controller.apply(notification: .serverRequestResolved(notification))
+                trackLiveThread(notification.threadId)
             }
         case "thread/closed":
             decodeAndApply(payload, as: ThreadClosedNotification.self) { [weak self] notification in
@@ -790,6 +822,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
 
             controller.apply(serverRequest: .toolUserInput(request))
+            trackLiveThread(
+                request.threadId,
+                boostDiscovery: true,
+                requestThreadMetadataRefresh: true
+            )
             controller.recordDiagnostic("user-input request method=\(method) thread=\(request.threadId.prefix(8)) turn=\(request.turnId.prefix(8))")
             if preferences.attentionNotificationsEnabled {
                 sendNotification(
@@ -808,6 +845,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
 
             controller.apply(serverRequest: .approval(request))
+            trackLiveThread(
+                request.threadId,
+                boostDiscovery: true,
+                requestThreadMetadataRefresh: true
+            )
             controller.recordDiagnostic("approval request method=\(method) thread=\(request.threadId.prefix(8)) turn=\(request.turnId.prefix(8))")
             if preferences.attentionNotificationsEnabled {
                 sendNotification(
@@ -910,14 +952,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         invalidateTimers()
         refreshTimerInterval = policy.timerInterval
-        refreshTimer = Timer.scheduledTimer(
-            withTimeInterval: policy.timerInterval,
+        let timer = Timer(
+            timeInterval: policy.timerInterval,
             repeats: true
         ) { [weak self] _ in
             Task { @MainActor [weak self] in
                 self?.handleRefreshTimerTick()
             }
         }
+        refreshTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
     }
 
     private func scheduleStatusAnimationTimerIfNeeded() {
@@ -1092,9 +1136,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         guard isMenuOpen else {
             let statusOverride = debugStatusOverride
+            let statusSnapshot = controller.prepareStatusSnapshot(
+                projectLimit: preferences.projectLimit,
+                visibleThreadLimit: preferences.threadsPerProjectLimit
+            )
             renderStatusItem(
-                overallStatus: statusOverride ?? controller.overallStatus,
-                hasUnreadThreads: statusOverride == nil ? controller.hasUnreadThreads : false
+                overallStatus: statusOverride ?? statusSnapshot.overallStatus,
+                hasUnreadThreads: statusOverride == nil ? statusSnapshot.hasUnreadThreads : false
             )
             scheduleRefreshTimerIfNeeded()
             return
@@ -1519,6 +1567,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             requestDesktopActivityRefresh(force: false)
         }
 
+        if effects.shouldRequestDesktopActivityAfterThreadRefresh {
+            shouldRefreshDesktopActivityAfterNextThreadRefresh = true
+        }
+
         if effects.shouldRequestThreadRefresh {
             requestThreadRefresh(force: false)
         }
@@ -1654,6 +1706,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func requestInitialSubscriptionWarmup() {
         Task { @MainActor [weak self] in
             await self?.warmInitialSubscriptions()
+        }
+    }
+
+    private func trackLiveThread(
+        _ threadID: String,
+        boostDiscovery: Bool = false,
+        requestThreadMetadataRefresh: Bool = false,
+        subscribe: Bool = true,
+        now: Date = Date()
+    ) {
+        if boostDiscovery {
+            armFastThreadDiscoveryRefreshWindow(now: now)
+        }
+
+        if requestThreadMetadataRefresh {
+            requestThreadRefresh(force: false, now: now)
+        }
+
+        if subscribe {
+            requestImmediateThreadSubscription(threadID: threadID)
         }
     }
 

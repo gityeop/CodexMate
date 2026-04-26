@@ -297,9 +297,52 @@ struct ThreadUnarchivedNotification: Decodable, Equatable {
     let threadId: String
 }
 
+struct ThreadNameUpdatedNotification: Decodable, Equatable {
+    let threadId: String
+    let name: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case threadId
+        case name
+        case thread
+    }
+
+    init(threadId: String, name: String?) {
+        self.threadId = threadId
+        self.name = name
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+
+        if let threadId = try container.decodeIfPresent(String.self, forKey: .threadId) {
+            self.threadId = threadId
+            self.name = try container.decodeIfPresent(String.self, forKey: .name)
+            return
+        }
+
+        if let thread = try container.decodeIfPresent(CodexThread.self, forKey: .thread) {
+            self.threadId = thread.id
+            self.name = thread.name
+            return
+        }
+
+        throw DecodingError.dataCorruptedError(
+            forKey: .threadId,
+            in: container,
+            debugDescription: "Unsupported thread/name/updated payload"
+        )
+    }
+}
+
 struct TurnStartedNotification: Decodable, Equatable {
     let threadId: String
     let turn: CodexTurn
+}
+
+struct ItemStartedNotification: Decodable, Equatable {
+    let threadId: String
+    let turnId: String
 }
 
 struct TurnCompletedNotification: Decodable, Equatable {

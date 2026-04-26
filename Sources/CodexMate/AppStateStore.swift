@@ -227,7 +227,9 @@ struct AppStateStore {
         case threadStatusChanged(ThreadStatusChangedNotification)
         case threadArchived(ThreadArchivedNotification)
         case threadUnarchived(ThreadUnarchivedNotification)
+        case threadNameUpdated(ThreadNameUpdatedNotification)
         case turnStarted(TurnStartedNotification)
+        case itemStarted(ItemStartedNotification)
         case turnCompleted(TurnCompletedNotification)
         case error(ErrorNotificationPayload)
         case serverRequestResolved(ServerRequestResolvedNotification)
@@ -1094,6 +1096,15 @@ struct AppStateStore {
             archiveThreads(threadIDs: [notification.threadId])
         case let .threadUnarchived(notification):
             archivedThreadTombstonesByID.removeValue(forKey: notification.threadId)
+        case let .threadNameUpdated(notification):
+            guard var row = threadsByID[notification.threadId],
+                  let normalizedName = Self.normalizedThreadDisplayTitle(notification.name)
+            else {
+                return
+            }
+
+            row.displayTitle = normalizedName
+            threadsByID[notification.threadId] = row
         case let .turnStarted(notification):
             let observedAt = Date()
             guard !shouldIgnoreArchivedThreadEvent(threadID: notification.threadId, observedAt: observedAt) else {
@@ -1109,6 +1120,21 @@ struct AppStateStore {
             row.applyRuntimeStatus(.running, observedAt: observedAt)
             threadsByID[notification.threadId] = row
             recordPendingResolution(threadID: notification.threadId, previous: previousStatus, current: row.displayStatus, source: "turn/started")
+        case let .itemStarted(notification):
+            let observedAt = Date()
+            guard !shouldIgnoreArchivedThreadEvent(threadID: notification.threadId, observedAt: observedAt) else {
+                return
+            }
+
+            var row = threadsByID[notification.threadId] ?? defaultThreadRow(threadID: notification.threadId)
+            let previousStatus = row.displayStatus
+            row.isWatched = true
+            row.authoritativeListOmissionCount = 0
+            row.activeTurnID = notification.turnId
+            row.statusUpdatedAt = observedAt
+            row.applyRuntimeStatus(.running, observedAt: observedAt)
+            threadsByID[notification.threadId] = row
+            recordPendingResolution(threadID: notification.threadId, previous: previousStatus, current: row.displayStatus, source: "item/started")
         case let .turnCompleted(notification):
             let observedAt = Date()
             guard !shouldIgnoreArchivedThreadEvent(threadID: notification.threadId, observedAt: observedAt) else {
@@ -1302,6 +1328,21 @@ struct AppStateStore {
         let prefixValues = values.prefix(3)
         let suffix = values.count > prefixValues.count ? ",+\(values.count - prefixValues.count)" : ""
         return "[" + prefixValues.joined(separator: ",") + suffix + "]"
+    }
+
+    private static func normalizedThreadDisplayTitle(_ title: String?) -> String? {
+        guard let title else { return nil }
+
+        let normalizedTitle = title
+            .split(whereSeparator: \.isNewline)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first { !$0.isEmpty }
+
+        guard let normalizedTitle else {
+            return nil
+        }
+
+        return String(normalizedTitle)
     }
 
     private func defaultThreadRow(threadID: String) -> ThreadRow {

@@ -12,6 +12,12 @@ final class CodexDesktopConversationActivityReader {
         let modificationDate: Date
     }
 
+    private static let logDirectoryCalendar: Calendar = {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        return calendar
+    }()
+
     private struct ParsedLogSnapshot {
         let fileSize: UInt64
         let modificationDate: Date
@@ -166,7 +172,7 @@ final class CodexDesktopConversationActivityReader {
         }
 
         var logFiles: [LogFileMetadata] = []
-        let calendar = Calendar(identifier: .gregorian)
+        let calendar = Self.logDirectoryCalendar
 
         for dayOffset in 0..<lookbackDays {
             guard let day = calendar.date(byAdding: .day, value: -dayOffset, to: now) else {
@@ -233,7 +239,7 @@ final class CodexDesktopConversationActivityReader {
     }
 
     private func recentLogFileCacheKey(now: Date) -> String {
-        let calendar = Calendar(identifier: .gregorian)
+        let calendar = Self.logDirectoryCalendar
 
         return (0..<lookbackDays)
             .compactMap { dayOffset in

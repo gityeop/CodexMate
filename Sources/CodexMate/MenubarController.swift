@@ -101,6 +101,7 @@ struct MenubarControllerEffects: Equatable {
     var diagnostics: [String] = []
     var shouldRequestThreadRefresh = false
     var shouldRequestDesktopActivityRefresh = false
+    var shouldRequestDesktopActivityAfterThreadRefresh = false
     var shouldBoostThreadDiscovery = false
 }
 
@@ -172,6 +173,11 @@ struct MenubarSnapshot: Equatable {
 struct MenubarPreparedSnapshot: Equatable {
     let snapshot: MenubarSnapshot
     let didChangeReadMarkers: Bool
+}
+
+struct MenubarStatusSnapshot: Equatable {
+    let overallStatus: AppStateStore.OverallStatus
+    let hasUnreadThreads: Bool
 }
 
 @MainActor
@@ -250,6 +256,27 @@ final class MenubarController {
                 lastTerminalActivityAt: thread.lastTerminalActivityAt
             )
         }
+    }
+
+    func prepareStatusSnapshot(
+        projectLimit: Int? = nil,
+        visibleThreadLimit: Int? = nil
+    ) -> MenubarStatusSnapshot {
+        let effectiveProjectLimit = projectLimit ?? configuration.projectLimit
+        let effectiveVisibleThreadLimit = visibleThreadLimit ?? configuration.visibleThreadLimit
+        let snapshot = MenubarSnapshotSelector.makeSnapshot(
+            state: state,
+            projectCatalog: projectCatalog,
+            threadReadMarkers: threadReadMarkers,
+            projectLimit: effectiveProjectLimit,
+            visibleThreadLimit: effectiveVisibleThreadLimit,
+            now: now()
+        )
+
+        return MenubarStatusSnapshot(
+            overallStatus: snapshot.overallStatus,
+            hasUnreadThreads: snapshot.hasUnreadThreads
+        )
     }
 
     var persistedThreadReadMarkers: [String: TimeInterval] {
@@ -401,6 +428,7 @@ final class MenubarController {
                 if runtimeSnapshot.activeTurnCount > 0,
                    trackedRunningThreadIDs.isEmpty {
                     effects.shouldRequestThreadRefresh = true
+                    effects.shouldRequestDesktopActivityAfterThreadRefresh = runtimeSnapshot.runningThreadIDs.isEmpty
 
                     let diagnostic = "desktop hinted active turn while app-server stayed idle "
                         + "activeTurns=\(runtimeSnapshot.activeTurnCount) recent=\(trackedThreads.count)"
@@ -415,6 +443,7 @@ final class MenubarController {
                 if runtimeSnapshot.activeTurnCount > 0,
                    !state.recentThreads.contains(where: { $0.presentationStatus == .running }) {
                     effects.shouldRequestThreadRefresh = true
+                    effects.shouldRequestDesktopActivityAfterThreadRefresh = runtimeSnapshot.runningThreadIDs.isEmpty
 
                     let diagnostic = "desktop observed active turn without tracked running thread "
                         + "activeTurns=\(runtimeSnapshot.activeTurnCount) recent=\(trackedThreads.count)"
@@ -569,7 +598,8 @@ final class MenubarController {
             projectCatalog: projectCatalog,
             threadReadMarkers: threadReadMarkers,
             projectLimit: effectiveProjectLimit,
-            visibleThreadLimit: effectiveVisibleThreadLimit
+            visibleThreadLimit: effectiveVisibleThreadLimit,
+            now: now()
         )
         let trackedSnapshotThreadIDs = trackedThreadIDs(in: snapshot)
         let didPruneReadMarkers = pruneThreadReadMarkersIfNeeded(
@@ -585,7 +615,8 @@ final class MenubarController {
                 projectCatalog: projectCatalog,
                 threadReadMarkers: threadReadMarkers,
                 projectLimit: effectiveProjectLimit,
-                visibleThreadLimit: effectiveVisibleThreadLimit
+                visibleThreadLimit: effectiveVisibleThreadLimit,
+                now: now()
             )
         }
 
