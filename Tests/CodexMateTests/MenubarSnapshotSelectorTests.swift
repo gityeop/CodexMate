@@ -188,6 +188,33 @@ final class MenubarSnapshotSelectorTests: XCTestCase {
         XCTAssertFalse(snapshot.isWatchLatestThreadEnabled)
     }
 
+    func testSnapshotDoesNotShowRunningForUnattributedActiveTurn() {
+        var state = AppStateStore()
+        state.replaceRecentThreads(
+            with: [
+                codexThread(id: "thread-1", updatedAt: 100)
+            ]
+        )
+        state.apply(
+            desktopSnapshot: CodexDesktopRuntimeSnapshot(
+                activeTurnCount: 1,
+                runningThreadIDs: []
+            )
+        )
+
+        let snapshot = MenubarSnapshotSelector.makeSnapshot(
+            state: state,
+            projectCatalog: projectCatalog,
+            threadReadMarkers: ThreadReadMarkerStore(),
+            projectLimit: 1,
+            visibleThreadLimit: 1
+        )
+
+        XCTAssertEqual(state.overallStatus, .running)
+        XCTAssertEqual(snapshot.overallStatus, .idle)
+        XCTAssertEqual(snapshot.projectSections.first?.threads.first?.thread.displayStatus, .idle)
+    }
+
     private let projectCatalog = CodexDesktopProjectCatalog(
         workspaceRoots: [
             .init(path: "/tmp/A", displayName: "A"),

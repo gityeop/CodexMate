@@ -347,10 +347,6 @@ enum MenubarSnapshotSelector {
             return .running
         }
 
-        if state.overallStatus == .running {
-            return .running
-        }
-
         if state.connection.isFailed {
             return .failed
         }

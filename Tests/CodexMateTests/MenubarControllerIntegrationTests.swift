@@ -324,7 +324,7 @@ final class MenubarControllerIntegrationTests: XCTestCase {
 
         XCTAssertTrue(effects.shouldRequestThreadRefresh)
         XCTAssertTrue(effects.shouldRequestDesktopActivityAfterThreadRefresh)
-        XCTAssertEqual(snapshot.overallStatus, .running)
+        XCTAssertEqual(snapshot.overallStatus, .idle)
         XCTAssertEqual(snapshot.projectSections.first?.threads.first?.thread.displayStatus, .idle)
     }
 
