@@ -3,22 +3,20 @@
     <channel>
         <title>CodexMate</title>
         <item>
-            <title>0.0.10</title>
-            <pubDate>Mon, 27 Apr 2026 03:22:47 +0900</pubDate>
-            <link>https://github.com/gityeop/CodexMate/releases/tag/v0.0.10</link>
-            <sparkle:version>10</sparkle:version>
-            <sparkle:shortVersionString>0.0.10</sparkle:shortVersionString>
+            <title>0.0.11</title>
+            <pubDate>Mon, 27 Apr 2026 23:42:20 +0900</pubDate>
+            <link>https://github.com/gityeop/CodexMate/releases/tag/v0.0.11</link>
+            <sparkle:version>11</sparkle:version>
+            <sparkle:shortVersionString>0.0.11</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description sparkle:format="markdown"><![CDATA[# CodexMate 0.0.10
+            <description sparkle:format="markdown"><![CDATA[# CodexMate 0.0.11
 
-- Fixed menu bar status updates so running, waiting-for-user, and unread states refresh even before the menu is opened.
-- Improved live thread tracking from Codex app-server notifications, including thread starts, item starts, completions, errors, name updates, and server-request resolution.
-- Kept removed or archived project threads out of the menu while still preserving newly created unmatched threads during project-catalog catch-up.
-- Fixed UTC desktop log date lookup so activity around local midnight is detected from the correct Codex log folder.
-- Added regression coverage for stale project removal, unmatched project grace handling, status snapshots, and UTC log scanning.
+- Fixed a menu status bug where the pixel character could keep showing Running when no visible thread was actually running.
+- Kept background active-turn detection available for thread backfill without letting stale hints override the displayed menu status.
+- Added regression coverage for unattributed active-turn hints so the menu status stays aligned with the visible thread list.
 ]]></description>
-            <enclosure url="https://github.com/gityeop/CodexMate/releases/latest/download/CodexMate-0.0.10.zip" length="4518524" type="application/octet-stream" sparkle:edSignature="zgJCoUi1OW8B8uXn1GBNLoj+1ImyW4b8qP3KrZBxS97hl+WUnHkRLLG7wHZTGdl64RAtUltnM/L0mWU361O5Dg=="/>
+            <enclosure url="https://github.com/gityeop/CodexMate/releases/latest/download/CodexMate-0.0.11.zip" length="4518420" type="application/octet-stream" sparkle:edSignature="d76DHLus3+bZqBPDNSJ2OY0oxsQMDTp+IGb2qtyrI5gSBJVPez4+JxSMTRnL8KoP4ZGNMxxZeNHpMow/WERICA=="/>
         </item>
     </channel>
 </rss>
