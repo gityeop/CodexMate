@@ -319,14 +319,14 @@ final class CodexDesktopStateReaderTests: XCTestCase {
         XCTAssertEqual(state, .init(waitingForInput: false, needsApproval: false))
     }
 
-    func testParseSessionPendingStateMarksUnresolvedEscalatedExecCommandAsApproval() {
+    func testParseSessionPendingStateDoesNotTreatEscalatedExecCommandAsUserApproval() {
         let contents = """
         {"timestamp":"2026-03-31T09:40:28.324Z","type":"response_item","payload":{"type":"function_call","name":"exec_command","arguments":"{\\"cmd\\":\\"ALLOW_ADHOC_SIGNING=1 ./scripts/package_app.sh\\",\\"justification\\":\\"package app\\",\\"sandbox_permissions\\":\\"require_escalated\\"}","call_id":"call_exec_approval"}}
         """
 
         let state = CodexDesktopStateReader.parseSessionPendingState(from: contents)
 
-        XCTAssertEqual(state, .init(waitingForInput: false, needsApproval: true))
+        XCTAssertEqual(state, .init(waitingForInput: false, needsApproval: false))
     }
 
     func testParseSessionPendingStateDoesNotMarkDefaultExecCommandAsApproval() {
@@ -339,25 +339,26 @@ final class CodexDesktopStateReaderTests: XCTestCase {
         XCTAssertEqual(state, .init(waitingForInput: false, needsApproval: false))
     }
 
-    func testParseSessionPendingStateMarksCamelCaseEscalatedExecCommandAsApproval() {
+    func testParseSessionPendingStateDoesNotTreatCamelCaseEscalatedExecCommandAsUserApproval() {
         let contents = """
         {"timestamp":"2026-03-31T09:40:28.324Z","type":"response_item","payload":{"type":"function_call","name":"exec_command","arguments":"{\\"cmd\\":\\"ALLOW_ADHOC_SIGNING=1 ./scripts/package_app.sh\\",\\"sandboxPermissions\\":\\"require_escalated\\"}","call_id":"call_exec_approval"}}
         """
 
         let state = CodexDesktopStateReader.parseSessionPendingState(from: contents)
 
-        XCTAssertEqual(state, .init(waitingForInput: false, needsApproval: true))
+        XCTAssertEqual(state, .init(waitingForInput: false, needsApproval: false))
     }
 
-    func testParseSessionPendingStateClearsEscalatedExecApprovalWhenFunctionCallOutputArrives() {
+    func testParseSessionPendingStateKeepsAutoReviewEscalatedExecCommandRunning() {
         let contents = """
+        {"timestamp":"2026-03-31T09:40:27.324Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-1"}}
         {"timestamp":"2026-03-31T09:40:28.324Z","type":"response_item","payload":{"type":"function_call","name":"exec_command","arguments":"{\\"cmd\\":\\"ALLOW_ADHOC_SIGNING=1 ./scripts/package_app.sh\\",\\"sandbox_permissions\\":\\"require_escalated\\"}","call_id":"call_exec_approval"}}
-        {"timestamp":"2026-03-31T09:42:10.965Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call_exec_approval","output":"Rejected(\\"rejected by user\\")"}}
+        {"timestamp":"2026-03-31T09:40:28.998Z","type":"event_msg","payload":{"type":"guardian_assessment","target_item_id":"call_exec_approval","status":"in_progress"}}
         """
 
         let state = CodexDesktopStateReader.parseSessionPendingState(from: contents)
 
-        XCTAssertEqual(state, .init(waitingForInput: false, needsApproval: false))
+        XCTAssertEqual(state, .init(waitingForInput: false, needsApproval: false, hasActiveTask: true))
     }
 
     func testParseSessionPendingStateMarksExplicitExecApprovalEventAsApproval() {
@@ -910,7 +911,7 @@ final class CodexDesktopStateReaderTests: XCTestCase {
         XCTAssertEqual(snapshot?.runningThreadIDs, [])
     }
 
-    func testSessionFallbackUsesEscalatedExecCommandApprovalWithoutDesktopLog() throws {
+    func testSessionFallbackKeepsEscalatedExecCommandRunningWithoutDesktopLog() throws {
         let tempDirectoryURL = FileManager.default.temporaryDirectory
             .appending(path: UUID().uuidString)
         try FileManager.default.createDirectory(at: tempDirectoryURL, withIntermediateDirectories: true)
@@ -929,8 +930,8 @@ final class CodexDesktopStateReaderTests: XCTestCase {
             databaseError: "missing db"
         )
 
-        XCTAssertEqual(snapshot?.approvalThreadIDs, ["thread-1"])
-        XCTAssertEqual(snapshot?.runningThreadIDs, [])
+        XCTAssertEqual(snapshot?.approvalThreadIDs, [])
+        XCTAssertEqual(snapshot?.runningThreadIDs, ["thread-1"])
     }
 
     func testSessionFallbackIgnoresStaleCompletedPlanWaitWhenAuthoritativeThreadIsNewer() throws {

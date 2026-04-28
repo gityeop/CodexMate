@@ -1307,13 +1307,11 @@ struct CodexDesktopStateReader {
                 unresolvedApprovalCallIDs.remove(callID)
             case .userMessage:
                 waitingForPlanReply = false
-            case let .functionCall(name, callID, arguments):
+            case let .functionCall(name, callID, _):
                 waitingForPlanReply = false
                 if name == "request_user_input" {
                     unresolvedRequestUserInputCallIDs.insert(callID)
                 } else if name == "request_approval" || name == "requestApproval" {
-                    unresolvedApprovalCallIDs.insert(callID)
-                } else if isEscalatedExecCommandCall(name: name, arguments: arguments) {
                     unresolvedApprovalCallIDs.insert(callID)
                 }
             case let .functionCallOutput(callID):
@@ -1392,7 +1390,7 @@ struct CodexDesktopStateReader {
                 unresolvedApprovalCallIDs.remove(callID)
             case .userMessage:
                 sawLaterPlanReplyClearer = true
-            case let .functionCall(name, callID, arguments):
+            case let .functionCall(name, callID, _):
                 sawLaterPlanReplyClearer = true
                 if name == "request_user_input" {
                     if !resolvedRequestUserInputCallIDs.contains(callID) {
@@ -1402,9 +1400,6 @@ struct CodexDesktopStateReader {
                     if !resolvedApprovalCallIDs.contains(callID) {
                         unresolvedApprovalCallIDs.insert(callID)
                     }
-                } else if Self.isEscalatedExecCommandCall(name: name, arguments: arguments),
-                          !resolvedApprovalCallIDs.contains(callID) {
-                    unresolvedApprovalCallIDs.insert(callID)
                 }
             case let .functionCallOutput(callID):
                 sawLaterPlanReplyClearer = true
@@ -1756,33 +1751,6 @@ struct CodexDesktopStateReader {
         }
 
         return String(data: data.subdata(in: startIndex..<endIndex), encoding: .utf8)
-    }
-
-    private static func isEscalatedExecCommandCall(name: String, arguments: Any?) -> Bool {
-        guard name == "exec_command",
-              let object = jsonObject(from: arguments)
-        else {
-            return false
-        }
-
-        let sandboxPermissions = object["sandbox_permissions"] as? String
-            ?? object["sandboxPermissions"] as? String
-        return sandboxPermissions == "require_escalated"
-    }
-
-    private static func jsonObject(from value: Any?) -> [String: Any]? {
-        if let object = value as? [String: Any] {
-            return object
-        }
-
-        guard let rawJSON = value as? String,
-              let data = rawJSON.data(using: .utf8),
-              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        else {
-            return nil
-        }
-
-        return object
     }
 
     private func sqlQuoted(_ value: String) -> String {

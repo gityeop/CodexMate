@@ -1823,7 +1823,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
                 markConnectionHealthy()
                 liveSubscribedThreadUpdatedAtByID[thread.id] = thread.updatedDate
-                controller.markWatched(thread: thread)
+                if controller.markWatched(thread: thread) {
+                    persistThreadReadMarkers()
+                }
             } else if let errorMessage = result.errorMessage {
                 controller.recordDiagnostic("Failed to resume thread \(result.threadID.prefix(8)): \(errorMessage)")
             }

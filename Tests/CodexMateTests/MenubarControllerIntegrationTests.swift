@@ -614,6 +614,50 @@ final class MenubarControllerIntegrationTests: XCTestCase {
         XCTAssertEqual(snapshot.overallStatus, .idle)
     }
 
+    func testWarmResumeDoesNotMarkExistingIdleThreadUnread() async throws {
+        let controller = makeController(
+            recentThreadResponses: [
+                [thread(id: "thread-a", updatedAt: 100, cwd: "/tmp/A/work")]
+            ],
+            projectCatalog: .success(
+                CodexDesktopProjectCatalog(workspaceRoots: [
+                    .init(path: "/tmp/A", displayName: "A")
+                ])
+            )
+        )
+
+        try await controller.loadInitialThreads()
+        var snapshot = controller.prepareSnapshot().snapshot
+        XCTAssertFalse(snapshot.projectSections.first?.threads.first?.hasUnreadContent ?? true)
+
+        XCTAssertTrue(controller.markWatched(thread: thread(id: "thread-a", updatedAt: 100, cwd: "/tmp/A/work")))
+        snapshot = controller.prepareSnapshot().snapshot
+
+        XCTAssertFalse(snapshot.projectSections.first?.threads.first?.hasUnreadContent ?? true)
+        XCTAssertEqual(controller.persistedThreadReadMarkers["thread-a"], 100)
+    }
+
+    func testWarmResumeRepairsLegacyZeroMarkerForExistingIdleThread() async throws {
+        let controller = makeController(
+            recentThreadResponses: [
+                [thread(id: "thread-a", updatedAt: 100, cwd: "/tmp/A/work")]
+            ],
+            initialThreadReadMarkers: ["thread-a": 0],
+            projectCatalog: .success(
+                CodexDesktopProjectCatalog(workspaceRoots: [
+                    .init(path: "/tmp/A", displayName: "A")
+                ])
+            )
+        )
+
+        try await controller.loadInitialThreads()
+        XCTAssertTrue(controller.markWatched(thread: thread(id: "thread-a", updatedAt: 100, cwd: "/tmp/A/work")))
+
+        let snapshot = controller.prepareSnapshot().snapshot
+        XCTAssertFalse(snapshot.projectSections.first?.threads.first?.hasUnreadContent ?? true)
+        XCTAssertEqual(controller.persistedThreadReadMarkers["thread-a"], 100)
+    }
+
     func testRefreshThreadsFallsBackToFolderNameWhenProjectCatalogLoadFails() async throws {
         let controller = makeController(
             recentThreadResponses: [
@@ -1484,6 +1528,7 @@ final class MenubarControllerIntegrationTests: XCTestCase {
         recentThreadResponses: [[CodexThread]],
         metadataResponses: [Result<[CodexThread], Error>] = [],
         archivedMetadataResponses: [Result<Set<String>, Error>] = [],
+        initialThreadReadMarkers: [String: TimeInterval] = [:],
         projectCatalog: Result<CodexDesktopProjectCatalog, Error> = .success(.empty),
         projectCatalogResponses: [Result<CodexDesktopProjectCatalog, Error>] = [],
         now: @escaping () -> Date = Date.init
@@ -1498,6 +1543,7 @@ final class MenubarControllerIntegrationTests: XCTestCase {
             projectCatalogLoader: FakeProjectCatalogLoader(
                 results: projectCatalogResponses.isEmpty ? [projectCatalog] : projectCatalogResponses
             ),
+            initialThreadReadMarkers: initialThreadReadMarkers,
             configuration: MenubarControllerConfiguration(
                 initialFetchLimit: 32,
                 maxTrackedThreads: 256,

@@ -7,7 +7,19 @@ struct ThreadReadMarkerStore: Equatable {
         self.lastReadTerminalAtByThreadID = lastReadTerminalAtByThreadID
     }
 
-    mutating func seedIfNeeded(threadID: String) -> Bool {
+    mutating func seedIfNeeded(threadID: String, lastTerminalActivityAt: Date?) -> Bool {
+        guard lastReadTerminalAtByThreadID[threadID] == nil else {
+            return false
+        }
+        guard let lastTerminalActivityAt else {
+            return false
+        }
+
+        lastReadTerminalAtByThreadID[threadID] = lastTerminalActivityAt.timeIntervalSince1970
+        return true
+    }
+
+    mutating func armUnreadTrackingIfNeeded(threadID: String) -> Bool {
         guard lastReadTerminalAtByThreadID[threadID] == nil else {
             return false
         }

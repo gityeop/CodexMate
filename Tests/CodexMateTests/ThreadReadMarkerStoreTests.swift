@@ -6,17 +6,18 @@ final class ThreadReadMarkerStoreTests: XCTestCase {
         var store = ThreadReadMarkerStore()
         let terminalUpdatedAt = Date(timeIntervalSince1970: 120)
 
-        XCTAssertTrue(store.seedIfNeeded(threadID: "thread-1"))
+        XCTAssertFalse(store.seedIfNeeded(threadID: "thread-1", lastTerminalActivityAt: nil))
         XCTAssertFalse(store.hasUnreadContent(threadID: "thread-1", lastTerminalActivityAt: nil))
+        XCTAssertTrue(store.armUnreadTrackingIfNeeded(threadID: "thread-1"))
         XCTAssertTrue(store.hasUnreadContent(threadID: "thread-1", lastTerminalActivityAt: terminalUpdatedAt))
     }
 
-    func testSeededThreadWithExistingTerminalActivityStartsUnreadUntilOpened() {
+    func testSeededThreadWithExistingTerminalActivityStartsRead() {
         var store = ThreadReadMarkerStore()
         let terminalUpdatedAt = Date(timeIntervalSince1970: 100)
 
-        XCTAssertTrue(store.seedIfNeeded(threadID: "thread-1"))
-        XCTAssertTrue(store.hasUnreadContent(threadID: "thread-1", lastTerminalActivityAt: terminalUpdatedAt))
+        XCTAssertTrue(store.seedIfNeeded(threadID: "thread-1", lastTerminalActivityAt: terminalUpdatedAt))
+        XCTAssertFalse(store.hasUnreadContent(threadID: "thread-1", lastTerminalActivityAt: terminalUpdatedAt))
     }
 
     func testMarkReadClearsUnreadAndDoesNotMoveBackward() {

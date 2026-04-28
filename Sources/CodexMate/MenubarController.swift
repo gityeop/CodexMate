@@ -4,6 +4,29 @@ protocol DesktopActivityLoading: Sendable {
     func load(candidateSessionContexts: [String: ThreadSessionContext], now: Date) async -> DesktopActivityUpdate
 }
 
+private extension AppStateStore.NotificationEvent {
+    var unreadTrackingThreadID: String? {
+        switch self {
+        case let .threadStarted(notification):
+            return notification.thread.id
+        case let .turnStarted(notification):
+            return notification.threadId
+        case let .itemStarted(notification):
+            return notification.threadId
+        case let .turnCompleted(notification):
+            return notification.threadId
+        case let .error(notification):
+            return notification.threadId
+        case .threadStatusChanged,
+             .threadArchived,
+             .threadUnarchived,
+             .threadNameUpdated,
+             .serverRequestResolved:
+            return nil
+        }
+    }
+}
+
 protocol RecentThreadListing: Sendable {
     func recentThreads(limit: Int) async throws -> [CodexThread]
 }
@@ -486,6 +509,9 @@ final class MenubarController {
                 effects.diagnostics.append(diagnostic)
             }
         }
+        let trackedCompletionHintThreadIDs = Set(update.latestTurnCompletedAtByThreadID.keys)
+            .intersection(Set(state.recentThreads.map(\.id)))
+        armUnreadTracking(for: trackedCompletionHintThreadIDs)
         state.apply(desktopCompletionHints: update.latestTurnCompletedAtByThreadID)
 
         let archivedThreadIDs = desktopArchiveHintThreadIDs(
@@ -559,6 +585,9 @@ final class MenubarController {
     }
 
     func apply(notification: AppStateStore.NotificationEvent) {
+        if let threadID = notification.unreadTrackingThreadID {
+            armUnreadTracking(for: [threadID])
+        }
         state.apply(notification: notification)
 
         if case let .threadStarted(notification) = notification {
@@ -570,8 +599,19 @@ final class MenubarController {
         state.apply(serverRequest: serverRequest)
     }
 
-    func markWatched(thread: CodexThread) {
+    @discardableResult
+    func markWatched(thread: CodexThread) -> Bool {
+        let previousRow = state.recentThreads.first(where: { $0.id == thread.id })
         state.markWatched(thread: thread)
+        guard shouldMarkResumePayloadRead(previousRow: previousRow, threadID: thread.id),
+              let updatedRow = state.recentThreads.first(where: { $0.id == thread.id }) else {
+            return false
+        }
+
+        return threadReadMarkers.markRead(
+            threadID: thread.id,
+            lastTerminalActivityAt: updatedRow.lastTerminalActivityAt
+        )
     }
 
     func markUnwatched(threadIDs: Set<String>) {
@@ -655,14 +695,52 @@ final class MenubarController {
         }
 
         var didChange = false
+        let threadsByID = Dictionary(uniqueKeysWithValues: state.recentThreads.map { ($0.id, $0) })
 
         for threadID in threadIDs {
-            if threadReadMarkers.seedIfNeeded(threadID: threadID) {
+            guard let thread = threadsByID[threadID] else {
+                continue
+            }
+
+            let seeded: Bool
+            if thread.lastTerminalActivityAt != nil {
+                seeded = threadReadMarkers.seedIfNeeded(
+                    threadID: threadID,
+                    lastTerminalActivityAt: thread.lastTerminalActivityAt
+                )
+            } else if thread.presentationStatus == .running || thread.presentationStatus == .waitingForUser {
+                seeded = threadReadMarkers.armUnreadTrackingIfNeeded(threadID: threadID)
+            } else {
+                seeded = false
+            }
+
+            if seeded {
                 didChange = true
             }
         }
 
         return didChange
+    }
+
+    private func armUnreadTracking(for threadIDs: Set<String>) {
+        for threadID in threadIDs {
+            _ = threadReadMarkers.armUnreadTrackingIfNeeded(threadID: threadID)
+        }
+    }
+
+    private func shouldMarkResumePayloadRead(previousRow: AppStateStore.ThreadRow?, threadID: String) -> Bool {
+        guard let previousRow,
+              previousRow.lastTerminalActivityAt == nil,
+              previousRow.presentationStatus != .running,
+              previousRow.presentationStatus != .waitingForUser,
+              let updatedRow = state.recentThreads.first(where: { $0.id == threadID }),
+              updatedRow.lastTerminalActivityAt != nil,
+              updatedRow.presentationStatus != .running,
+              updatedRow.presentationStatus != .waitingForUser else {
+            return false
+        }
+
+        return true
     }
 
     private func trackedThreadIDs(in snapshot: MenubarSnapshot) -> Set<String> {
