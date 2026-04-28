@@ -3,22 +3,22 @@
     <channel>
         <title>CodexMate</title>
         <item>
-            <title>0.0.12</title>
-            <pubDate>Tue, 28 Apr 2026 11:53:06 +0900</pubDate>
-            <link>https://github.com/gityeop/CodexMate/releases/tag/v0.0.12</link>
-            <sparkle:version>12</sparkle:version>
-            <sparkle:shortVersionString>0.0.12</sparkle:shortVersionString>
+            <title>0.0.13</title>
+            <pubDate>Wed, 29 Apr 2026 03:06:47 +0900</pubDate>
+            <link>https://github.com/gityeop/CodexMate/releases/tag/v0.0.13</link>
+            <sparkle:version>13</sparkle:version>
+            <sparkle:shortVersionString>0.0.13</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description sparkle:format="markdown"><![CDATA[# CodexMate 0.0.12
+            <description sparkle:format="markdown"><![CDATA[# CodexMate 0.0.13
 
-- Fixed a high-CPU app-server read loop when large JSON responses arrive in multiple stdout chunks.
-- Reduced CPU spikes during live Codex activity by coalescing notification-driven menu renders and ignoring high-frequency token usage updates.
-- Moved notch status animation playback to layer-backed frame animation so status sprites animate without a repeating Swift redraw timer.
-- Added request timeouts for app-server RPC startup so the menu no longer stays stuck loading recent threads when initialize or thread list calls hang.
-- Added regression coverage for app-server timeouts, noisy thread notifications, and notch sprite animation updates.
+- Fixed unread indicators so existing idle threads do not appear unread after a warm resume or subscription refresh.
+- Repaired legacy zero read markers when a previously watched idle thread is resumed with existing terminal activity.
+- Kept auto-review escalated commands in the running state instead of showing the wait-for-user-input status when no explicit user approval is needed.
+- Preserved explicit user-input and approval states for real `request_user_input`, plan replies, `request_approval`, and desktop approval prompts.
+- Added regression coverage for warm resume unread handling and auto-review command status detection.
 ]]></description>
-            <enclosure url="https://github.com/gityeop/CodexMate/releases/latest/download/CodexMate-0.0.12.zip" length="4529392" type="application/octet-stream" sparkle:edSignature="Uow/ZLK5n8s2vvwO2/my522WWVKwg8N89ief0NdlqsdNYJZS+uAPme5PTYZDLjq6ydF1ImZMEmneLOsyp0LaBQ=="/>
+            <enclosure url="https://github.com/gityeop/CodexMate/releases/latest/download/CodexMate-0.0.13.zip" length="4535806" type="application/octet-stream" sparkle:edSignature="AfQtTZye9hAtx+iNqra6G6dxPa94jI72Xc+I2Vscea+PBniQtN9hT2IuFeZnuJR5eVp86zj2sjnXYzAe60DrCQ=="/>
         </item>
     </channel>
 </rss>
