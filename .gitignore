@@ -10,3 +10,4 @@ DerivedData/
 PROJECT_DASHBOARD.md
 __pycache__/
 *.pyc
+.codex-test-home/

@@ -13,6 +13,7 @@ enum CodexAppServerClientError: LocalizedError {
     case rpc(code: Int, message: String)
     case decodingFailure(method: String, details: String)
     case processExited(status: Int32)
+    case requestTimedOut(method: String, seconds: TimeInterval)
 
     var errorDescription: String? {
         switch self {
@@ -28,6 +29,8 @@ enum CodexAppServerClientError: LocalizedError {
             return "Failed to decode \(method) response: \(details)"
         case let .processExited(status):
             return "Codex app-server exited with status \(status)."
+        case let .requestTimedOut(method, seconds):
+            return "Codex app-server did not respond to \(method) within \(seconds) seconds."
         }
     }
 }
@@ -44,6 +47,8 @@ actor CodexAppServerClient {
     private var stderrHandle: FileHandle?
     private var stdoutBuffer = Data()
     private var stderrBuffer = Data()
+    private var stdoutBufferScanStartIndex = 0
+    private var stderrBufferScanStartIndex = 0
     private var nextRequestID = 1
     private var pendingResponses: [Int: CheckedContinuation<Data, Error>] = [:]
     private var initializeResponse: InitializeResponse?
@@ -52,9 +57,21 @@ actor CodexAppServerClient {
 
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
+    private let requestTimeout: TimeInterval
+    private let requestTimeoutNanoseconds: UInt64?
+    private static let newlineData = Data([0x0A])
 
     private var onMessage: MessageHandler?
     private var onTermination: TerminationHandler?
+
+    init(requestTimeout: TimeInterval = 15) {
+        self.requestTimeout = requestTimeout
+        if requestTimeout > 0 {
+            self.requestTimeoutNanoseconds = UInt64(requestTimeout * 1_000_000_000)
+        } else {
+            self.requestTimeoutNanoseconds = nil
+        }
+    }
 
     func setCallbacks(onMessage: MessageHandler?, onTermination: TerminationHandler?) {
         self.onMessage = onMessage
@@ -121,17 +138,22 @@ actor CodexAppServerClient {
         stdoutHandle = stdoutPipe.fileHandleForReading
         stderrHandle = stderrPipe.fileHandleForReading
 
-        let initializeResponse: InitializeResponse = try await call(
-            method: "initialize",
-            params: InitializeParams(
-                clientInfo: ClientInfo(name: "CodexMate", version: "0.1.0"),
-                capabilities: nil
+        do {
+            let initializeResponse: InitializeResponse = try await call(
+                method: "initialize",
+                params: InitializeParams(
+                    clientInfo: ClientInfo(name: "CodexMate", version: "0.1.0"),
+                    capabilities: nil
+                )
             )
-        )
 
-        try sendNotification(method: "initialized")
-        self.initializeResponse = initializeResponse
-        return initializeResponse
+            try sendNotification(method: "initialized")
+            self.initializeResponse = initializeResponse
+            return initializeResponse
+        } catch {
+            stop()
+            throw error
+        }
     }
 
     func stop() {
@@ -163,7 +185,64 @@ actor CodexAppServerClient {
 
         let data = try encoder.encode(JSONRPCRequest(id: requestID, method: method, params: params))
 
-        let responseData: Data = try await withCheckedThrowingContinuation { continuation in
+        let responseData = try await waitForResponse(
+            requestID: requestID,
+            method: method,
+            data: data
+        )
+
+        do {
+            return try decodeResult(from: responseData)
+        } catch let error as DecodingError {
+            throw CodexAppServerClientError.decodingFailure(
+                method: method,
+                details: describeDecodingError(error)
+            )
+        }
+    }
+
+    private func waitForResponse(
+        requestID: Int,
+        method: String,
+        data: Data
+    ) async throws -> Data {
+        guard let requestTimeoutNanoseconds else {
+            return try await sendRequestAndWait(requestID: requestID, data: data)
+        }
+
+        do {
+            return try await withThrowingTaskGroup(of: Data.self) { group in
+                group.addTask {
+                    try await self.sendRequestAndWait(requestID: requestID, data: data)
+                }
+                group.addTask {
+                    try await Task.sleep(nanoseconds: requestTimeoutNanoseconds)
+                    let error = CodexAppServerClientError.requestTimedOut(
+                        method: method,
+                        seconds: self.requestTimeout
+                    )
+                    await self.failPendingResponse(requestID: requestID, error: error)
+                    throw error
+                }
+
+                do {
+                    guard let response = try await group.next() else {
+                        throw CodexAppServerClientError.notConnected
+                    }
+                    group.cancelAll()
+                    return response
+                } catch {
+                    group.cancelAll()
+                    throw error
+                }
+            }
+        } catch is CancellationError {
+            throw CodexAppServerClientError.notConnected
+        }
+    }
+
+    private func sendRequestAndWait(requestID: Int, data: Data) async throws -> Data {
+        try await withCheckedThrowingContinuation { continuation in
             pendingResponses[requestID] = continuation
 
             do {
@@ -173,14 +252,11 @@ actor CodexAppServerClient {
                 continuation.resume(throwing: error)
             }
         }
+    }
 
-        do {
-            return try decodeResult(from: responseData)
-        } catch let error as DecodingError {
-            throw CodexAppServerClientError.decodingFailure(
-                method: method,
-                details: describeDecodingError(error)
-            )
+    private func failPendingResponse(requestID: Int, error: Error) {
+        if let continuation = pendingResponses.removeValue(forKey: requestID) {
+            continuation.resume(throwing: error)
         }
     }
 
@@ -248,6 +324,8 @@ actor CodexAppServerClient {
         stderrHandle = nil
         stdoutBuffer.removeAll(keepingCapacity: false)
         stderrBuffer.removeAll(keepingCapacity: false)
+        stdoutBufferScanStartIndex = 0
+        stderrBufferScanStartIndex = 0
         initializeResponse = nil
 
         for (_, continuation) in pendingResponses {
@@ -261,20 +339,41 @@ actor CodexAppServerClient {
         guard activeConnectionID == connectionID else { return }
         guard !data.isEmpty else { return }
         stdoutBuffer.append(data)
-        drainBuffer(&stdoutBuffer, source: .stdout)
+        drainBuffer(
+            &stdoutBuffer,
+            scanStartIndex: &stdoutBufferScanStartIndex,
+            source: .stdout
+        )
     }
 
     private func handleStandardError(_ data: Data, connectionID: ConnectionID) {
         guard activeConnectionID == connectionID else { return }
         guard !data.isEmpty else { return }
         stderrBuffer.append(data)
-        drainBuffer(&stderrBuffer, source: .stderr)
+        drainBuffer(
+            &stderrBuffer,
+            scanStartIndex: &stderrBufferScanStartIndex,
+            source: .stderr
+        )
     }
 
-    private func drainBuffer(_ buffer: inout Data, source: StreamSource) {
-        while let range = buffer.range(of: Data([0x0A])) {
+    private func drainBuffer(
+        _ buffer: inout Data,
+        scanStartIndex: inout Int,
+        source: StreamSource
+    ) {
+        while scanStartIndex < buffer.endIndex {
+            guard let range = buffer.range(
+                of: Self.newlineData,
+                in: scanStartIndex..<buffer.endIndex
+            ) else {
+                scanStartIndex = buffer.endIndex
+                return
+            }
+
             let line = buffer.subdata(in: buffer.startIndex..<range.lowerBound)
             buffer.removeSubrange(buffer.startIndex...range.lowerBound)
+            scanStartIndex = buffer.startIndex
 
             if line.isEmpty {
                 continue

@@ -259,23 +259,18 @@ final class NotchStatusOverlayController {
         hoverProgress = 0
         overlayView.menuExpansionProgress = 0
         overlayView.hoverProgress = 0
+        overlayView.stopSpriteAnimation()
         setActivationHovered(false)
         panel.orderOut(nil)
     }
 
     func update(
-        spriteImage: NSImage?,
+        spriteImages: [NSImage],
         statusSprite: MenubarStatusPresentation.StatusSprite,
         statusText: String,
-        frameIndex: Int
+        frameInterval: TimeInterval
     ) {
-        if let spriteImage {
-            if overlayView.spriteImage !== spriteImage {
-                overlayView.spriteImage = spriteImage
-            }
-        } else if overlayView.spriteImage != nil {
-            overlayView.spriteImage = nil
-        }
+        var shouldApplyOverlayState = false
 
         if overlayView.statusSprite != statusSprite {
             overlayView.statusSprite = statusSprite
@@ -285,20 +280,24 @@ final class NotchStatusOverlayController {
             overlayView.statusText = statusText
         }
 
-        if overlayView.frameIndex != frameIndex {
-            overlayView.frameIndex = frameIndex
-        }
+        overlayView.setSpriteFrames(
+            spriteImages,
+            animationIdentifier: statusSprite.assetName,
+            frameInterval: frameInterval
+        )
 
         if overlayView.usesCompactLayout {
             overlayView.usesCompactLayout = false
+            shouldApplyOverlayState = true
         }
 
         if overlayView.spritePointSize != Metrics.spritePointSize {
             overlayView.spritePointSize = Metrics.spritePointSize
+            shouldApplyOverlayState = true
         }
         currentScreen = panel.screen ?? currentScreen
 
-        if panel.isVisible {
+        if panel.isVisible, shouldApplyOverlayState {
             applyOverlayState()
         }
     }
@@ -666,6 +665,7 @@ final class NotchStatusOverlayView: NSView {
     private let menuScrollView = NotchMenuScrollView()
     private let menuDocumentView = NotchMenuDocumentView()
     private let surfaceMaskLayer = CAShapeLayer()
+    private static let spriteAnimationKey = "CodexMateStatusSpriteAnimation"
     private var menuRows: [MenuRowRecord] = []
     private var selectedMenuRowIndex: Int?
     private var suppressesRowHoverDuringScroll = false
@@ -676,6 +676,7 @@ final class NotchStatusOverlayView: NSView {
     private var lastLaidOutMenuContentWidth: CGFloat = -1
     private var lastMenuItemSignatures: [MenuItemSignature] = []
     private var hasAppliedMenuItems = false
+    private var spriteAnimationIdentifier: String?
     fileprivate var geometry: NotchStatusOverlayGeometry?
     var onKeyDown: ((NSEvent) -> Bool)?
 
@@ -694,10 +695,6 @@ final class NotchStatusOverlayView: NSView {
         let isEnabled: Bool
     }
 
-    var spriteImage: NSImage? {
-        didSet { imageView.image = spriteImage }
-    }
-
     var statusText = "" {
         didSet {
             guard statusText != oldValue else { return }
@@ -705,17 +702,14 @@ final class NotchStatusOverlayView: NSView {
         }
     }
 
-    var statusSprite: MenubarStatusPresentation.StatusSprite = .idle {
-        didSet {
-            guard statusSprite != oldValue else { return }
-            needsLayout = true
-        }
-    }
+    var statusSprite: MenubarStatusPresentation.StatusSprite = .idle
 
     var frameIndex = 0 {
         didSet {
             guard frameIndex != oldValue else { return }
-            needsLayout = true
+            if bobOffsets.count > 1 {
+                needsLayout = true
+            }
         }
     }
 
@@ -781,6 +775,7 @@ final class NotchStatusOverlayView: NSView {
         layer?.mask = surfaceMaskLayer
 
         imageView.wantsLayer = true
+        imageView.layer?.contentsGravity = .resizeAspect
         imageView.layer?.magnificationFilter = .nearest
         imageView.layer?.minificationFilter = .nearest
         imageView.imageScaling = .scaleProportionallyUpOrDown
@@ -813,6 +808,66 @@ final class NotchStatusOverlayView: NSView {
 
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
+    }
+
+    func setSpriteFrames(
+        _ frames: [NSImage],
+        animationIdentifier: String,
+        frameInterval: TimeInterval
+    ) {
+        guard !frames.isEmpty else {
+            stopSpriteAnimation()
+            imageView.image = nil
+            imageView.layer?.contents = nil
+            return
+        }
+
+        guard let imageLayer = imageView.layer else {
+            return
+        }
+
+        let cgFrames = frames.compactMap(Self.cgImage)
+        guard let firstFrame = cgFrames.first else {
+            stopSpriteAnimation()
+            imageView.image = nil
+            imageLayer.contents = nil
+            return
+        }
+
+        if spriteAnimationIdentifier == animationIdentifier,
+           (cgFrames.count == 1 || imageLayer.animation(forKey: Self.spriteAnimationKey) != nil) {
+            return
+        }
+
+        spriteAnimationIdentifier = animationIdentifier
+        imageView.image = nil
+        imageLayer.contents = firstFrame
+
+        guard cgFrames.count > 1 else {
+            imageLayer.removeAnimation(forKey: Self.spriteAnimationKey)
+            return
+        }
+
+        let animationFrames = cgFrames + [firstFrame]
+        let frameCount = Double(cgFrames.count)
+        let animation = CAKeyframeAnimation(keyPath: "contents")
+        animation.values = animationFrames
+        animation.keyTimes = (0...cgFrames.count).map { NSNumber(value: Double($0) / frameCount) }
+        animation.duration = max(frameInterval * frameCount, frameInterval)
+        animation.repeatCount = .infinity
+        animation.calculationMode = .discrete
+        animation.isRemovedOnCompletion = false
+        imageLayer.add(animation, forKey: Self.spriteAnimationKey)
+    }
+
+    func stopSpriteAnimation() {
+        imageView.layer?.removeAnimation(forKey: Self.spriteAnimationKey)
+        spriteAnimationIdentifier = nil
+    }
+
+    private static func cgImage(from image: NSImage) -> CGImage? {
+        var proposedRect = NSRect(origin: .zero, size: image.size)
+        return image.cgImage(forProposedRect: &proposedRect, context: nil, hints: nil)
     }
 
     override var acceptsFirstResponder: Bool {

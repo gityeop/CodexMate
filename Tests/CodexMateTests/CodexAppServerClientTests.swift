@@ -56,6 +56,25 @@ final class CodexAppServerClientTests: XCTestCase {
         await client.stop()
     }
 
+    func testStartTimesOutAndCleansUpWhenInitializeDoesNotRespond() async throws {
+        let client = CodexAppServerClient(requestTimeout: 0.1)
+        let binaryURL = try makeFakeCodexBinary(respondsToInitialize: false)
+
+        do {
+            _ = try await client.start(codexBinaryURL: binaryURL)
+            XCTFail("Expected start to time out")
+        } catch let error as CodexAppServerClientError {
+            guard case let .requestTimedOut(method, seconds) = error else {
+                return XCTFail("Expected request timeout, got \(error)")
+            }
+            XCTAssertEqual(method, "initialize")
+            XCTAssertEqual(seconds, 0.1, accuracy: 0.01)
+        }
+
+        let isConnected = await client.isConnected()
+        XCTAssertFalse(isConnected)
+    }
+
     func testDescribeDecodingErrorIncludesMissingKeyAndPath() {
         let error = DecodingError.keyNotFound(
             DynamicCodingKey(stringValue: "preview")!,
@@ -133,6 +152,7 @@ final class CodexAppServerClientTests: XCTestCase {
     private func makeFakeCodexBinary(
         delayedShutdownSeconds: TimeInterval = 0,
         keepRunningUntilStopped: Bool = false,
+        respondsToInitialize: Bool = true,
         file: StaticString = #filePath,
         line: UInt = #line
     ) throws -> URL {
@@ -148,10 +168,17 @@ final class CodexAppServerClientTests: XCTestCase {
         #!/bin/zsh
         delayed_shutdown=\(delayedShutdownSeconds)
         keep_running_until_stopped=\(keepRunningUntilStopped ? 1 : 0)
+        responds_to_initialize=\(respondsToInitialize ? 1 : 0)
         if [[ "$delayed_shutdown" != "0.0" ]]; then
           trap "sleep $delayed_shutdown; exit 0" TERM INT
         fi
         read -r request || exit 1
+        if [[ "$responds_to_initialize" != "1" ]]; then
+          while read -r _; do
+            :
+          done
+          exit 0
+        fi
         request_id=$(printf '%s\n' "$request" | sed -n 's/.*"id":[[:space:]]*\\([0-9][0-9]*\\).*/\\1/p')
         [[ -n "$request_id" ]] || request_id=1
         printf '{"jsonrpc":"2.0","id":%s,"result":{"userAgent":"CodexMateTests","codexHome":"/tmp/codexmate-tests"}}\n' "$request_id"

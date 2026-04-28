@@ -77,6 +77,24 @@ final class MenubarStatusSpriteCatalog {
         return renderedFrame
     }
 
+    func notchFrames(
+        for sprite: MenubarStatusPresentation.StatusSprite,
+        renderedPixelSize: Int,
+        renderedPointSize: NSSize
+    ) -> [NSImage] {
+        let sourceFrames = sourceFrames(for: sprite)
+        guard !sourceFrames.isEmpty else { return [] }
+
+        return sourceFrames.indices.compactMap { index in
+            notchFrame(
+                for: sprite,
+                index: index,
+                renderedPixelSize: renderedPixelSize,
+                renderedPointSize: renderedPointSize
+            )
+        }
+    }
+
     func frameCount(for sprite: MenubarStatusPresentation.StatusSprite) -> Int {
         sourceFrames(for: sprite).count
     }

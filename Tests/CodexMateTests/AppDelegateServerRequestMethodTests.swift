@@ -48,4 +48,23 @@ final class AppDelegateServerRequestMethodTests: XCTestCase {
             )
         }
     }
+
+    func testShouldIgnoreThreadNotificationRecognizesHighFrequencyTokenUsageUpdates() {
+        XCTAssertTrue(
+            AppDelegate.shouldIgnoreThreadNotification("thread/tokenUsage/updated")
+        )
+
+        let methodsToHandle = [
+            "thread/closed",
+            "thread/list",
+            "thread/title/updated",
+        ]
+
+        for method in methodsToHandle {
+            XCTAssertFalse(
+                AppDelegate.shouldIgnoreThreadNotification(method),
+                "method=\(method)"
+            )
+        }
+    }
 }

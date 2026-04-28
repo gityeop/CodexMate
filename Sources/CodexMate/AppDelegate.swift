@@ -56,6 +56,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         static let minimumInterval: TimeInterval = 1
     }
 
+    private enum NotificationRenderPolicy {
+        static let coalescingDelayNanoseconds: UInt64 = 100_000_000
+    }
+
     private enum DesktopPrunePolicy {
         static let minimumInterval: TimeInterval = 30
     }
@@ -151,11 +155,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var connectedBinaryPath: String?
     private var refreshTimer: Timer?
     private var refreshTimerInterval: TimeInterval?
-    private var statusAnimationTimer: Timer?
     private var currentStatusSprite: MenubarStatusPresentation.StatusSprite = .connecting
     private var currentStatusDisplayName = AppStateStore.OverallStatus.connecting.displayName
     private var currentStatusFallbackIcon = AppStateStore.OverallStatus.connecting.icon
-    private var statusAnimationFrameIndex = 0
     private var currentEffectiveDisplayMode: AppDisplayMode?
     private var isMenuOpen = false
     private var isSettingsWindowVisible = false
@@ -169,6 +171,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var desktopActivityRefreshTask: Task<Void, Never>?
     private var threadRefreshGate = RefreshRequestGate()
     private var threadRefreshTask: Task<Void, Never>?
+    private var notificationRenderTask: Task<Void, Never>?
     private var shouldRefreshDesktopActivityAfterNextThreadRefresh = false
     private var hoverTooltipContentsByThreadID: [String: MenubarStatusPresentation.ThreadTooltipContent] = [:]
     private var hoverTooltipWorkItem: DispatchWorkItem?
@@ -182,6 +185,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var foregroundRefreshObserverTokens: [NSObjectProtocol] = []
     private var cancellables: Set<AnyCancellable> = []
     private var loggedUnhandledServerRequestMethods: Set<String> = []
+    private var loggedUnhandledThreadNotificationMethods: Set<String> = []
     private var foregroundRefreshThrottle = ForegroundRefreshThrottle(
         minimumInterval: ForegroundRefreshPolicy.minimumInterval
     )
@@ -272,7 +276,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         debugLog("applicationWillTerminate event=\(debugEventSummary(NSApp.currentEvent))")
         removeForegroundRefreshObservers()
         invalidateTimers()
-        invalidateStatusAnimationTimer()
+        cancelNotificationRenderTask()
         removeMenuShortcutEventMonitor()
         removeMenuDismissEventMonitors()
         notchStatusOverlay.hide()
@@ -324,7 +328,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .menuBar:
             removeStatusItem()
         case .notch:
-            invalidateStatusAnimationTimer()
             notchStatusOverlay.hideMenu()
             notchStatusOverlay.hide()
             removeMenuDismissEventMonitors()
@@ -337,11 +340,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         switch displayMode {
         case .menuBar:
             configureStatusItemForMenuBarMode()
-            invalidateStatusAnimationTimer()
             notchStatusOverlay.hide()
         case .notch:
             removeStatusItem()
-            scheduleStatusAnimationTimerIfNeeded()
             updateNotchStatusPanel()
         }
     }
@@ -675,7 +676,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func handleClientMessage(_ message: ClientMessage) {
         switch message {
         case let .notification(method, payload):
-            handleNotification(method: method, payload: payload)
+            if handleNotification(method: method, payload: payload) {
+                scheduleNotificationRender()
+            }
         case let .request(_, method, payload):
             handleServerRequest(method: method, payload: payload)
         case let .diagnostic(text):
@@ -684,7 +687,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    private func handleNotification(method: String, payload: Data) {
+    private func handleNotification(method: String, payload: Data) -> Bool {
         switch method {
         case "thread/started":
             decodeAndApply(payload, as: ThreadStartedNotification.self) { [weak self] notification in
@@ -799,17 +802,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         default:
             if Self.shouldHandleNotificationAsServerRequest(method) {
                 handleServerRequest(method: method, payload: payload)
-                return
+                return false
             }
 
             if method.hasPrefix("thread/") {
-                debugLog("received unhandled thread notification method=\(method)")
-                controller.recordDiagnostic("Unhandled thread notification: \(method)")
-                requestThreadRefresh()
+                if Self.shouldIgnoreThreadNotification(method) {
+                    return false
+                }
+
+                if loggedUnhandledThreadNotificationMethods.insert(method).inserted {
+                    debugLog("received unhandled thread notification method=\(method)")
+                    controller.recordDiagnostic("Unhandled thread notification: \(method)")
+                    requestThreadRefresh()
+                    return true
+                }
+                return false
             }
         }
 
-        renderMenu()
+        return true
     }
 
     private func handleServerRequest(method: String, payload: Data) {
@@ -884,6 +895,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     nonisolated static func shouldHandleNotificationAsServerRequest(_ method: String) -> Bool {
         classifyServerRequestMethod(method) != .other
+    }
+
+    nonisolated static func shouldIgnoreThreadNotification(_ method: String) -> Bool {
+        method == "thread/tokenUsage/updated"
     }
 
     private nonisolated static func normalizedServerRequestMethodComponent(_ method: String) -> String {
@@ -964,27 +979,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         RunLoop.main.add(timer, forMode: .common)
     }
 
-    private func scheduleStatusAnimationTimerIfNeeded() {
-        guard currentEffectiveDisplayMode == .notch else {
-            return
-        }
-
-        guard statusAnimationTimer == nil else {
-            return
-        }
-
-        let timer = Timer(
-            timeInterval: StatusAnimation.frameInterval,
-            repeats: true
-        ) { [weak self] _ in
-            Task { @MainActor [weak self] in
-                self?.handleStatusAnimationTick()
-            }
-        }
-        statusAnimationTimer = timer
-        RunLoop.main.add(timer, forMode: .common)
-    }
-
     private func refreshSchedulingPolicy() -> RefreshSchedulingPolicy {
         let basePolicy = RefreshSchedulingPolicy.current(
             isMenuOpen: isMenuOpen,
@@ -1023,9 +1017,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         refreshTimerInterval = nil
     }
 
-    private func invalidateStatusAnimationTimer() {
-        statusAnimationTimer?.invalidate()
-        statusAnimationTimer = nil
+    private func scheduleNotificationRender() {
+        guard notificationRenderTask == nil else {
+            return
+        }
+
+        notificationRenderTask = Task { @MainActor [weak self] in
+            do {
+                try await Task.sleep(nanoseconds: NotificationRenderPolicy.coalescingDelayNanoseconds)
+            } catch {
+                return
+            }
+
+            guard let self else { return }
+            notificationRenderTask = nil
+            renderMenu()
+        }
+    }
+
+    private func cancelNotificationRenderTask() {
+        notificationRenderTask?.cancel()
+        notificationRenderTask = nil
     }
 
     private func refreshDesktopActivity() async {
@@ -1046,16 +1058,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         controller.setConnection(.connected(binaryPath: connectedBinaryPath))
     }
 
-    private func handleStatusAnimationTick() {
-        let frameCount = statusSpriteCatalog.frameCount(for: currentStatusSprite)
-        guard frameCount > 1 else {
-            return
-        }
-
-        statusAnimationFrameIndex = (statusAnimationFrameIndex + 1) % frameCount
-        applyStatusPresentation()
-    }
-
     private func renderStatusItem(overallStatus: AppStateStore.OverallStatus, hasUnreadThreads: Bool) {
         let sprite = MenubarStatusPresentation.statusItemSprite(
             overallStatus: overallStatus,
@@ -1063,7 +1065,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
         if sprite != currentStatusSprite {
             currentStatusSprite = sprite
-            statusAnimationFrameIndex = 0
         }
 
         currentStatusDisplayName = MenubarStatusPresentation.statusDisplayName(
@@ -1115,15 +1116,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         notchStatusOverlay.update(
-            spriteImage: statusSpriteCatalog.notchFrame(
+            spriteImages: statusSpriteCatalog.notchFrames(
                 for: currentStatusSprite,
-                index: statusAnimationFrameIndex,
                 renderedPixelSize: 128,
                 renderedPointSize: NotchStatusOverlayController.Metrics.spritePointSize
             ),
             statusSprite: currentStatusSprite,
             statusText: currentStatusDisplayName,
-            frameIndex: statusAnimationFrameIndex
+            frameInterval: StatusAnimation.frameInterval
         )
         if !notchStatusOverlay.isVisible {
             notchStatusOverlay.show(on: overlayScreen)

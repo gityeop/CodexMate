@@ -47,6 +47,47 @@ final class NotchStatusOverlayKeyboardNavigationTests: XCTestCase {
         XCTAssertEqual(try selectedRowTitle(in: view), "Thread 1")
     }
 
+    func testSpriteFrameChangeDoesNotInvalidateWholeOverlay() {
+        let view = NotchStatusOverlayView(frame: NSRect(x: 0, y: 0, width: 520, height: 220))
+        view.layoutSubtreeIfNeeded()
+        view.needsLayout = false
+        view.needsDisplay = false
+
+        view.frameIndex = 1
+
+        XCTAssertFalse(view.needsLayout)
+        XCTAssertFalse(view.needsDisplay)
+    }
+
+    func testSpriteFramesInstallLayerAnimationWithoutInvalidatingWholeOverlay() throws {
+        let view = NotchStatusOverlayView(frame: NSRect(x: 0, y: 0, width: 520, height: 220))
+        let frames = [
+            makeSpriteImage(color: .red),
+            makeSpriteImage(color: .green),
+        ]
+
+        view.setSpriteFrames(frames, animationIdentifier: "running", frameInterval: 0.12)
+
+        let imageView = try XCTUnwrap(firstImageView(in: view))
+        XCTAssertEqual(
+            imageView.layer?.animationKeys()?.contains("CodexMateStatusSpriteAnimation"),
+            true
+        )
+        let animation = try XCTUnwrap(
+            imageView.layer?.animation(forKey: "CodexMateStatusSpriteAnimation") as? CAKeyframeAnimation
+        )
+        XCTAssertEqual(animation.values?.count, frames.count + 1)
+        XCTAssertEqual(animation.keyTimes?.count, frames.count + 1)
+
+        view.layoutSubtreeIfNeeded()
+        view.needsLayout = false
+        view.needsDisplay = false
+        view.setSpriteFrames(frames, animationIdentifier: "running", frameInterval: 0.12)
+
+        XCTAssertFalse(view.needsLayout)
+        XCTAssertFalse(view.needsDisplay)
+    }
+
     func testOptionArrowNavigationMovesByProject() throws {
         let view = NotchStatusOverlayView(frame: NSRect(x: 0, y: 0, width: 520, height: 220))
         view.setMenuItems(makeSectionedMenuItems())
@@ -516,6 +557,10 @@ final class NotchStatusOverlayKeyboardNavigationTests: XCTestCase {
         allSubviews(in: view).compactMap { $0 as? NSScrollView }.first
     }
 
+    private func firstImageView(in view: NSView) -> NSImageView? {
+        allSubviews(in: view).compactMap { $0 as? NSImageView }.first
+    }
+
     private func firstLabel(in view: NSView, stringValue: String) -> NSTextField? {
         allSubviews(in: view)
             .compactMap { $0 as? NSTextField }
@@ -528,6 +573,15 @@ final class NotchStatusOverlayKeyboardNavigationTests: XCTestCase {
 
     private func allSubviews(in view: NSView) -> [NSView] {
         view.subviews + view.subviews.flatMap { allSubviews(in: $0) }
+    }
+
+    private func makeSpriteImage(color: NSColor) -> NSImage {
+        let image = NSImage(size: NSSize(width: 4, height: 4))
+        image.lockFocus()
+        color.setFill()
+        NSBezierPath(rect: NSRect(x: 0, y: 0, width: 4, height: 4)).fill()
+        image.unlockFocus()
+        return image
     }
 
     private func assertEqualColor(
