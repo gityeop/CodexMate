@@ -3,22 +3,21 @@
     <channel>
         <title>CodexMate</title>
         <item>
-            <title>0.0.13</title>
-            <pubDate>Wed, 29 Apr 2026 03:06:47 +0900</pubDate>
-            <link>https://github.com/gityeop/CodexMate/releases/tag/v0.0.13</link>
-            <sparkle:version>13</sparkle:version>
-            <sparkle:shortVersionString>0.0.13</sparkle:shortVersionString>
+            <title>0.0.14</title>
+            <pubDate>Fri, 01 May 2026 00:35:45 +0900</pubDate>
+            <link>https://github.com/gityeop/CodexMate/releases/tag/v0.0.14</link>
+            <sparkle:version>14</sparkle:version>
+            <sparkle:shortVersionString>0.0.14</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description sparkle:format="markdown"><![CDATA[# CodexMate 0.0.13
+            <description sparkle:format="markdown"><![CDATA[# CodexMate 0.0.14
 
-- Fixed unread indicators so existing idle threads do not appear unread after a warm resume or subscription refresh.
-- Repaired legacy zero read markers when a previously watched idle thread is resumed with existing terminal activity.
-- Kept auto-review escalated commands in the running state instead of showing the wait-for-user-input status when no explicit user approval is needed.
-- Preserved explicit user-input and approval states for real `request_user_input`, plan replies, `request_approval`, and desktop approval prompts.
-- Added regression coverage for warm resume unread handling and auto-review command status detection.
+- Kept Desktop-started turns in the running state until a completion hint arrives, so quiet long-running commands no longer disappear from CodexMate after the short running-hint window.
+- Added a safety timeout for inferred active turns when no completion signal is available.
+- Prevented stale desktop running evidence from reviving threads that already have authoritative terminal activity.
+- Added regression coverage for long-running quiet turns, pending-state preservation, completion handling, and stale running cleanup.
 ]]></description>
-            <enclosure url="https://github.com/gityeop/CodexMate/releases/latest/download/CodexMate-0.0.13.zip" length="4535806" type="application/octet-stream" sparkle:edSignature="AfQtTZye9hAtx+iNqra6G6dxPa94jI72Xc+I2Vscea+PBniQtN9hT2IuFeZnuJR5eVp86zj2sjnXYzAe60DrCQ=="/>
+            <enclosure url="https://github.com/gityeop/CodexMate/releases/latest/download/CodexMate-0.0.14.zip" length="4537301" type="application/octet-stream" sparkle:edSignature="uqFlGgVi7luixuOdhE59d9uhcGdXpX4JdK5qkXUinHfR1TSiD8LL5UHwBFKSAcgBkklkIg2W2yNUm6lDQnv2Aw=="/>
         </item>
     </channel>
 </rss>
