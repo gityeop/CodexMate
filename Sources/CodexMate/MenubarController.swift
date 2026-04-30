@@ -440,6 +440,7 @@ final class MenubarController {
         synchronizePendingAuthoritativeThreads()
 
         var effects = MenubarControllerEffects()
+        state.apply(desktopTurnStarts: update.latestTurnStartedAtByThreadID)
 
         if let runtimeSnapshot = update.runtimeSnapshot {
             if isConnected {

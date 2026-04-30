@@ -382,7 +382,7 @@ final class AppStateStoreTests: XCTestCase {
         XCTAssertEqual(store.recentThreads.first?.activeTurnID, "turn-1")
     }
 
-    func testDesktopSnapshotClearsWatchedRunningWhenSessionBackedIdlePersists() throws {
+    func testDesktopSnapshotKeepsWatchedActiveTurnRunningWhileCompletionIsMissing() throws {
         var store = AppStateStore()
         store.replaceRecentThreads(with: [
             thread(id: "thread-1", updatedAt: 100, status: .idle, path: "/tmp/thread-1.jsonl")
@@ -409,9 +409,8 @@ final class AppStateStoreTests: XCTestCase {
             observedAt: lastRuntimeEventAt.addingTimeInterval(10)
         )
 
-        XCTAssertEqual(store.recentThreads.first?.displayStatus, .idle)
-        XCTAssertNil(store.recentThreads.first?.activeTurnID)
-        XCTAssertEqual(store.lastDiagnostic, "cleared stale running thread=thread-1 from=Running to=Idle via desktop snapshot")
+        XCTAssertEqual(store.recentThreads.first?.displayStatus, .running)
+        XCTAssertEqual(store.recentThreads.first?.activeTurnID, "turn-1")
     }
 
     func testMergeRecentThreadAddsUnknownThreadWithoutDroppingExistingThreads() {
@@ -978,7 +977,67 @@ final class AppStateStoreTests: XCTestCase {
         XCTAssertEqual(store.recentThreads.first?.activeTurnID, "turn-1")
     }
 
-    func testConnectedDesktopSnapshotClearsWatchedActiveTurnAfterGraceWithoutRunningEvidence() {
+    func testDesktopTurnStartMarksThreadRunningUntilCompletionHintArrives() {
+        var store = AppStateStore()
+        store.replaceRecentThreads(with: [thread(id: "thread-1", updatedAt: 100, status: .idle)])
+
+        store.apply(desktopTurnStarts: [
+            "thread-1": Date(timeIntervalSince1970: 200)
+        ])
+
+        XCTAssertEqual(store.overallStatus, .running)
+        XCTAssertEqual(store.recentThreads.first?.displayStatus, .running)
+        XCTAssertEqual(store.recentThreads.first?.activeTurnID, "__inferred_active_turn__")
+
+        store.apply(desktopCompletionHints: [
+            "thread-1": Date(timeIntervalSince1970: 260)
+        ])
+
+        XCTAssertEqual(store.overallStatus, .idle)
+        XCTAssertEqual(store.recentThreads.first?.displayStatus, .idle)
+        XCTAssertNil(store.recentThreads.first?.activeTurnID)
+        XCTAssertEqual(store.recentThreads.first?.lastTerminalActivityAt, Date(timeIntervalSince1970: 260))
+    }
+
+    func testDesktopTurnStartDoesNotOverridePendingStatusButResumesRunningAfterResolution() {
+        var store = AppStateStore()
+        store.replaceRecentThreads(with: [thread(id: "thread-1", updatedAt: 100, status: .idle)])
+        store.apply(serverRequest: .toolUserInput(
+            ToolRequestUserInputRequest(threadId: "thread-1", turnId: "turn-1", itemId: "item-1")
+        ))
+
+        store.apply(desktopTurnStarts: [
+            "thread-1": Date()
+        ])
+
+        XCTAssertEqual(store.overallStatus, .waitingForUser)
+        XCTAssertEqual(store.recentThreads.first?.displayStatus, .waitingForInput)
+
+        store.apply(notification: .serverRequestResolved(
+            ServerRequestResolvedNotification(threadId: "thread-1")
+        ))
+
+        XCTAssertEqual(store.overallStatus, .running)
+        XCTAssertEqual(store.recentThreads.first?.displayStatus, .running)
+    }
+
+    func testDesktopTurnStartDoesNotReviveThreadAfterNewerCompletion() {
+        var store = AppStateStore()
+        store.replaceRecentThreads(with: [thread(id: "thread-1", updatedAt: 100, status: .idle)])
+
+        store.apply(desktopCompletionHints: [
+            "thread-1": Date(timeIntervalSince1970: 260)
+        ])
+        store.apply(desktopTurnStarts: [
+            "thread-1": Date(timeIntervalSince1970: 200)
+        ])
+
+        XCTAssertEqual(store.overallStatus, .idle)
+        XCTAssertEqual(store.recentThreads.first?.displayStatus, .idle)
+        XCTAssertNil(store.recentThreads.first?.activeTurnID)
+    }
+
+    func testConnectedDesktopSnapshotKeepsWatchedActiveTurnRunningWithoutSnapshotEvidence() {
         var store = AppStateStore()
         store.replaceRecentThreads(with: [thread(id: "thread-1", updatedAt: 100, status: .idle)])
         store.apply(notification: .turnStarted(
@@ -994,6 +1053,26 @@ final class AppStateStoreTests: XCTestCase {
                 runningThreadIDs: []
             ),
             observedAt: Date().addingTimeInterval(6)
+        )
+
+        XCTAssertEqual(store.overallStatus, .running)
+        XCTAssertEqual(store.recentThreads.first?.displayStatus, .running)
+        XCTAssertEqual(store.recentThreads.first?.activeTurnID, "turn-1")
+    }
+
+    func testDesktopSnapshotClearsActiveTurnAfterSafetyTimeoutWithoutRunningEvidence() throws {
+        var store = AppStateStore()
+        store.replaceRecentThreads(with: [thread(id: "thread-1", updatedAt: 100, status: .idle)])
+        store.apply(desktopTurnStarts: [
+            "thread-1": Date(timeIntervalSince1970: 200)
+        ])
+
+        store.apply(
+            desktopSnapshot: CodexDesktopRuntimeSnapshot(
+                activeTurnCount: 0,
+                runningThreadIDs: []
+            ),
+            observedAt: Date(timeIntervalSince1970: 200 + 30 * 60 + 1)
         )
 
         XCTAssertEqual(store.overallStatus, .idle)
@@ -1076,7 +1155,7 @@ final class AppStateStoreTests: XCTestCase {
         }
     }
 
-    func testDesktopCompletionHintClearsRunningRevivedAfterLiveCompletion() throws {
+    func testConnectedDesktopSnapshotDoesNotReviveCompletedThreadFromStaleRunningEvidence() throws {
         var store = AppStateStore()
         store.replaceRecentThreads(with: [thread(id: "thread-1", updatedAt: 100, status: .idle)])
         store.apply(notification: .turnStarted(
@@ -1094,32 +1173,25 @@ final class AppStateStoreTests: XCTestCase {
         let completedAt = try XCTUnwrap(store.recentThreads.first?.lastTerminalActivityAt)
 
         store.apply(
-            desktopSnapshot: CodexDesktopRuntimeSnapshot(
+            connectedDesktopSnapshot: CodexDesktopRuntimeSnapshot(
                 activeTurnCount: 1,
                 runningThreadIDs: ["thread-1"]
             ),
             observedAt: completedAt.addingTimeInterval(1)
         )
-        XCTAssertEqual(store.recentThreads.first?.displayStatus, .running)
-
-        store.apply(desktopCompletionHints: ["thread-1": completedAt])
 
         XCTAssertEqual(store.overallStatus, .idle)
         XCTAssertEqual(store.recentThreads.first?.displayStatus, .idle)
         XCTAssertEqual(store.desktopActiveTurnCount, 0)
     }
 
-    func testDesktopRunningOverlayPromotesWatchedIdleThreadWhenFreshEvidenceAppears() {
+    func testDesktopTurnStartPromotesWatchedIdleThreadWhenFreshEvidenceAppears() {
         var store = AppStateStore()
         store.markWatched(thread: thread(id: "thread-1", updatedAt: 100, status: .idle))
 
-        store.apply(
-            desktopSnapshot: CodexDesktopRuntimeSnapshot(
-                activeTurnCount: 1,
-                runningThreadIDs: ["thread-1"]
-            ),
-            observedAt: Date(timeIntervalSince1970: 200)
-        )
+        store.apply(desktopTurnStarts: [
+            "thread-1": Date(timeIntervalSince1970: 200)
+        ])
 
         XCTAssertEqual(store.overallStatus, .running)
         XCTAssertEqual(store.recentThreads.first?.displayStatus, .running)

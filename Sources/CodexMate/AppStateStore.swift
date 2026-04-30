@@ -5,6 +5,7 @@ struct AppStateStore {
     private static let watchedRunningReconciliationGraceInterval: TimeInterval = 5
     private static let watchedPendingReconciliationGraceInterval: TimeInterval = 5
     private static let watchedFailedReconciliationGraceInterval: TimeInterval = 5
+    private static let desktopActiveTurnSafetyTimeout: TimeInterval = 30 * 60
     private static let archivedThreadTombstoneTTL: TimeInterval = 120
     private static let completionHintClockTolerance: TimeInterval = 5
 
@@ -698,6 +699,7 @@ struct AppStateStore {
         desktopDebugSummary = desktopSnapshot.debugSummary
         reconcileRunningThreads(
             runningThreadIDs: desktopSnapshot.runningThreadIDs,
+            activeTurnCount: desktopSnapshot.activeTurnCount,
             observedAt: observedAt
         )
         reconcilePendingThreads(
@@ -723,6 +725,7 @@ struct AppStateStore {
         )
         reconcileRunningThreads(
             runningThreadIDs: trustedRunningThreadIDs,
+            activeTurnCount: desktopSnapshot.activeTurnCount,
             observedAt: observedAt
         )
         desktopActiveTurnCount = connectedDesktopActiveTurnCount(
@@ -734,6 +737,33 @@ struct AppStateStore {
         overlayPendingThreads(desktopSnapshot.waitingForInputThreadIDs, status: .waitingForInput, observedAt: observedAt)
         overlayPendingThreads(desktopSnapshot.approvalThreadIDs, status: .needsApproval, observedAt: observedAt)
         overlayRunningThreads(trustedRunningThreadIDs, observedAt: observedAt)
+    }
+
+    mutating func apply(desktopTurnStarts startedAtByThreadID: [String: Date]) {
+        guard !startedAtByThreadID.isEmpty else { return }
+
+        for threadID in startedAtByThreadID.keys.sorted() {
+            guard let startedAt = startedAtByThreadID[threadID] else {
+                continue
+            }
+
+            updateThread(threadID: threadID) { row in
+                guard Self.shouldAcceptDesktopTurnStart(for: row, startedAt: startedAt) else {
+                    return
+                }
+
+                row.activeTurnID = row.activeTurnID ?? Self.inferredActiveTurnID
+                row.lastRuntimeEventAt = max(row.lastRuntimeEventAt ?? .distantPast, startedAt)
+                row.statusUpdatedAt = max(row.statusUpdatedAt, startedAt)
+
+                guard row.pendingRequestKind == nil else {
+                    return
+                }
+
+                row.runtimePhase = .running
+                row.status = .running
+            }
+        }
     }
 
     mutating func apply(desktopCompletionHints completedAtByThreadID: [String: Date]) {
@@ -774,12 +804,17 @@ struct AppStateStore {
 
     private mutating func reconcileRunningThreads(
         runningThreadIDs: Set<String>,
+        activeTurnCount: Int,
         observedAt: Date = Date()
     ) {
         for threadID in threadsByID.keys.sorted() {
             guard var row = threadsByID[threadID],
                   row.presentationStatus == .running,
-                  Self.shouldAcceptDesktopRunningSync(for: row, observedAt: observedAt),
+                  Self.shouldAcceptDesktopRunningSync(
+                    for: row,
+                    activeTurnCount: activeTurnCount,
+                    observedAt: observedAt
+                  ),
                   !runningThreadIDs.contains(threadID)
             else {
                 continue
@@ -800,9 +835,18 @@ struct AppStateStore {
         }
     }
 
-    private static func shouldAcceptDesktopRunningSync(for row: ThreadRow, observedAt: Date) -> Bool {
+    private static func shouldAcceptDesktopRunningSync(
+        for row: ThreadRow,
+        activeTurnCount: Int,
+        observedAt: Date
+    ) -> Bool {
         guard observedAt >= (row.lastRuntimeEventAt ?? .distantPast) else {
             return false
+        }
+
+        if row.activeTurnID != nil {
+            return activeTurnCount <= 0
+                && observedAt.timeIntervalSince(row.lastRuntimeEventAt ?? .distantPast) >= desktopActiveTurnSafetyTimeout
         }
 
         if !row.isWatched {
@@ -1007,6 +1051,14 @@ struct AppStateStore {
             return true
         }
 
+        guard row.activeTurnID != nil || row.lastTerminalActivityAt == nil else {
+            return false
+        }
+
+        guard !hasAuthoritativeTerminalActivity(row) else {
+            return false
+        }
+
         switch row.presentationStatus {
         case .waitingForUser, .running:
             return false
@@ -1029,6 +1081,19 @@ struct AppStateStore {
         return row.runtimePhase == .running
             && row.activeTurnID == nil
             && completedAt >= lastTerminalActivityAt
+    }
+
+    private static func shouldAcceptDesktopTurnStart(for row: ThreadRow, startedAt: Date) -> Bool {
+        guard startedAt >= (row.lastRuntimeEventAt ?? .distantPast) else {
+            return false
+        }
+
+        if let lastTerminalActivityAt = row.lastTerminalActivityAt,
+           lastTerminalActivityAt >= startedAt {
+            return false
+        }
+
+        return true
     }
 
     private static func terminalStatusAfterDesktopCompletion(for row: ThreadRow) -> ThreadStatus {
