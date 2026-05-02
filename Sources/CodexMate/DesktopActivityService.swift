@@ -107,8 +107,13 @@ actor DesktopActivityService {
                 now: now,
                 runningHintInterval: runningHintInterval
             )
+            let trustedHintedRunningThreadIDs = suppressCompletedRunningHints(
+                hintedRunningThreadIDs,
+                activitySnapshot: activitySnapshot,
+                latestTurnCompletedAtByThreadID: latestTurnCompletedAtByThreadID
+            )
 
-            let combinedRunningThreadIDs = runtimeSnapshot.runningThreadIDs.union(hintedRunningThreadIDs)
+            let combinedRunningThreadIDs = runtimeSnapshot.runningThreadIDs.union(trustedHintedRunningThreadIDs)
             let combinedActiveTurnCount: Int
             if combinedRunningThreadIDs.isEmpty && !latestTurnCompletedAtByThreadID.isEmpty {
                 combinedActiveTurnCount = 0
@@ -144,11 +149,19 @@ actor DesktopActivityService {
                 errorFingerprint: errorFingerprint,
                 now: now
             ) {
+                let latestTurnCompletedAtByThreadID = mergeLatestDates(
+                    activityLatestTurnCompletedAtByThreadID,
+                    fallbackSnapshot.latestTurnCompletedAtByThreadID
+                )
+                let combinedFallbackSnapshot = snapshot(
+                    fallbackSnapshot,
+                    replacingLatestTurnCompletedAtByThreadID: latestTurnCompletedAtByThreadID
+                )
                 return DesktopActivityUpdate(
-                    runtimeSnapshot: fallbackSnapshot,
+                    runtimeSnapshot: combinedFallbackSnapshot,
                     latestViewedAtByThreadID: activitySnapshot.latestViewedAtByThreadID,
                     latestTurnStartedAtByThreadID: activitySnapshot.latestTurnStartedAtByThreadID,
-                    latestTurnCompletedAtByThreadID: activityLatestTurnCompletedAtByThreadID,
+                    latestTurnCompletedAtByThreadID: latestTurnCompletedAtByThreadID,
                     latestArchiveRequestedAtByThreadID: activitySnapshot.latestArchiveRequestedAtByThreadID,
                     latestUnarchiveRequestedAtByThreadID: activitySnapshot.latestUnarchiveRequestedAtByThreadID,
                     runtimeErrorMessage: nil
@@ -168,11 +181,19 @@ actor DesktopActivityService {
                 DebugTraceLogger.log(
                     "desktop activity using session fallback candidates=\(candidateSessionContexts.count) message=\(error.localizedDescription)"
                 )
+                let latestTurnCompletedAtByThreadID = mergeLatestDates(
+                    activityLatestTurnCompletedAtByThreadID,
+                    fallbackSnapshot.latestTurnCompletedAtByThreadID
+                )
+                let combinedFallbackSnapshot = snapshot(
+                    fallbackSnapshot,
+                    replacingLatestTurnCompletedAtByThreadID: latestTurnCompletedAtByThreadID
+                )
                 return DesktopActivityUpdate(
-                    runtimeSnapshot: fallbackSnapshot,
+                    runtimeSnapshot: combinedFallbackSnapshot,
                     latestViewedAtByThreadID: activitySnapshot.latestViewedAtByThreadID,
                     latestTurnStartedAtByThreadID: activitySnapshot.latestTurnStartedAtByThreadID,
-                    latestTurnCompletedAtByThreadID: activityLatestTurnCompletedAtByThreadID,
+                    latestTurnCompletedAtByThreadID: latestTurnCompletedAtByThreadID,
                     latestArchiveRequestedAtByThreadID: activitySnapshot.latestArchiveRequestedAtByThreadID,
                     latestUnarchiveRequestedAtByThreadID: activitySnapshot.latestUnarchiveRequestedAtByThreadID,
                     runtimeErrorMessage: nil
@@ -188,6 +209,34 @@ actor DesktopActivityService {
                 runtimeErrorMessage: runtimeErrorMessage
             )
         }
+    }
+
+    private func suppressCompletedRunningHints(
+        _ runningThreadIDs: Set<String>,
+        activitySnapshot: CodexDesktopConversationActivityReader.ActivitySnapshot,
+        latestTurnCompletedAtByThreadID: [String: Date]
+    ) -> Set<String> {
+        Set(runningThreadIDs.filter { threadID in
+            let startedAt = activitySnapshot.latestTurnStartedAtByThreadID[threadID] ?? .distantPast
+            let completedAt = latestTurnCompletedAtByThreadID[threadID] ?? .distantPast
+            return startedAt > completedAt
+        })
+    }
+
+    private func snapshot(
+        _ snapshot: CodexDesktopRuntimeSnapshot,
+        replacingLatestTurnCompletedAtByThreadID latestTurnCompletedAtByThreadID: [String: Date]
+    ) -> CodexDesktopRuntimeSnapshot {
+        CodexDesktopRuntimeSnapshot(
+            activeTurnCount: snapshot.activeTurnCount,
+            runningThreadIDs: snapshot.runningThreadIDs,
+            recentActivityThreadIDs: snapshot.recentActivityThreadIDs,
+            waitingForInputThreadIDs: snapshot.waitingForInputThreadIDs,
+            approvalThreadIDs: snapshot.approvalThreadIDs,
+            failedThreads: snapshot.failedThreads,
+            latestTurnCompletedAtByThreadID: latestTurnCompletedAtByThreadID,
+            debugSummary: snapshot.debugSummary
+        )
     }
 
     func load(candidateSessionPaths: [String: String?], now: Date = Date()) -> DesktopActivityUpdate {

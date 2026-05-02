@@ -203,6 +203,63 @@ final class CodexDesktopStateReaderTests: XCTestCase {
         XCTAssertNil(snapshot.latestTurnCompletedAtByThreadID["thread-2"])
     }
 
+    func testSnapshotUsesSessionTaskCompleteAsCompletionHint() throws {
+        let tempDirectoryURL = FileManager.default.temporaryDirectory
+            .appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: tempDirectoryURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDirectoryURL) }
+
+        let databaseURL = tempDirectoryURL.appending(path: "state.sqlite")
+        try createStateDatabase(
+            at: databaseURL,
+            sql: """
+            CREATE TABLE threads (
+                id TEXT PRIMARY KEY,
+                first_user_message TEXT NOT NULL DEFAULT '',
+                title TEXT NOT NULL DEFAULT '',
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                cwd TEXT NOT NULL,
+                rollout_path TEXT,
+                archived INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE TABLE logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                process_uuid TEXT,
+                target TEXT,
+                message TEXT,
+                ts INTEGER NOT NULL,
+                ts_nanos INTEGER NOT NULL DEFAULT 0,
+                thread_id TEXT
+            );
+            INSERT INTO threads (id, first_user_message, title, created_at, updated_at, cwd, rollout_path, archived)
+            VALUES ('thread-1', 'Preview', 'Thread 1', 1777713420, 1777713424, '/tmp/project', NULL, 0);
+            """
+        )
+
+        let sessionURL = tempDirectoryURL.appending(path: "thread-1.jsonl")
+        try """
+        {"timestamp":"2026-05-02T09:13:36.080Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-1"}}
+        {"timestamp":"2026-05-02T09:17:04.459Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-1","completed_at":1777713424}}
+        """.write(to: sessionURL, atomically: true, encoding: .utf8)
+
+        let reader = CodexDesktopStateReader(
+            now: { Date(timeIntervalSince1970: 1_777_713_430) },
+            recentThreadUpdateInterval: 15,
+            recentLogInterval: 15,
+            stateDatabaseURLOverride: databaseURL
+        )
+
+        let snapshot = try reader.snapshot(candidateSessionPaths: ["thread-1": sessionURL.path])
+
+        XCTAssertEqual(snapshot.runningThreadIDs, [])
+        XCTAssertEqual(
+            snapshot.latestTurnCompletedAtByThreadID["thread-1"],
+            Date(timeIntervalSince1970: 1_777_713_424)
+        )
+        XCTAssertTrue(snapshot.debugSummary.contains("session-complete"))
+    }
+
     func testDefaultSnapshotKeepsUnknownRecentThreadVisibleAcrossIdleRefreshWindow() throws {
         let tempDirectoryURL = FileManager.default.temporaryDirectory
             .appending(path: UUID().uuidString)
@@ -428,7 +485,15 @@ final class CodexDesktopStateReaderTests: XCTestCase {
 
         let state = CodexDesktopStateReader.parseSessionPendingState(from: contents)
 
-        XCTAssertEqual(state, .init(waitingForInput: false, needsApproval: false, hasActiveTask: false))
+        XCTAssertEqual(
+            state,
+            .init(
+                waitingForInput: false,
+                needsApproval: false,
+                hasActiveTask: false,
+                latestTaskCompletedAt: date("2026-03-11T12:16:57.725Z")
+            )
+        )
     }
 
     func testParseSessionPendingStateTracksIncompleteTaskLifecycle() {
@@ -446,7 +511,12 @@ final class CodexDesktopStateReaderTests: XCTestCase {
         )
         XCTAssertEqual(
             CodexDesktopStateReader.parseSessionPendingState(from: completedContents),
-            .init(waitingForInput: false, needsApproval: false, hasActiveTask: false)
+            .init(
+                waitingForInput: false,
+                needsApproval: false,
+                hasActiveTask: false,
+                latestTaskCompletedAt: date("2026-03-11T12:50:10.223Z")
+            )
         )
     }
 
@@ -458,7 +528,15 @@ final class CodexDesktopStateReaderTests: XCTestCase {
 
         let state = CodexDesktopStateReader.parseSessionPendingState(from: contents)
 
-        XCTAssertEqual(state, .init(waitingForInput: true, needsApproval: false, hasActiveTask: false))
+        XCTAssertEqual(
+            state,
+            .init(
+                waitingForInput: true,
+                needsApproval: false,
+                hasActiveTask: false,
+                latestTaskCompletedAt: date("2026-04-11T13:40:09.000Z")
+            )
+        )
     }
 
     func testParseSessionPendingStateClearsCompletedPlanWaitAfterUserReplies() {
@@ -470,7 +548,15 @@ final class CodexDesktopStateReaderTests: XCTestCase {
 
         let state = CodexDesktopStateReader.parseSessionPendingState(from: contents)
 
-        XCTAssertEqual(state, .init(waitingForInput: false, needsApproval: false, hasActiveTask: false))
+        XCTAssertEqual(
+            state,
+            .init(
+                waitingForInput: false,
+                needsApproval: false,
+                hasActiveTask: false,
+                latestTaskCompletedAt: date("2026-04-11T13:40:09.000Z")
+            )
+        )
     }
 
     func testParseSessionPendingStateClearsActiveTaskWhenTurnIsAborted() {
@@ -481,7 +567,15 @@ final class CodexDesktopStateReaderTests: XCTestCase {
 
         let state = CodexDesktopStateReader.parseSessionPendingState(from: contents)
 
-        XCTAssertEqual(state, .init(waitingForInput: false, needsApproval: false, hasActiveTask: false))
+        XCTAssertEqual(
+            state,
+            .init(
+                waitingForInput: false,
+                needsApproval: false,
+                hasActiveTask: false,
+                latestTaskCompletedAt: date("2026-03-11T12:25:25.936Z")
+            )
+        )
     }
 
     func testParseSessionPendingStateSupersedesOlderUnfinishedTaskWhenNewTurnStarts() {
@@ -493,7 +587,15 @@ final class CodexDesktopStateReaderTests: XCTestCase {
 
         let state = CodexDesktopStateReader.parseSessionPendingState(from: contents)
 
-        XCTAssertEqual(state, .init(waitingForInput: false, needsApproval: false, hasActiveTask: false))
+        XCTAssertEqual(
+            state,
+            .init(
+                waitingForInput: false,
+                needsApproval: false,
+                hasActiveTask: false,
+                latestTaskCompletedAt: date("2026-03-11T12:16:57.725Z")
+            )
+        )
     }
 
     func testSnapshotKeepsSessionBackedRunningThreadEvenWhenDesktopLogsAreQuiet() throws {
@@ -741,7 +843,8 @@ final class CodexDesktopStateReaderTests: XCTestCase {
             CodexDesktopStateReader.SessionPendingState(
                 waitingForInput: true,
                 needsApproval: false,
-                hasActiveTask: false
+                hasActiveTask: false,
+                latestTaskCompletedAt: date("2026-04-12T03:10:00.000Z")
             )
         )
     }
@@ -1440,5 +1543,16 @@ final class CodexDesktopStateReaderTests: XCTestCase {
             .appending(path: String(format: "%02d", day), directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
         return directoryURL
+    }
+
+    private func date(_ value: String) -> Date {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = formatter.date(from: value) {
+            return date
+        }
+
+        XCTFail("Invalid ISO-8601 date: \(value)")
+        return Date(timeIntervalSince1970: 0)
     }
 }

@@ -49,11 +49,18 @@ struct CodexDesktopStateReader {
         let waitingForInput: Bool
         let needsApproval: Bool
         let hasActiveTask: Bool
+        let latestTaskCompletedAt: Date?
 
-        init(waitingForInput: Bool, needsApproval: Bool, hasActiveTask: Bool = false) {
+        init(
+            waitingForInput: Bool,
+            needsApproval: Bool,
+            hasActiveTask: Bool = false,
+            latestTaskCompletedAt: Date? = nil
+        ) {
             self.waitingForInput = waitingForInput
             self.needsApproval = needsApproval
             self.hasActiveTask = hasActiveTask
+            self.latestTaskCompletedAt = latestTaskCompletedAt
         }
     }
 
@@ -86,8 +93,8 @@ struct CodexDesktopStateReader {
 
     private enum SessionEvent {
         case taskStarted(turnID: String, collaborationModeKind: String?)
-        case taskComplete(turnID: String)
-        case turnAborted(turnID: String)
+        case taskComplete(turnID: String, completedAt: Date?)
+        case turnAborted(turnID: String, completedAt: Date?)
         case execApprovalRequest(callID: String)
         case execCommandResolution(callID: String)
         case userMessage
@@ -213,6 +220,10 @@ struct CodexDesktopStateReader {
             candidateSessionContexts: candidateSessionContexts,
             logPendingRows: queryResult.pendingLogRows
         )
+        let latestTurnCompletedAtByThreadID = Self.mergeLatestDates(
+            queryResult.latestTurnCompletedAtByThreadID,
+            pendingStates.latestTaskCompletedAtByThreadID
+        )
         let failedThreads = queryResult.failedThreads
         let debugSummary = [
             "candidates=\(candidates.count)",
@@ -239,7 +250,7 @@ struct CodexDesktopStateReader {
             waitingForInputThreadIDs: pendingStates.waitingForInputThreadIDs,
             approvalThreadIDs: pendingStates.approvalThreadIDs,
             failedThreads: failedThreads,
-            latestTurnCompletedAtByThreadID: queryResult.latestTurnCompletedAtByThreadID,
+            latestTurnCompletedAtByThreadID: latestTurnCompletedAtByThreadID,
             debugSummary: debugSummary
         )
     }
@@ -288,6 +299,7 @@ struct CodexDesktopStateReader {
             waitingForInputThreadIDs: sessionStates.waitingForInputThreadIDs,
             approvalThreadIDs: approvalThreadIDs,
             failedThreads: [:],
+            latestTurnCompletedAtByThreadID: sessionStates.latestTaskCompletedAtByThreadID,
             debugSummary: debugSummary
         )
     }
@@ -842,7 +854,13 @@ struct CodexDesktopStateReader {
     private func queryPendingThreadStates(
         candidateSessionContexts: [String: ThreadSessionContext],
         logPendingRows: [PendingLogRow]
-    ) -> (waitingForInputThreadIDs: Set<String>, approvalThreadIDs: Set<String>, runningThreadIDs: Set<String>, debugRows: [String]) {
+    ) -> (
+        waitingForInputThreadIDs: Set<String>,
+        approvalThreadIDs: Set<String>,
+        runningThreadIDs: Set<String>,
+        latestTaskCompletedAtByThreadID: [String: Date],
+        debugRows: [String]
+    ) {
         let logStates = queryLogPendingThreadStates(logPendingRows: logPendingRows)
         let sessionStates = querySessionPendingThreadStates(candidateSessionContexts: candidateSessionContexts)
         let desktopApprovalStates = queryDesktopPendingApprovalThreadStates(
@@ -860,6 +878,7 @@ struct CodexDesktopStateReader {
             waitingForInputThreadIDs: waitingForInputThreadIDs,
             approvalThreadIDs: approvalThreadIDs,
             runningThreadIDs: runningThreadIDs,
+            latestTaskCompletedAtByThreadID: sessionStates.latestTaskCompletedAtByThreadID,
             debugRows: logStates.debugRows + sessionStates.debugRows + desktopApprovalStates.debugRows
         )
     }
@@ -1157,12 +1176,19 @@ struct CodexDesktopStateReader {
 
     private func querySessionPendingThreadStates(
         candidateSessionContexts: [String: ThreadSessionContext]
-    ) -> (waitingForInputThreadIDs: Set<String>, approvalThreadIDs: Set<String>, activeTaskThreadIDs: Set<String>, debugRows: [String]) {
+    ) -> (
+        waitingForInputThreadIDs: Set<String>,
+        approvalThreadIDs: Set<String>,
+        activeTaskThreadIDs: Set<String>,
+        latestTaskCompletedAtByThreadID: [String: Date],
+        debugRows: [String]
+    ) {
         sessionPendingStateCache.prune(keepingPaths: Set(candidateSessionContexts.values.compactMap(\.path)))
 
         var waitingThreadIDs: Set<String> = []
         var approvalThreadIDs: Set<String> = []
         var activeTaskThreadIDs: Set<String> = []
+        var latestTaskCompletedAtByThreadID: [String: Date] = [:]
         var debugRows: [String] = []
 
         for (threadID, context) in candidateSessionContexts.sorted(by: { $0.key < $1.key }) {
@@ -1209,9 +1235,20 @@ struct CodexDesktopStateReader {
                 activeTaskThreadIDs.insert(threadID)
                 debugRows.append("\(shortID):session-active")
             }
+
+            if let latestTaskCompletedAt = state.latestTaskCompletedAt {
+                latestTaskCompletedAtByThreadID[threadID] = latestTaskCompletedAt
+                debugRows.append("\(shortID):session-complete")
+            }
         }
 
-        return (waitingThreadIDs, approvalThreadIDs, activeTaskThreadIDs, debugRows)
+        return (
+            waitingThreadIDs,
+            approvalThreadIDs,
+            activeTaskThreadIDs,
+            latestTaskCompletedAtByThreadID,
+            debugRows
+        )
     }
 
     func shouldSkipSessionPendingStateRead(
@@ -1270,6 +1307,7 @@ struct CodexDesktopStateReader {
         var activeTaskIDs: Set<String> = []
         var collaborationModeKindByTurnID: [String: String] = [:]
         var waitingForPlanReply = false
+        var latestTaskCompletedAt: Date?
 
         for line in contents.split(whereSeparator: \.isNewline) {
             guard let event = sessionEvent(for: line) else {
@@ -1288,14 +1326,16 @@ struct CodexDesktopStateReader {
                 if let collaborationModeKind {
                     collaborationModeKindByTurnID[turnID] = collaborationModeKind
                 }
-            case let .taskComplete(turnID):
+            case let .taskComplete(turnID, completedAt):
+                latestTaskCompletedAt = Self.latestDate(latestTaskCompletedAt, completedAt)
                 let collaborationModeKind = collaborationModeKindByTurnID[turnID]
                 activeTaskIDs.remove(turnID)
                 unresolvedRequestUserInputCallIDs.removeAll()
                 unresolvedApprovalCallIDs.removeAll()
                 collaborationModeKindByTurnID.removeValue(forKey: turnID)
                 waitingForPlanReply = collaborationModeKind == "plan"
-            case let .turnAborted(turnID):
+            case let .turnAborted(turnID, completedAt):
+                latestTaskCompletedAt = Self.latestDate(latestTaskCompletedAt, completedAt)
                 activeTaskIDs.remove(turnID)
                 unresolvedRequestUserInputCallIDs.removeAll()
                 unresolvedApprovalCallIDs.removeAll()
@@ -1324,7 +1364,8 @@ struct CodexDesktopStateReader {
         return SessionPendingState(
             waitingForInput: waitingForPlanReply || !unresolvedRequestUserInputCallIDs.isEmpty,
             needsApproval: !unresolvedApprovalCallIDs.isEmpty,
-            hasActiveTask: !activeTaskIDs.isEmpty
+            hasActiveTask: !activeTaskIDs.isEmpty,
+            latestTaskCompletedAt: latestTaskCompletedAt
         )
     }
 
@@ -1345,12 +1386,14 @@ struct CodexDesktopStateReader {
         var pendingCompletedTurnIDForPlanLookup: String?
         var waitingForPlanReply = false
         var sawLaterPlanReplyClearer = false
+        var latestTaskCompletedAt: Date?
 
         func finalState(hasActiveTask: Bool) -> SessionPendingState {
             SessionPendingState(
                 waitingForInput: waitingForPlanReply || !unresolvedRequestUserInputCallIDs.isEmpty,
                 needsApproval: !unresolvedApprovalCallIDs.isEmpty,
-                hasActiveTask: hasActiveTask
+                hasActiveTask: hasActiveTask,
+                latestTaskCompletedAt: latestTaskCompletedAt
             )
         }
 
@@ -1372,14 +1415,16 @@ struct CodexDesktopStateReader {
             switch event {
             case .taskStarted:
                 return finalState(hasActiveTask: true)
-            case let .taskComplete(turnID):
+            case let .taskComplete(turnID, completedAt):
+                latestTaskCompletedAt = Self.latestDate(latestTaskCompletedAt, completedAt)
                 if sawLaterPlanReplyClearer {
                     return finalState(hasActiveTask: false)
                 }
 
                 pendingCompletedTurnIDForPlanLookup = turnID
                 return nil
-            case .turnAborted:
+            case let .turnAborted(_, completedAt):
+                latestTaskCompletedAt = Self.latestDate(latestTaskCompletedAt, completedAt)
                 return finalState(hasActiveTask: false)
             case let .execApprovalRequest(callID):
                 if !resolvedApprovalCallIDs.contains(callID) {
@@ -1679,12 +1724,18 @@ struct CodexDesktopStateReader {
                 guard let turnID = payload["turn_id"] as? String else {
                     return nil
                 }
-                return .taskComplete(turnID: turnID)
+                return .taskComplete(
+                    turnID: turnID,
+                    completedAt: completionDate(from: payload, object: object)
+                )
             case "turn_aborted":
                 guard let turnID = payload["turn_id"] as? String else {
                     return nil
                 }
-                return .turnAborted(turnID: turnID)
+                return .turnAborted(
+                    turnID: turnID,
+                    completedAt: completionDate(from: payload, object: object)
+                )
             case "exec_approval_request":
                 guard let callID = payload["call_id"] as? String else {
                     return nil
@@ -1723,6 +1774,46 @@ struct CodexDesktopStateReader {
         default:
             return nil
         }
+    }
+
+    private static func completionDate(from payload: [String: Any], object: [String: Any]) -> Date? {
+        if let rawCompletedAt = payload["completed_at"] {
+            if let completedAt = rawCompletedAt as? NSNumber {
+                return Date(timeIntervalSince1970: completedAt.doubleValue)
+            }
+
+            if let completedAt = rawCompletedAt as? String {
+                if let timestamp = Double(completedAt) {
+                    return Date(timeIntervalSince1970: timestamp)
+                }
+
+                if let parsedDate = parseISO8601Timestamp(completedAt) {
+                    return parsedDate
+                }
+            }
+        }
+
+        return parseISO8601Timestamp(object["timestamp"] as? String)
+    }
+
+    private static func latestDate(_ lhs: Date?, _ rhs: Date?) -> Date? {
+        guard let lhs else {
+            return rhs
+        }
+        guard let rhs else {
+            return lhs
+        }
+
+        return max(lhs, rhs)
+    }
+
+    private static func mergeLatestDates(_ lhs: [String: Date], _ rhs: [String: Date]) -> [String: Date] {
+        var merged = lhs
+        for (threadID, date) in rhs where date > (merged[threadID] ?? .distantPast) {
+            merged[threadID] = date
+        }
+
+        return merged
     }
 
     private static func decodedJSONLine(from data: Data) -> String? {
