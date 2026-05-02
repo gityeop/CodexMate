@@ -1197,6 +1197,31 @@ final class AppStateStoreTests: XCTestCase {
         XCTAssertEqual(store.recentThreads.first?.displayStatus, .running)
     }
 
+    func testConnectedDesktopSnapshotPromotesWatchedThreadWhenSessionUpdatedAfterTerminalActivity() {
+        var store = AppStateStore()
+        store.markWatched(thread: thread(id: "thread-1", updatedAt: 100, status: .idle, path: "/tmp/thread-1.jsonl"))
+        store.apply(desktopTurnStarts: [
+            "thread-1": Date(timeIntervalSince1970: 110)
+        ])
+        store.apply(desktopCompletionHints: [
+            "thread-1": Date(timeIntervalSince1970: 120)
+        ])
+        store.replaceRecentThreads(with: [
+            thread(id: "thread-1", updatedAt: 200, status: .idle, path: "/tmp/thread-1.jsonl")
+        ])
+
+        store.apply(
+            connectedDesktopSnapshot: CodexDesktopRuntimeSnapshot(
+                activeTurnCount: 1,
+                runningThreadIDs: ["thread-1"]
+            ),
+            observedAt: Date(timeIntervalSince1970: 205)
+        )
+
+        XCTAssertEqual(store.overallStatus, .running)
+        XCTAssertEqual(store.recentThreads.first?.displayStatus, .running)
+    }
+
     func testThreadListRefreshPreservesWatchedRuntimeStatusWhenIncomingPayloadIsStale() {
         var store = AppStateStore()
         store.markWatched(thread: thread(id: "thread-1", updatedAt: 100, status: .active(flags: [])))

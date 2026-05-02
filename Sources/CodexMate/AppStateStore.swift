@@ -1051,7 +1051,7 @@ struct AppStateStore {
             return true
         }
 
-        guard row.activeTurnID != nil || row.lastTerminalActivityAt == nil else {
+        guard row.activeTurnID != nil || row.lastTerminalActivityAt == nil || hasThreadActivityAfterTerminal(row) else {
             return false
         }
 
@@ -1359,7 +1359,19 @@ struct AppStateStore {
             return false
         }
 
+        guard !hasThreadActivityAfterTerminal(row) else {
+            return false
+        }
+
         return lastTerminalActivityAt >= (row.lastRuntimeEventAt ?? .distantPast)
+    }
+
+    private static func hasThreadActivityAfterTerminal(_ row: ThreadRow) -> Bool {
+        guard let lastTerminalActivityAt = row.lastTerminalActivityAt else {
+            return false
+        }
+
+        return row.updatedAt > lastTerminalActivityAt
     }
 
     private mutating func shouldIgnoreArchivedThreadEvent(threadID: String, observedAt: Date) -> Bool {
