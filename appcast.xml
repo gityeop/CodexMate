@@ -3,21 +3,20 @@
     <channel>
         <title>CodexMate</title>
         <item>
-            <title>0.0.14</title>
-            <pubDate>Fri, 01 May 2026 00:35:45 +0900</pubDate>
-            <link>https://github.com/gityeop/CodexMate/releases/tag/v0.0.14</link>
-            <sparkle:version>14</sparkle:version>
-            <sparkle:shortVersionString>0.0.14</sparkle:shortVersionString>
+            <title>0.0.15</title>
+            <pubDate>Sat, 02 May 2026 15:00:11 +0900</pubDate>
+            <link>https://github.com/gityeop/CodexMate/releases/tag/v0.0.15</link>
+            <sparkle:version>15</sparkle:version>
+            <sparkle:shortVersionString>0.0.15</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description sparkle:format="markdown"><![CDATA[# CodexMate 0.0.14
+            <description sparkle:format="markdown"><![CDATA[# CodexMate 0.0.15
 
-- Kept Desktop-started turns in the running state until a completion hint arrives, so quiet long-running commands no longer disappear from CodexMate after the short running-hint window.
-- Added a safety timeout for inferred active turns when no completion signal is available.
-- Prevented stale desktop running evidence from reviving threads that already have authoritative terminal activity.
-- Added regression coverage for long-running quiet turns, pending-state preservation, completion handling, and stale running cleanup.
+- Treat interrupted Desktop turns as completed activity, preventing stopped sessions from remaining stuck in the running state.
+- Keep sub-agent threads grouped under their parent thread's project instead of briefly surfacing scratch workspaces as separate menu projects.
+- Added regression coverage for interrupted turns and sub-agent project grouping.
 ]]></description>
-            <enclosure url="https://github.com/gityeop/CodexMate/releases/latest/download/CodexMate-0.0.14.zip" length="4537301" type="application/octet-stream" sparkle:edSignature="uqFlGgVi7luixuOdhE59d9uhcGdXpX4JdK5qkXUinHfR1TSiD8LL5UHwBFKSAcgBkklkIg2W2yNUm6lDQnv2Aw=="/>
+            <enclosure url="https://github.com/gityeop/CodexMate/releases/latest/download/CodexMate-0.0.15.zip" length="4537933" type="application/octet-stream" sparkle:edSignature="hxJABw/ncVsqV1u6vMlAHz/DieTdkIB0wnRqqJ/XwilW2c7dkR0AcbZ/pkfgsLCI0QSwGXQ5neKMpNcUj2eyDg=="/>
         </item>
     </channel>
 </rss>
