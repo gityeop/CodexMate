@@ -162,6 +162,40 @@ final class MenubarSnapshotSelectorTests: XCTestCase {
         XCTAssertEqual(snapshot.projectSections.first?.threads.map(\.id), ["pending-thread"])
     }
 
+    func testSnapshotBucketsSubagentWithProjectlessParentInsteadOfScratchProject() {
+        var state = AppStateStore()
+        state.replaceRecentThreads(
+            with: [
+                codexThread(id: "parent-thread", updatedAt: 200, cwd: "/tmp/Scratch Parent"),
+                codexThread(
+                    id: "child-thread",
+                    updatedAt: 210,
+                    status: .active(flags: []),
+                    cwd: "/tmp/Pet Installer Scratch",
+                    source: #"{"subagent":{"thread_spawn":{"parent_thread_id":"parent-thread","depth":1}}}"#
+                )
+            ]
+        )
+
+        let snapshot = MenubarSnapshotSelector.makeSnapshot(
+            state: state,
+            projectCatalog: CodexDesktopProjectCatalog(
+                workspaceRoots: [
+                    .init(path: "/tmp/A", displayName: "A")
+                ],
+                projectlessThreadIDs: ["parent-thread"]
+            ),
+            threadReadMarkers: ThreadReadMarkerStore(),
+            projectLimit: 3,
+            visibleThreadLimit: 3,
+            now: Date(timeIntervalSince1970: 1_000)
+        )
+
+        XCTAssertEqual(snapshot.projectSections.map(\.section.displayName), ["Chats"])
+        XCTAssertEqual(snapshot.projectSections.first?.allThreads.map(\.id).sorted(), ["child-thread", "parent-thread"])
+        XCTAssertEqual(snapshot.menuSections.map(\.displayName), ["Chats"])
+    }
+
     func testSnapshotReportsNoVisibleRecentThreadsWhenOnlyRemovedProjectThreadsRemain() {
         var state = AppStateStore()
         state.replaceRecentThreads(
@@ -226,16 +260,19 @@ final class MenubarSnapshotSelectorTests: XCTestCase {
     private func codexThread(
         id: String,
         updatedAt: Int,
-        cwd: String = "/tmp/A/work"
+        status: CodexThreadStatus = .idle,
+        cwd: String = "/tmp/A/work",
+        source: String? = nil
     ) -> CodexThread {
         CodexThread(
             id: id,
             preview: "Preview \(id)",
             createdAt: updatedAt,
             updatedAt: updatedAt,
-            status: .idle,
+            status: status,
             cwd: cwd,
-            name: "Thread \(id)"
+            name: "Thread \(id)",
+            source: source
         )
     }
 }

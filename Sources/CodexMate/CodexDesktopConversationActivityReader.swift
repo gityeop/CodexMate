@@ -488,6 +488,13 @@ final class CodexDesktopConversationActivityReader {
                     latestTurnStartedAtByThreadID[threadID] = viewedAt
                 }
             }
+
+            if method == "turn/interrupt" {
+                let currentLatestCompleted = latestTurnCompletedAtByThreadID[threadID] ?? .distantPast
+                if viewedAt > currentLatestCompleted {
+                    latestTurnCompletedAtByThreadID[threadID] = viewedAt
+                }
+            }
         }
 
         return ParsedLogSnapshot(

@@ -57,18 +57,20 @@ enum MenubarSnapshotSelector {
         }
 
         var bucketsByProjectID: [String: Bucket] = [:]
+        let threadsByID = Dictionary(uniqueKeysWithValues: allThreads.map { ($0.id, $0) })
 
         for thread in allThreads {
             let catalogProject = projectCatalog.project(forThreadID: thread.id, cwd: thread.cwd)
-            guard shouldShowThread(thread, project: catalogProject, projectCatalog: projectCatalog, now: now) else {
-                continue
-            }
-
-            let project = displayProject(
+            let project = displayProjectForMenu(
                 for: thread,
+                threadsByID: threadsByID,
                 catalogProject: catalogProject,
                 projectCatalog: projectCatalog
             )
+            guard shouldShowThread(thread, project: project, projectCatalog: projectCatalog, now: now) else {
+                continue
+            }
+
             if var bucket = bucketsByProjectID[project.id] {
                 bucket.latestUpdatedAt = max(bucket.latestUpdatedAt, thread.activityUpdatedAt)
                 bucket.threadRowsByID[thread.id] = thread
@@ -273,6 +275,33 @@ enum MenubarSnapshotSelector {
         return CodexDesktopProjectCatalog.ProjectReference(
             id: normalizedCWD,
             displayName: CodexDesktopWorktreePath.fallbackDisplayName(for: normalizedCWD)
+        )
+    }
+
+    private static func displayProjectForMenu(
+        for thread: AppStateStore.ThreadRow,
+        threadsByID: [String: AppStateStore.ThreadRow],
+        catalogProject: CodexDesktopProjectCatalog.ProjectReference,
+        projectCatalog: CodexDesktopProjectCatalog
+    ) -> CodexDesktopProjectCatalog.ProjectReference {
+        guard let parentThreadID = thread.parentThreadID,
+              let parentThread = threadsByID[parentThreadID]
+        else {
+            return displayProject(
+                for: thread,
+                catalogProject: catalogProject,
+                projectCatalog: projectCatalog
+            )
+        }
+
+        let parentCatalogProject = projectCatalog.project(
+            forThreadID: parentThread.id,
+            cwd: parentThread.cwd
+        )
+        return displayProject(
+            for: parentThread,
+            catalogProject: parentCatalogProject,
+            projectCatalog: projectCatalog
         )
     }
 

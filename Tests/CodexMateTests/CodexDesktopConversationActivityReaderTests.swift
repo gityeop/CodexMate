@@ -127,6 +127,37 @@ final class CodexDesktopConversationActivityReaderTests: XCTestCase {
         XCTAssertEqual(snapshot.latestTurnCompletedAtByThreadID["thread-1"], date("2026-03-11T12:17:13.000Z"))
     }
 
+    func testActivitySnapshotTreatsTurnInterruptAsCompletionHint() throws {
+        let tempDirectoryURL = FileManager.default.temporaryDirectory
+            .appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: tempDirectoryURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDirectoryURL) }
+
+        let logDirectoryURL = tempDirectoryURL
+            .appending(path: "2026")
+            .appending(path: "03")
+            .appending(path: "11")
+        try FileManager.default.createDirectory(at: logDirectoryURL, withIntermediateDirectories: true)
+
+        let logURL = logDirectoryURL.appending(path: "interrupt.log")
+        try """
+        2026-03-11T12:17:12.000Z info [ElectronAppServerConnection] response_routed broadcastFallback=false conversationId=thread-1 durationMs=157 errorCode=null hadInternalHandler=false hadPending=true method=turn/start originWebcontentsId=1 requestId=a targetDestroyed=false
+        2026-03-11T12:17:16.000Z info [ElectronAppServerConnection] response_routed broadcastFallback=false conversationId=thread-1 durationMs=2 errorCode=null hadInternalHandler=false hadPending=true method=turn/interrupt originWebcontentsId=1 requestId=b targetDestroyed=false
+        """.write(to: logURL, atomically: true, encoding: .utf8)
+
+        let reader = CodexDesktopConversationActivityReader(
+            logsDirectoryURL: tempDirectoryURL,
+            lookbackDays: 2
+        )
+
+        let snapshot = reader.activitySnapshot(
+            now: Date(timeIntervalSince1970: 1_773_195_200)
+        )
+
+        XCTAssertEqual(snapshot.latestTurnStartedAtByThreadID["thread-1"], date("2026-03-11T12:17:12.000Z"))
+        XCTAssertEqual(snapshot.latestTurnCompletedAtByThreadID["thread-1"], date("2026-03-11T12:17:16.000Z"))
+    }
+
     func testActivitySnapshotIncrementallyParsesAppendedLogData() throws {
         let tempDirectoryURL = FileManager.default.temporaryDirectory
             .appending(path: UUID().uuidString)
