@@ -3,21 +3,20 @@
     <channel>
         <title>CodexMate</title>
         <item>
-            <title>0.0.17</title>
-            <pubDate>Sun, 03 May 2026 00:05:23 +0900</pubDate>
-            <link>https://github.com/gityeop/CodexMate/releases/tag/v0.0.17</link>
-            <sparkle:version>17</sparkle:version>
-            <sparkle:shortVersionString>0.0.17</sparkle:shortVersionString>
+            <title>0.0.18</title>
+            <pubDate>Mon, 04 May 2026 21:57:34 +0900</pubDate>
+            <link>https://github.com/gityeop/CodexMate/releases/tag/v0.0.18</link>
+            <sparkle:version>18</sparkle:version>
+            <sparkle:shortVersionString>0.0.18</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description sparkle:format="markdown"><![CDATA[# CodexMate 0.0.17
+            <description sparkle:format="markdown"><![CDATA[# CodexMate 0.0.18
 
-- Clear stale running indicators from Codex Desktop session files when a session records `task_complete` or `turn_aborted`.
-- Suppress older running hints when a newer session completion is available, preventing completed threads from reappearing as running.
-- Preserve session completion hints during database fallback so locked or temporarily unavailable state databases do not leave completed sessions stuck as running.
-- Added regression coverage for completed sessions, newer completion hints, and fallback completion handling.
+- Keep active Codex Desktop threads marked as running during thread list refreshes by reading the session file task state from `rollout_path`.
+- Preserve waiting-for-input and approval indicators from session files when the app-server thread row only reports metadata.
+- Added regression coverage for session-backed active task metadata so the notch sprite no longer flips between running and idle/unread while a turn is still active.
 ]]></description>
-            <enclosure url="https://github.com/gityeop/CodexMate/releases/latest/download/CodexMate-0.0.17.zip" length="4546525" type="application/octet-stream" sparkle:edSignature="UFzHNwkd7ap4KU6KxxqVlnY3EP8YzUxFWB7OpNQ3UfS2vciRpnpw5ze7ZF/n2Rci7h0jFiY7QqrXTosIGHJoAg=="/>
+            <enclosure url="https://github.com/gityeop/CodexMate/releases/latest/download/CodexMate-0.0.18.zip" length="4547046" type="application/octet-stream" sparkle:edSignature="Ug7Y2+2Ue5whkSInVa0c/LL9+HibPjJOPLKMdsFU4UKzdTdY6Rympse5qIIqLFkUcpenoNI90fTgsSI3nRxgDw=="/>
         </item>
     </channel>
 </rss>
