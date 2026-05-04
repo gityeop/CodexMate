@@ -359,7 +359,7 @@ struct CodexDesktopStateReader {
                     preview: preview,
                     createdAt: createdAt,
                     updatedAt: updatedAt,
-                    status: .notLoaded,
+                    status: sessionBackedStatus(path: object["path"] as? String),
                     cwd: cwd,
                     name: object["name"] as? String,
                     path: object["path"] as? String,
@@ -382,6 +382,28 @@ struct CodexDesktopStateReader {
 
             return lhs.updatedAt > rhs.updatedAt
         }
+    }
+
+    private func sessionBackedStatus(path: String?) -> CodexThreadStatus {
+        guard let path,
+              let state = sessionPendingState(forSessionFileAt: URL(fileURLWithPath: path))
+        else {
+            return .notLoaded
+        }
+
+        if state.waitingForInput {
+            return .active(flags: [.waitingOnUserInput])
+        }
+
+        if state.needsApproval {
+            return .active(flags: [.waitingOnApproval])
+        }
+
+        if state.hasActiveTask {
+            return .active(flags: [])
+        }
+
+        return .notLoaded
     }
 
     func archivedThreadIDs(threadIDs: Set<String>) throws -> Set<String> {
