@@ -1185,6 +1185,32 @@ final class AppStateStoreTests: XCTestCase {
         XCTAssertEqual(store.desktopActiveTurnCount, 0)
     }
 
+    func testConnectedDesktopSnapshotTrustsSessionBackedRunningEvidenceAfterTerminalActivity() throws {
+        var store = AppStateStore()
+        store.markWatched(thread: thread(
+            id: "thread-1",
+            updatedAt: 100,
+            status: .idle,
+            path: "/tmp/thread-1.jsonl"
+        ))
+        store.apply(desktopCompletionHints: [
+            "thread-1": Date(timeIntervalSince1970: 120)
+        ])
+
+        store.apply(
+            connectedDesktopSnapshot: CodexDesktopRuntimeSnapshot(
+                activeTurnCount: 1,
+                runningThreadIDs: ["thread-1"],
+                sessionBackedRunningThreadIDs: ["thread-1"]
+            ),
+            observedAt: Date(timeIntervalSince1970: 130)
+        )
+
+        XCTAssertEqual(store.overallStatus, .running)
+        XCTAssertEqual(store.recentThreads.first?.displayStatus, .running)
+        XCTAssertEqual(store.desktopActiveTurnCount, 1)
+    }
+
     func testDesktopTurnStartPromotesWatchedIdleThreadWhenFreshEvidenceAppears() {
         var store = AppStateStore()
         store.markWatched(thread: thread(id: "thread-1", updatedAt: 100, status: .idle))

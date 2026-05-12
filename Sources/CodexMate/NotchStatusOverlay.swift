@@ -268,7 +268,8 @@ final class NotchStatusOverlayController {
         spriteImages: [NSImage],
         statusSprite: MenubarStatusPresentation.StatusSprite,
         statusText: String,
-        frameInterval: TimeInterval
+        frameInterval: TimeInterval,
+        animationIdentifier: String? = nil
     ) {
         var shouldApplyOverlayState = false
 
@@ -282,7 +283,7 @@ final class NotchStatusOverlayController {
 
         overlayView.setSpriteFrames(
             spriteImages,
-            animationIdentifier: statusSprite.assetName,
+            animationIdentifier: animationIdentifier ?? statusSprite.assetName,
             frameInterval: frameInterval
         )
 

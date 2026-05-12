@@ -148,6 +148,7 @@ final class CodexDesktopStateReaderTests: XCTestCase {
         XCTAssertEqual(snapshot.activeTurnCount, 1)
         XCTAssertEqual(snapshot.recentActivityThreadIDs, ["thread-1"])
         XCTAssertEqual(snapshot.runningThreadIDs, ["thread-1"])
+        XCTAssertEqual(snapshot.sessionBackedRunningThreadIDs, [])
     }
 
     func testSnapshotIncludesLatestAppServerTurnCompletionHints() throws {
@@ -648,6 +649,7 @@ final class CodexDesktopStateReaderTests: XCTestCase {
 
         XCTAssertEqual(snapshot.activeTurnCount, 0)
         XCTAssertEqual(snapshot.runningThreadIDs, ["thread-1"])
+        XCTAssertEqual(snapshot.sessionBackedRunningThreadIDs, ["thread-1"])
         XCTAssertTrue(snapshot.waitingForInputThreadIDs.isEmpty)
         XCTAssertTrue(snapshot.approvalThreadIDs.isEmpty)
     }

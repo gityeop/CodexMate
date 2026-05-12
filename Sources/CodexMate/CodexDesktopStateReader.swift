@@ -8,6 +8,7 @@ struct CodexDesktopRuntimeSnapshot {
 
     let activeTurnCount: Int
     let runningThreadIDs: Set<String>
+    let sessionBackedRunningThreadIDs: Set<String>
     let recentActivityThreadIDs: Set<String>
     let waitingForInputThreadIDs: Set<String>
     let approvalThreadIDs: Set<String>
@@ -18,6 +19,7 @@ struct CodexDesktopRuntimeSnapshot {
     init(
         activeTurnCount: Int,
         runningThreadIDs: Set<String>,
+        sessionBackedRunningThreadIDs: Set<String> = [],
         recentActivityThreadIDs: Set<String> = [],
         waitingForInputThreadIDs: Set<String> = [],
         approvalThreadIDs: Set<String> = [],
@@ -27,6 +29,7 @@ struct CodexDesktopRuntimeSnapshot {
     ) {
         self.activeTurnCount = activeTurnCount
         self.runningThreadIDs = runningThreadIDs
+        self.sessionBackedRunningThreadIDs = sessionBackedRunningThreadIDs
         self.recentActivityThreadIDs = recentActivityThreadIDs
         self.waitingForInputThreadIDs = waitingForInputThreadIDs
         self.approvalThreadIDs = approvalThreadIDs
@@ -246,6 +249,7 @@ struct CodexDesktopStateReader {
         return CodexDesktopRuntimeSnapshot(
             activeTurnCount: activeTurnCount,
             runningThreadIDs: runningThreadIDs,
+            sessionBackedRunningThreadIDs: pendingStates.runningThreadIDs,
             recentActivityThreadIDs: recentActivityThreadIDs,
             waitingForInputThreadIDs: pendingStates.waitingForInputThreadIDs,
             approvalThreadIDs: pendingStates.approvalThreadIDs,
@@ -295,6 +299,7 @@ struct CodexDesktopStateReader {
         return CodexDesktopRuntimeSnapshot(
             activeTurnCount: sessionStates.activeTaskThreadIDs.isEmpty ? 0 : 1,
             runningThreadIDs: runningThreadIDs,
+            sessionBackedRunningThreadIDs: runningThreadIDs,
             recentActivityThreadIDs: [],
             waitingForInputThreadIDs: sessionStates.waitingForInputThreadIDs,
             approvalThreadIDs: approvalThreadIDs,

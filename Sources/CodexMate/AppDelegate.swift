@@ -72,6 +72,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private enum StatusAnimation {
         static let frameInterval: TimeInterval = 0.12
+        static let loadingFrameInterval: TimeInterval = 1.0 / 24.0
     }
 
     private enum ThreadListDisplay {
@@ -112,6 +113,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let launchAtLoginService = LaunchAtLoginService()
     private let updaterService = UpdaterService()
     private let statusSpriteCatalog = MenubarStatusSpriteCatalog()
+    private lazy var initialThreadBootstrapLoadingFrames = AppDelegate.makeLoadingIndicatorFrames(
+        pointSize: NotchStatusOverlayController.Metrics.spritePointSize
+    )
     private let debugStatusOverride = DebugStatusOverride.overallStatus()
     private let unreadIndicatorImage = AppDelegate.makeUnreadIndicatorImage()
     private let runningIndicatorImage = AppDelegate.makeTextIndicatorImage("⏳")
@@ -212,6 +216,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return controller
     }()
     private lazy var menuToggleController = MenuToggleController(
+        canOpenMenu: { [weak self] in
+            self?.canOpenMenuFromToggle() ?? false
+        },
         openMenu: { [weak self] in
             self?.openMenu()
         },
@@ -244,6 +251,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         configureClientCallbacks()
         configureForegroundRefreshObservers()
         requestNotificationPermission()
+        isInitialThreadBootstrapInProgress = true
         renderMenu()
 
         if shouldOpenSettingsOnLaunch() {
@@ -656,8 +664,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if await client.isConnected() {
             markConnectionHealthy()
         }
-        renderMenu()
         completeInitialThreadBootstrap(requestBackfill: true)
+        renderMenu()
     }
 
     private func handleClientTermination(reason: String?) {
@@ -1115,15 +1123,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
-        notchStatusOverlay.update(
-            spriteImages: statusSpriteCatalog.notchFrames(
+        let isShowingInitialThreadBootstrapLoading = isInitialThreadBootstrapInProgress
+        let spriteImages = isShowingInitialThreadBootstrapLoading
+            ? initialThreadBootstrapLoadingFrames
+            : statusSpriteCatalog.notchFrames(
                 for: currentStatusSprite,
                 renderedPixelSize: 128,
                 renderedPointSize: NotchStatusOverlayController.Metrics.spritePointSize
-            ),
+            )
+        let statusText = isShowingInitialThreadBootstrapLoading
+            ? strings.text("menu.loadingRecentThreads", language: preferences.language)
+            : currentStatusDisplayName
+
+        notchStatusOverlay.update(
+            spriteImages: spriteImages,
             statusSprite: currentStatusSprite,
-            statusText: currentStatusDisplayName,
-            frameInterval: StatusAnimation.frameInterval
+            statusText: statusText,
+            frameInterval: isShowingInitialThreadBootstrapLoading
+                ? StatusAnimation.loadingFrameInterval
+                : StatusAnimation.frameInterval,
+            animationIdentifier: isShowingInitialThreadBootstrapLoading ? "initial_thread_bootstrap_loading" : nil
         )
         if !notchStatusOverlay.isVisible {
             notchStatusOverlay.show(on: overlayScreen)
@@ -1643,6 +1662,46 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return image
     }
 
+    private static func makeLoadingIndicatorFrames(pointSize: NSSize) -> [NSImage] {
+        let frameCount = 24
+        let dotCount = 3
+        let side = min(pointSize.width, pointSize.height)
+        let dotSize = max(4, side * 0.2)
+        let gap = max(5, side * 0.18)
+        let totalWidth = dotSize * CGFloat(dotCount) + gap * CGFloat(dotCount - 1)
+        let baseX = (pointSize.width - totalWidth) / 2
+        let baseY = (pointSize.height - dotSize) / 2
+        let lift = side * 0.12
+        let delayByDot = 0.18
+
+        return (0..<frameCount).map { frameIndex in
+            let image = NSImage(size: pointSize)
+            image.lockFocus()
+
+            let time = Double(frameIndex) / Double(frameCount)
+
+            for dotIndex in 0..<dotCount {
+                let delayedTime = time - (Double(dotIndex) * delayByDot)
+                let phase = delayedTime - floor(delayedTime)
+                let pulse = 0.5 - (cos(CGFloat(phase) * 2 * .pi) * 0.5)
+                let rect = NSRect(
+                    x: baseX + CGFloat(dotIndex) * (dotSize + gap),
+                    y: baseY + (pulse * lift),
+                    width: dotSize,
+                    height: dotSize
+                )
+                let alpha = 0.25 + (pulse * 0.75)
+
+                NSColor(calibratedRed: 0.44, green: 0.66, blue: 1, alpha: alpha).setFill()
+                NSBezierPath(ovalIn: rect).fill()
+            }
+
+            image.unlockFocus()
+            image.isTemplate = false
+            return image
+        }
+    }
+
     private func requestThreadRefresh(force: Bool = true, now: Date = Date()) {
         if isInitialThreadBootstrapInProgress {
             pendingThreadRefreshAfterBootstrap = true
@@ -1933,6 +1992,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             applyPresentationMode(force: true)
             openMenu()
         }
+    }
+
+    private func canOpenMenuFromToggle() -> Bool {
+        guard currentEffectiveDisplayMode == .notch, isInitialThreadBootstrapInProgress else {
+            return true
+        }
+
+        debugLog("menu toggle ignored while initial thread bootstrap is in progress")
+        return false
     }
 
     private func openMenuBarMenu(positioningThreadID: String?, requestRefresh: Bool) {

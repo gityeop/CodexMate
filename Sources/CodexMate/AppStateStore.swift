@@ -714,13 +714,18 @@ struct AppStateStore {
         overlayFailedThreads(desktopSnapshot.failedThreads)
         overlayPendingThreads(desktopSnapshot.waitingForInputThreadIDs, status: .waitingForInput, observedAt: observedAt)
         overlayPendingThreads(desktopSnapshot.approvalThreadIDs, status: .needsApproval, observedAt: observedAt)
-        overlayRunningThreads(desktopSnapshot.runningThreadIDs, observedAt: observedAt)
+        overlayRunningThreads(
+            desktopSnapshot.runningThreadIDs,
+            sessionBackedRunningThreadIDs: desktopSnapshot.sessionBackedRunningThreadIDs,
+            observedAt: observedAt
+        )
     }
 
     mutating func apply(connectedDesktopSnapshot desktopSnapshot: CodexDesktopRuntimeSnapshot, observedAt: Date = Date()) {
         pruneArchivedThreadTombstones(observedAt: observedAt)
         let trustedRunningThreadIDs = trustedConnectedDesktopRunningThreadIDs(
             desktopSnapshot.runningThreadIDs,
+            sessionBackedRunningThreadIDs: desktopSnapshot.sessionBackedRunningThreadIDs,
             observedAt: observedAt
         )
         reconcileRunningThreads(
@@ -736,7 +741,11 @@ struct AppStateStore {
         overlayFailedThreads(desktopSnapshot.failedThreads)
         overlayPendingThreads(desktopSnapshot.waitingForInputThreadIDs, status: .waitingForInput, observedAt: observedAt)
         overlayPendingThreads(desktopSnapshot.approvalThreadIDs, status: .needsApproval, observedAt: observedAt)
-        overlayRunningThreads(trustedRunningThreadIDs, observedAt: observedAt)
+        overlayRunningThreads(
+            trustedRunningThreadIDs,
+            sessionBackedRunningThreadIDs: desktopSnapshot.sessionBackedRunningThreadIDs,
+            observedAt: observedAt
+        )
     }
 
     mutating func apply(desktopTurnStarts startedAtByThreadID: [String: Date]) {
@@ -1023,12 +1032,20 @@ struct AppStateStore {
         }
     }
 
-    private mutating func overlayRunningThreads(_ threadIDs: Set<String>, observedAt: Date = Date()) {
+    private mutating func overlayRunningThreads(
+        _ threadIDs: Set<String>,
+        sessionBackedRunningThreadIDs: Set<String> = [],
+        observedAt: Date = Date()
+    ) {
         guard !threadIDs.isEmpty else { return }
 
         for threadID in threadIDs {
             updateThread(threadID: threadID) { row in
-                guard Self.shouldAcceptDesktopRunningOverlay(for: row, observedAt: observedAt) else {
+                guard Self.shouldAcceptDesktopRunningOverlay(
+                    for: row,
+                    isSessionBackedRunningEvidence: sessionBackedRunningThreadIDs.contains(threadID),
+                    observedAt: observedAt
+                ) else {
                     return
                 }
 
@@ -1042,12 +1059,27 @@ struct AppStateStore {
         }
     }
 
-    private static func shouldAcceptDesktopRunningOverlay(for row: ThreadRow, observedAt: Date) -> Bool {
+    private static func shouldAcceptDesktopRunningOverlay(
+        for row: ThreadRow,
+        isSessionBackedRunningEvidence: Bool = false,
+        observedAt: Date
+    ) -> Bool {
         guard observedAt >= (row.lastRuntimeEventAt ?? .distantPast) else {
             return false
         }
 
         if !row.isWatched {
+            return true
+        }
+
+        switch row.presentationStatus {
+        case .waitingForUser, .running:
+            return false
+        case .idle, .notLoaded, .failed:
+            break
+        }
+
+        if isSessionBackedRunningEvidence, row.sessionPath != nil {
             return true
         }
 
@@ -1059,12 +1091,7 @@ struct AppStateStore {
             return false
         }
 
-        switch row.presentationStatus {
-        case .waitingForUser, .running:
-            return false
-        case .idle, .notLoaded, .failed:
-            return true
-        }
+        return true
     }
 
     private static func shouldAcceptDesktopCompletionHint(for row: ThreadRow, completedAt: Date) -> Bool {
@@ -1323,6 +1350,7 @@ struct AppStateStore {
 
     private func trustedConnectedDesktopRunningThreadIDs(
         _ runningThreadIDs: Set<String>,
+        sessionBackedRunningThreadIDs: Set<String>,
         observedAt: Date
     ) -> Set<String> {
         Set(runningThreadIDs.filter { threadID in
@@ -1334,11 +1362,19 @@ struct AppStateStore {
                 return true
             }
 
-            return Self.shouldTrustConnectedDesktopRunningEvidence(for: row, observedAt: observedAt)
+            return Self.shouldTrustConnectedDesktopRunningEvidence(
+                for: row,
+                isSessionBackedRunningEvidence: sessionBackedRunningThreadIDs.contains(threadID),
+                observedAt: observedAt
+            )
         })
     }
 
-    private static func shouldTrustConnectedDesktopRunningEvidence(for row: ThreadRow, observedAt: Date) -> Bool {
+    private static func shouldTrustConnectedDesktopRunningEvidence(
+        for row: ThreadRow,
+        isSessionBackedRunningEvidence: Bool,
+        observedAt: Date
+    ) -> Bool {
         guard row.isWatched else {
             return true
         }
@@ -1347,11 +1383,19 @@ struct AppStateStore {
             return true
         }
 
+        if isSessionBackedRunningEvidence, row.sessionPath != nil {
+            return true
+        }
+
         if hasAuthoritativeTerminalActivity(row) {
             return false
         }
 
-        return shouldAcceptDesktopRunningOverlay(for: row, observedAt: observedAt)
+        return shouldAcceptDesktopRunningOverlay(
+            for: row,
+            isSessionBackedRunningEvidence: isSessionBackedRunningEvidence,
+            observedAt: observedAt
+        )
     }
 
     private static func hasAuthoritativeTerminalActivity(_ row: ThreadRow) -> Bool {
