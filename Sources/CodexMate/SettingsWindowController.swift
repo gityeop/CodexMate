@@ -143,8 +143,10 @@ private struct SettingsView: View {
                         )
                         .frame(width: 220, height: 28)
 
-                        Button(viewModel.text("settings.shortcutClear")) {
+                        Button {
                             viewModel.setShortcut(nil)
+                        } label: {
+                            Text(verbatim: viewModel.text("settings.shortcutClear"))
                         }
                         .disabled(viewModel.shortcut == nil)
                     }
