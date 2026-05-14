@@ -474,6 +474,7 @@ final class MenubarControllerIntegrationTests: XCTestCase {
     }
 
     func testRefreshDesktopActivityRetriesPendingDiscoveryMetadataUntilThreadAppears() async throws {
+        var currentTime = Date(timeIntervalSince1970: 100)
         let controller = makeController(
             desktopUpdates: [
                 desktopUpdate(
@@ -524,7 +525,8 @@ final class MenubarControllerIntegrationTests: XCTestCase {
                     .init(path: "/tmp/A", displayName: "A"),
                     .init(path: "/tmp/B", displayName: "B")
                 ])
-            )
+            ),
+            now: { currentTime }
         )
 
         try await controller.loadInitialThreads()
@@ -535,15 +537,82 @@ final class MenubarControllerIntegrationTests: XCTestCase {
         XCTAssertEqual(controller.prepareSnapshot().snapshot.projectSections.map(\.section.displayName), ["A"])
 
         let refreshEffects = try await controller.refreshThreads()
-        XCTAssertTrue(refreshEffects.shouldBoostThreadDiscovery)
+        XCTAssertFalse(refreshEffects.shouldBoostThreadDiscovery)
         XCTAssertEqual(controller.prepareSnapshot().snapshot.projectSections.map(\.section.displayName), ["A"])
 
+        currentTime = Date(timeIntervalSince1970: 116)
         let secondDesktopEffects = await controller.refreshDesktopActivity()
         let snapshot = controller.prepareSnapshot().snapshot
 
         XCTAssertTrue(secondDesktopEffects.shouldBoostThreadDiscovery)
         XCTAssertEqual(snapshot.projectSections.map(\.section.displayName), ["B", "A"])
         XCTAssertEqual(snapshot.projectSections.first?.threads.map(\.id), ["thread-b"])
+    }
+
+    func testRefreshDesktopActivityDoesNotRetryPendingDiscoveryBeforeBackoffExpires() async throws {
+        var currentTime = Date(timeIntervalSince1970: 100)
+        let controller = makeController(
+            desktopUpdates: [
+                desktopUpdate(
+                    runtimeSnapshot: CodexDesktopRuntimeSnapshot(
+                        activeTurnCount: 0,
+                        runningThreadIDs: [],
+                        recentActivityThreadIDs: ["thread-b"]
+                    )
+                ),
+                desktopUpdate(
+                    runtimeSnapshot: CodexDesktopRuntimeSnapshot(
+                        activeTurnCount: 0,
+                        runningThreadIDs: [],
+                        recentActivityThreadIDs: ["thread-b"]
+                    )
+                ),
+                desktopUpdate(
+                    runtimeSnapshot: CodexDesktopRuntimeSnapshot(
+                        activeTurnCount: 0,
+                        runningThreadIDs: [],
+                        recentActivityThreadIDs: ["thread-b"]
+                    )
+                )
+            ],
+            recentThreadResponses: [
+                [
+                    thread(
+                        id: "thread-a",
+                        updatedAt: 100,
+                        cwd: "/tmp/A/work",
+                        path: "/tmp/thread-a.jsonl",
+                        source: "manual",
+                        agentRole: "assistant",
+                        agentNickname: "A"
+                    )
+                ]
+            ],
+            metadataResponses: [
+                .success([]),
+                .success([thread(id: "thread-b", updatedAt: 200, cwd: "/tmp/B/work")])
+            ],
+            projectCatalog: .success(
+                CodexDesktopProjectCatalog(workspaceRoots: [
+                    .init(path: "/tmp/A", displayName: "A"),
+                    .init(path: "/tmp/B", displayName: "B")
+                ])
+            ),
+            now: { currentTime }
+        )
+
+        try await controller.loadInitialThreads()
+
+        _ = await controller.refreshDesktopActivity()
+        currentTime = Date(timeIntervalSince1970: 109)
+        let beforeBackoffEffects = await controller.refreshDesktopActivity()
+        XCTAssertFalse(beforeBackoffEffects.shouldBoostThreadDiscovery)
+        XCTAssertEqual(controller.prepareSnapshot().snapshot.projectSections.map(\.section.displayName), ["A"])
+
+        currentTime = Date(timeIntervalSince1970: 116)
+        let afterBackoffEffects = await controller.refreshDesktopActivity()
+        XCTAssertTrue(afterBackoffEffects.shouldBoostThreadDiscovery)
+        XCTAssertEqual(controller.prepareSnapshot().snapshot.projectSections.map(\.section.displayName), ["B", "A"])
     }
 
     func testCompletionHintsClearWaitingStateInSnapshot() async throws {

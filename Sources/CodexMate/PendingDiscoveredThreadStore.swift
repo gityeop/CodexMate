@@ -7,17 +7,27 @@ struct PendingDiscoveredThreadResolution: Equatable {
 
 struct PendingDiscoveredThreadStore: Equatable {
     private(set) var observedAtByThreadID: [String: Date]
+    private var retryAttemptCountByThreadID: [String: Int]
+    private var lastRetryAtByThreadID: [String: Date]
     private let maxTrackedThreads: Int
     private let ttl: TimeInterval
+    private let retryBackoffIntervals: [TimeInterval]
 
     init(
         observedAtByThreadID: [String: Date] = [:],
         maxTrackedThreads: Int = 64,
-        ttl: TimeInterval = 2 * 60
+        ttl: TimeInterval = 2 * 60,
+        retryBackoffIntervals: [TimeInterval] = [15, 30, 60]
     ) {
         self.observedAtByThreadID = observedAtByThreadID
+        self.retryAttemptCountByThreadID = [:]
+        self.lastRetryAtByThreadID = [:]
         self.maxTrackedThreads = max(1, maxTrackedThreads)
         self.ttl = max(1, ttl)
+        let positiveRetryBackoffIntervals = retryBackoffIntervals.filter { $0 > 0 }
+        self.retryBackoffIntervals = positiveRetryBackoffIntervals.isEmpty
+            ? [15]
+            : positiveRetryBackoffIntervals
     }
 
     var pendingThreadIDs: Set<String> {
@@ -51,7 +61,7 @@ struct PendingDiscoveredThreadStore: Equatable {
 
         let resolvedThreadIDs = pendingThreadIDs.intersection(fetchedThreadIDs)
         for threadID in resolvedThreadIDs {
-            observedAtByThreadID.removeValue(forKey: threadID)
+            remove(threadID)
         }
 
         return PendingDiscoveredThreadResolution(
@@ -60,9 +70,44 @@ struct PendingDiscoveredThreadStore: Equatable {
         )
     }
 
+    mutating func threadIDsReadyToRetry(_ threadIDs: Set<String>, now: Date = Date()) -> Set<String> {
+        prune(now: now)
+
+        return Set(threadIDs.filter { threadID in
+            guard observedAtByThreadID[threadID] != nil else {
+                return false
+            }
+
+            guard let lastRetryAt = lastRetryAtByThreadID[threadID] else {
+                return true
+            }
+
+            let retryAttemptCount = retryAttemptCountByThreadID[threadID] ?? 0
+            return now.timeIntervalSince(lastRetryAt) >= retryBackoffInterval(
+                retryAttemptCount: retryAttemptCount
+            )
+        })
+    }
+
+    mutating func recordRetryAttempt(for threadIDs: Set<String>, now: Date = Date()) {
+        prune(now: now)
+
+        for threadID in threadIDs where observedAtByThreadID[threadID] != nil {
+            lastRetryAtByThreadID[threadID] = now
+            retryAttemptCountByThreadID[threadID, default: 0] += 1
+        }
+    }
+
     mutating func prune(now: Date = Date()) {
         let cutoff = now.addingTimeInterval(-ttl)
-        observedAtByThreadID = observedAtByThreadID.filter { $0.value >= cutoff }
+        let expiredThreadIDs = Set(
+            observedAtByThreadID.compactMap { threadID, observedAt in
+                observedAt >= cutoff ? nil : threadID
+            }
+        )
+        for threadID in expiredThreadIDs {
+            remove(threadID)
+        }
         trimToBudget()
     }
 
@@ -82,6 +127,20 @@ struct PendingDiscoveredThreadStore: Equatable {
             .prefix(maxTrackedThreads)
             .map(\.key)
 
-        observedAtByThreadID = observedAtByThreadID.filter { keptThreadIDs.contains($0.key) }
+        let keptThreadIDSet = Set(keptThreadIDs)
+        for threadID in pendingThreadIDs.subtracting(keptThreadIDSet) {
+            remove(threadID)
+        }
+    }
+
+    private mutating func remove(_ threadID: String) {
+        observedAtByThreadID.removeValue(forKey: threadID)
+        retryAttemptCountByThreadID.removeValue(forKey: threadID)
+        lastRetryAtByThreadID.removeValue(forKey: threadID)
+    }
+
+    private func retryBackoffInterval(retryAttemptCount: Int) -> TimeInterval {
+        let index = min(max(0, retryAttemptCount - 1), retryBackoffIntervals.count - 1)
+        return retryBackoffIntervals[index]
     }
 }

@@ -39,4 +39,38 @@ final class PendingDiscoveredThreadStoreTests: XCTestCase {
 
         XCTAssertEqual(store.pendingThreadIDs, ["thread-2", "thread-3"])
     }
+
+    func testRetryBackoffDelaysRepeatedMissingThreadLookups() {
+        var store = PendingDiscoveredThreadStore(
+            maxTrackedThreads: 4,
+            ttl: 120,
+            retryBackoffIntervals: [10, 20]
+        )
+        _ = store.observe(["thread-1"], now: Date(timeIntervalSince1970: 100))
+
+        XCTAssertEqual(
+            store.threadIDsReadyToRetry(["thread-1"], now: Date(timeIntervalSince1970: 100)),
+            ["thread-1"]
+        )
+
+        store.recordRetryAttempt(for: ["thread-1"], now: Date(timeIntervalSince1970: 100))
+        XCTAssertEqual(
+            store.threadIDsReadyToRetry(["thread-1"], now: Date(timeIntervalSince1970: 109)),
+            []
+        )
+        XCTAssertEqual(
+            store.threadIDsReadyToRetry(["thread-1"], now: Date(timeIntervalSince1970: 110)),
+            ["thread-1"]
+        )
+
+        store.recordRetryAttempt(for: ["thread-1"], now: Date(timeIntervalSince1970: 110))
+        XCTAssertEqual(
+            store.threadIDsReadyToRetry(["thread-1"], now: Date(timeIntervalSince1970: 129)),
+            []
+        )
+        XCTAssertEqual(
+            store.threadIDsReadyToRetry(["thread-1"], now: Date(timeIntervalSince1970: 130)),
+            ["thread-1"]
+        )
+    }
 }

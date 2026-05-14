@@ -436,7 +436,11 @@ final class MenubarController {
         )
         let newlyDiscoveredThreadIDs = newlyObservedThreadIDs.subtracting(trackedPendingThreadIDs)
         let unresolvedPendingThreadIDs = pendingDiscoveredThreads.pendingThreadIDs.subtracting(recentThreadIDs)
-        let threadIDsToSeed = newlyDiscoveredThreadIDs.union(unresolvedPendingThreadIDs)
+        let retryablePendingThreadIDs = pendingDiscoveredThreads.threadIDsReadyToRetry(
+            unresolvedPendingThreadIDs,
+            now: activityObservedAt
+        )
+        let threadIDsToSeed = newlyDiscoveredThreadIDs.union(retryablePendingThreadIDs)
         synchronizePendingAuthoritativeThreads()
 
         var effects = MenubarControllerEffects()
@@ -532,6 +536,7 @@ final class MenubarController {
         synchronizeThreadReadMarkers(from: update.latestViewedAtByThreadID)
 
         if !threadIDsToSeed.isEmpty {
+            pendingDiscoveredThreads.recordRetryAttempt(for: threadIDsToSeed, now: activityObservedAt)
             let seedEffects = await seedDiscoveredThreads(threadIDsToSeed)
             effects.diagnostics.append(contentsOf: seedEffects.diagnostics)
             effects.shouldRequestDesktopActivityRefresh = effects.shouldRequestDesktopActivityRefresh
@@ -541,7 +546,8 @@ final class MenubarController {
             effects.shouldBoostThreadDiscovery = true
 
             let diagnostic = "desktop pending threads discovered=\(debugThreadIDs(newlyDiscoveredThreadIDs)) "
-                + "retrying=\(debugThreadIDs(unresolvedPendingThreadIDs)) "
+                + "retrying=\(debugThreadIDs(retryablePendingThreadIDs)) "
+                + "pending=\(debugThreadIDs(unresolvedPendingThreadIDs)) "
                 + "recent=\(trackedThreads.count) viewed=\(update.latestViewedAtByThreadID.count)"
             state.recordDiagnostic(diagnostic)
             effects.diagnostics.append(diagnostic)
@@ -766,14 +772,19 @@ final class MenubarController {
             return MenubarControllerEffects()
         }
 
-        let resolution = pendingDiscoveredThreads.resolve(with: Set(threads.map(\.id)), now: now())
+        let resolutionObservedAt = now()
+        let resolution = pendingDiscoveredThreads.resolve(with: Set(threads.map(\.id)), now: resolutionObservedAt)
         let diagnostic = "thread/list resolved=\(debugThreadIDs(resolution.resolvedThreadIDs)) "
             + "missing=\(debugThreadIDs(resolution.missingThreadIDs)) total=\(threads.count)"
+        let retryableMissingThreadIDs = pendingDiscoveredThreads.threadIDsReadyToRetry(
+            resolution.missingThreadIDs,
+            now: resolutionObservedAt
+        )
 
         state.recordDiagnostic(diagnostic)
         return MenubarControllerEffects(
             diagnostics: [diagnostic],
-            shouldBoostThreadDiscovery: !resolution.missingThreadIDs.isEmpty
+            shouldBoostThreadDiscovery: !retryableMissingThreadIDs.isEmpty
         )
     }
 
