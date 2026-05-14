@@ -122,6 +122,58 @@ private func scaledRect(
     )
 }
 
+private final class NotchPointerEventForwardGate: @unchecked Sendable {
+    private enum Policy {
+        static let interactiveFrameOutset: CGFloat = 24
+        static let minimumMouseMoveInterval: TimeInterval = 1.0 / 30.0
+    }
+
+    private let lock = NSLock()
+    private var interactiveScreenFrame: CGRect?
+    private var isPointerInsideInteractiveRegion = false
+    private var lastForwardedMouseMoveTimestamp: TimeInterval = -.infinity
+
+    func updateInteractiveScreenFrame(_ frame: CGRect?) {
+        lock.lock()
+        interactiveScreenFrame = frame?.insetBy(
+            dx: -Policy.interactiveFrameOutset,
+            dy: -Policy.interactiveFrameOutset
+        )
+        lock.unlock()
+    }
+
+    func updatePointerInsideInteractiveRegion(_ isInside: Bool) {
+        lock.lock()
+        isPointerInsideInteractiveRegion = isInside
+        lock.unlock()
+    }
+
+    func shouldForwardGlobalPointerEvent(
+        type: NSEvent.EventType,
+        screenPoint: NSPoint,
+        timestamp: TimeInterval
+    ) -> Bool {
+        guard type == .mouseMoved else {
+            return true
+        }
+
+        lock.lock()
+        defer { lock.unlock() }
+
+        let isNearInteractiveRegion = interactiveScreenFrame?.contains(screenPoint) ?? false
+        guard isNearInteractiveRegion || isPointerInsideInteractiveRegion else {
+            return false
+        }
+
+        guard timestamp - lastForwardedMouseMoveTimestamp >= Policy.minimumMouseMoveInterval else {
+            return false
+        }
+
+        lastForwardedMouseMoveTimestamp = timestamp
+        return true
+    }
+}
+
 @MainActor
 private final class NotchMotionAnimator {
     private var timer: Timer?
@@ -223,6 +275,7 @@ final class NotchStatusOverlayController {
     private let overlayView = NotchStatusOverlayView(frame: .zero)
     private let menuAnimator = NotchMotionAnimator()
     private let hoverAnimator = NotchMotionAnimator()
+    private let pointerEventForwardGate = NotchPointerEventForwardGate()
     private(set) var isMenuExpanded = false
     private var menuExpansionProgress: CGFloat = 0
     private var hoverProgress: CGFloat = 0
@@ -230,6 +283,10 @@ final class NotchStatusOverlayController {
     private var localPointerMonitor: Any?
     private var globalPointerMonitor: Any?
     private var isActivationHovered = false
+    private var currentSpriteImages: [NSImage] = []
+    private var currentSpriteAnimationIdentifier = ""
+    private var currentSpriteFrameInterval: TimeInterval = 0
+    private var currentSpriteForcesAnimation = false
     var onActivate: (() -> Void)?
     var onKeyDown: ((NSEvent) -> Bool)? {
         didSet {
@@ -240,12 +297,12 @@ final class NotchStatusOverlayController {
 
     init() {
         panel.contentView = overlayView
-        installPointerMonitors()
     }
 
     func show(on screen: NSScreen) {
         currentScreen = screen
         DebugTraceLogger.log("overlay show screen=\(screen.localizedName) expanded=\(isMenuExpanded)")
+        installPointerMonitors()
         applyOverlayState()
         panel.orderFrontRegardless()
     }
@@ -261,6 +318,9 @@ final class NotchStatusOverlayController {
         overlayView.hoverProgress = 0
         overlayView.stopSpriteAnimation()
         setActivationHovered(false)
+        pointerEventForwardGate.updateInteractiveScreenFrame(nil)
+        pointerEventForwardGate.updatePointerInsideInteractiveRegion(false)
+        removePointerMonitors()
         panel.orderOut(nil)
     }
 
@@ -269,7 +329,8 @@ final class NotchStatusOverlayController {
         statusSprite: MenubarStatusPresentation.StatusSprite,
         statusText: String,
         frameInterval: TimeInterval,
-        animationIdentifier: String? = nil
+        animationIdentifier: String? = nil,
+        forceAnimation: Bool = false
     ) {
         var shouldApplyOverlayState = false
 
@@ -281,11 +342,11 @@ final class NotchStatusOverlayController {
             overlayView.statusText = statusText
         }
 
-        overlayView.setSpriteFrames(
-            spriteImages,
-            animationIdentifier: animationIdentifier ?? statusSprite.assetName,
-            frameInterval: frameInterval
-        )
+        currentSpriteImages = spriteImages
+        currentSpriteAnimationIdentifier = animationIdentifier ?? statusSprite.assetName
+        currentSpriteFrameInterval = frameInterval
+        currentSpriteForcesAnimation = forceAnimation
+        applyCurrentSpriteFrames()
 
         if overlayView.usesCompactLayout {
             overlayView.usesCompactLayout = false
@@ -338,6 +399,8 @@ final class NotchStatusOverlayController {
     func showMenu(on screen: NSScreen) {
         currentScreen = screen
         isMenuExpanded = true
+        pointerEventForwardGate.updatePointerInsideInteractiveRegion(true)
+        applyCurrentSpriteFrames()
         DebugTraceLogger.log("overlay showMenu screen=\(screen.localizedName)")
         animateHover(to: 0)
         show(on: screen)
@@ -355,6 +418,8 @@ final class NotchStatusOverlayController {
 
         DebugTraceLogger.log("overlay hideMenu progress=\(String(format: "%.3f", menuExpansionProgress))")
         isMenuExpanded = false
+        pointerEventForwardGate.updatePointerInsideInteractiveRegion(isActivationHovered)
+        applyCurrentSpriteFrames()
         animateMenuExpansion(to: 0)
     }
 
@@ -372,6 +437,7 @@ final class NotchStatusOverlayController {
         guard localPointerMonitor == nil, globalPointerMonitor == nil else {
             return
         }
+        let gate = pointerEventForwardGate
 
         localPointerMonitor = NSEvent.addLocalMonitorForEvents(
             matching: [.mouseMoved, .leftMouseUp, .rightMouseUp, .otherMouseUp]
@@ -382,10 +448,29 @@ final class NotchStatusOverlayController {
 
         globalPointerMonitor = NSEvent.addGlobalMonitorForEvents(
             matching: [.mouseMoved, .leftMouseUp, .rightMouseUp, .otherMouseUp]
-        ) { [weak self] event in
+        ) { [weak self, gate] event in
+            guard gate.shouldForwardGlobalPointerEvent(
+                type: event.type,
+                screenPoint: event.locationInWindow,
+                timestamp: event.timestamp
+            ) else {
+                return
+            }
             Task { @MainActor [weak self] in
                 self?.handlePointerEvent(event.locationInWindow, type: event.type, sourceWindow: nil)
             }
+        }
+    }
+
+    private func removePointerMonitors() {
+        if let localPointerMonitor {
+            NSEvent.removeMonitor(localPointerMonitor)
+            self.localPointerMonitor = nil
+        }
+
+        if let globalPointerMonitor {
+            NSEvent.removeMonitor(globalPointerMonitor)
+            self.globalPointerMonitor = nil
         }
     }
 
@@ -441,6 +526,8 @@ final class NotchStatusOverlayController {
         }
 
         isActivationHovered = isHovered
+        pointerEventForwardGate.updatePointerInsideInteractiveRegion(isHovered || isMenuExpanded)
+        applyCurrentSpriteFrames()
         if isHovered {
             NSCursor.pointingHand.push()
         } else {
@@ -493,6 +580,7 @@ final class NotchStatusOverlayController {
         overlayView.menuExpansionProgress = menuExpansionProgress
         overlayView.hoverProgress = hoverProgress
         panel.ignoresMouseEvents = menuExpansionProgress < 0.98
+        pointerEventForwardGate.updateInteractiveScreenFrame(pointerInteractiveScreenFrame)
         overlayView.needsLayout = true
         overlayView.needsDisplay = true
 
@@ -500,6 +588,35 @@ final class NotchStatusOverlayController {
             panel.orderFrontRegardless()
         }
         updateCollapsedHoverState(screenPoint: NSEvent.mouseLocation)
+    }
+
+    private var pointerInteractiveScreenFrame: CGRect {
+        let interactiveFrame = menuExpansionProgress > 0.08
+            ? overlayView.interactiveFrame
+            : overlayView.activationFrame
+        return interactiveFrame.offsetBy(dx: panel.frame.minX, dy: panel.frame.minY)
+    }
+
+    private func applyCurrentSpriteFrames() {
+        overlayView.setSpriteFrames(
+            currentSpriteImages,
+            animationIdentifier: currentSpriteAnimationIdentifier,
+            frameInterval: currentSpriteFrameInterval,
+            isAnimated: shouldAnimateCurrentStatusSprite
+        )
+    }
+
+    private var shouldAnimateCurrentStatusSprite: Bool {
+        if currentSpriteForcesAnimation {
+            return true
+        }
+
+        switch overlayView.statusSprite {
+        case .idle, .unread, .failed:
+            return isActivationHovered || isMenuExpanded
+        case .connecting, .running, .waitingForUser:
+            return true
+        }
     }
 }
 
@@ -678,6 +795,7 @@ final class NotchStatusOverlayView: NSView {
     private var lastMenuItemSignatures: [MenuItemSignature] = []
     private var hasAppliedMenuItems = false
     private var spriteAnimationIdentifier: String?
+    private var isSpriteAnimated = false
     fileprivate var geometry: NotchStatusOverlayGeometry?
     var onKeyDown: ((NSEvent) -> Bool)?
 
@@ -814,7 +932,8 @@ final class NotchStatusOverlayView: NSView {
     func setSpriteFrames(
         _ frames: [NSImage],
         animationIdentifier: String,
-        frameInterval: TimeInterval
+        frameInterval: TimeInterval,
+        isAnimated: Bool = true
     ) {
         guard !frames.isEmpty else {
             stopSpriteAnimation()
@@ -835,16 +954,19 @@ final class NotchStatusOverlayView: NSView {
             return
         }
 
+        let shouldAnimate = isAnimated && cgFrames.count > 1
         if spriteAnimationIdentifier == animationIdentifier,
-           (cgFrames.count == 1 || imageLayer.animation(forKey: Self.spriteAnimationKey) != nil) {
+           isSpriteAnimated == shouldAnimate,
+           (!shouldAnimate || imageLayer.animation(forKey: Self.spriteAnimationKey) != nil) {
             return
         }
 
         spriteAnimationIdentifier = animationIdentifier
+        isSpriteAnimated = shouldAnimate
         imageView.image = nil
         imageLayer.contents = firstFrame
 
-        guard cgFrames.count > 1 else {
+        guard shouldAnimate else {
             imageLayer.removeAnimation(forKey: Self.spriteAnimationKey)
             return
         }
@@ -864,6 +986,7 @@ final class NotchStatusOverlayView: NSView {
     func stopSpriteAnimation() {
         imageView.layer?.removeAnimation(forKey: Self.spriteAnimationKey)
         spriteAnimationIdentifier = nil
+        isSpriteAnimated = false
     }
 
     private static func cgImage(from image: NSImage) -> CGImage? {

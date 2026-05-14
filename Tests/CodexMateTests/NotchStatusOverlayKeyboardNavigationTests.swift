@@ -88,6 +88,25 @@ final class NotchStatusOverlayKeyboardNavigationTests: XCTestCase {
         XCTAssertFalse(view.needsDisplay)
     }
 
+    func testSpriteFramesCanSwitchBetweenStaticAndAnimatedModes() throws {
+        let view = NotchStatusOverlayView(frame: NSRect(x: 0, y: 0, width: 520, height: 220))
+        let frames = [
+            makeSpriteImage(color: .red),
+            makeSpriteImage(color: .green),
+        ]
+
+        view.setSpriteFrames(frames, animationIdentifier: "idle", frameInterval: 0.12, isAnimated: false)
+
+        let imageView = try XCTUnwrap(firstImageView(in: view))
+        XCTAssertNil(imageView.layer?.animation(forKey: "CodexMateStatusSpriteAnimation"))
+
+        view.setSpriteFrames(frames, animationIdentifier: "idle", frameInterval: 0.12, isAnimated: true)
+        XCTAssertNotNil(imageView.layer?.animation(forKey: "CodexMateStatusSpriteAnimation"))
+
+        view.setSpriteFrames(frames, animationIdentifier: "idle", frameInterval: 0.12, isAnimated: false)
+        XCTAssertNil(imageView.layer?.animation(forKey: "CodexMateStatusSpriteAnimation"))
+    }
+
     func testOptionArrowNavigationMovesByProject() throws {
         let view = NotchStatusOverlayView(frame: NSRect(x: 0, y: 0, width: 520, height: 220))
         view.setMenuItems(makeSectionedMenuItems())

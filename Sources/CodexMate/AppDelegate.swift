@@ -1144,7 +1144,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             frameInterval: isShowingInitialThreadBootstrapLoading
                 ? StatusAnimation.loadingFrameInterval
                 : StatusAnimation.frameInterval,
-            animationIdentifier: isShowingInitialThreadBootstrapLoading ? "initial_thread_bootstrap_loading" : nil
+            animationIdentifier: isShowingInitialThreadBootstrapLoading ? "initial_thread_bootstrap_loading" : nil,
+            forceAnimation: isShowingInitialThreadBootstrapLoading
         )
         if !notchStatusOverlay.isVisible {
             notchStatusOverlay.show(on: overlayScreen)
