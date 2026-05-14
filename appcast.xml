@@ -3,19 +3,20 @@
     <channel>
         <title>CodexMate</title>
         <item>
-            <title>0.0.21</title>
-            <pubDate>Thu, 14 May 2026 21:28:16 +0900</pubDate>
-            <link>https://github.com/gityeop/CodexMate/releases/tag/v0.0.21</link>
-            <sparkle:version>21</sparkle:version>
-            <sparkle:shortVersionString>0.0.21</sparkle:shortVersionString>
+            <title>0.0.22</title>
+            <pubDate>Thu, 14 May 2026 22:27:31 +0900</pubDate>
+            <link>https://github.com/gityeop/CodexMate/releases/tag/v0.0.22</link>
+            <sparkle:version>22</sparkle:version>
+            <sparkle:shortVersionString>0.0.22</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description sparkle:format="markdown"><![CDATA[# CodexMate 0.0.21
+            <description sparkle:format="markdown"><![CDATA[# CodexMate 0.0.22
 
-- Reduced unnecessary energy use in notch mode by backing off repeated lookups for desktop threads that have not appeared in the Codex thread database yet.
-- Kept the notch status animation behavior unchanged while lowering repeated background refresh pressure.
+- Hydrates live thread metadata when turn and status notifications arrive before the thread appears in the recent-thread list.
+- Keeps live-discovered threads visible while waiting for the authoritative thread list to catch up.
+- Packages SwiftPM resource bundles from the product link metadata so dependency resource bundles are included reliably.
 ]]></description>
-            <enclosure url="https://github.com/gityeop/CodexMate/releases/latest/download/CodexMate-0.0.21.zip" length="4554394" type="application/octet-stream" sparkle:edSignature="3pTDrrSzE73X/mlKGYh4k+BOncP+AcJOe05MH+Gk+pe8JhqD82VtMrNkL8jEGeIvzBKTEZc7XVIlsf9lhTO4DA=="/>
+            <enclosure url="https://github.com/gityeop/CodexMate/releases/latest/download/CodexMate-0.0.22.zip" length="4646893" type="application/octet-stream" sparkle:edSignature="cXunnS7s0IBcyROI9vXyH9mKKyzQa8m65mQ+jS/RixnPxkkZrccKOTkBmyUVN1HzloJ53LQZqa+Haiw3SYajDg=="/>
         </item>
     </channel>
 </rss>
