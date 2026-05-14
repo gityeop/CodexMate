@@ -3,6 +3,76 @@ import XCTest
 
 @MainActor
 final class MenubarControllerIntegrationTests: XCTestCase {
+    func testLiveTurnStartedThreadHydratesFromMetadataIntoProject() async throws {
+        let controller = makeController(
+            recentThreadResponses: [
+                [thread(id: "thread-a", updatedAt: 100, cwd: "/tmp/A/work")]
+            ],
+            metadataResponses: [
+                .success([]),
+                .success([thread(id: "thread-b", updatedAt: 200, cwd: "/tmp/B/work")])
+            ],
+            projectCatalog: .success(
+                CodexDesktopProjectCatalog(workspaceRoots: [
+                    .init(path: "/tmp/A", displayName: "A"),
+                    .init(path: "/tmp/B", displayName: "B")
+                ])
+            )
+        )
+
+        try await controller.loadInitialThreads()
+        controller.apply(notification: .turnStarted(
+            TurnStartedNotification(
+                threadId: "thread-b",
+                turn: CodexTurn(id: "turn-b", status: .inProgress, error: nil)
+            )
+        ))
+
+        let effects = await controller.refreshThreadMetadata(threadIDs: ["thread-b"])
+        let snapshot = controller.prepareSnapshot().snapshot
+
+        XCTAssertTrue(effects.shouldRequestDesktopActivityRefresh)
+        XCTAssertEqual(snapshot.projectSections.map(\.section.displayName), ["B", "A"])
+        XCTAssertEqual(snapshot.projectSections.first?.threads.map(\.id), ["thread-b"])
+    }
+
+    func testLiveTurnStartedThreadIsRetainedWhileAwaitingAuthoritativeList() async throws {
+        let controller = makeController(
+            recentThreadResponses: [
+                [thread(id: "thread-a", updatedAt: 100, cwd: "/tmp/A/work")],
+                [thread(id: "thread-a", updatedAt: 100, cwd: "/tmp/A/work")],
+                [thread(id: "thread-a", updatedAt: 100, cwd: "/tmp/A/work")],
+                [thread(id: "thread-a", updatedAt: 100, cwd: "/tmp/A/work")]
+            ],
+            metadataResponses: [
+                .success([]),
+                .success([]),
+                .success([]),
+                .success([])
+            ],
+            projectCatalog: .success(
+                CodexDesktopProjectCatalog(workspaceRoots: [
+                    .init(path: "/tmp/A", displayName: "A")
+                ])
+            )
+        )
+
+        try await controller.loadInitialThreads()
+        controller.apply(notification: .turnStarted(
+            TurnStartedNotification(
+                threadId: "thread-b",
+                turn: CodexTurn(id: "turn-b", status: .inProgress, error: nil)
+            )
+        ))
+
+        _ = try await controller.refreshThreads()
+        _ = try await controller.refreshThreads()
+        _ = try await controller.refreshThreads()
+        let snapshot = controller.prepareSnapshot().snapshot
+
+        XCTAssertTrue(snapshot.projectSections.flatMap(\.allThreads).contains { $0.id == "thread-b" })
+    }
+
     func testRefreshDesktopActivityDiscoversAndSeedsUnknownProject() async throws {
         let controller = makeController(
             desktopUpdates: [

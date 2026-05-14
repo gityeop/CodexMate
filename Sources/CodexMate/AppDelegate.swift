@@ -156,6 +156,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     )
     private var liveSubscribedThreadUpdatedAtByID: [String: Date] = [:]
     private var pendingLiveSubscriptionThreadIDs: Set<String> = []
+    private var pendingThreadMetadataRefreshIDs: Set<String> = []
     private var connectedBinaryPath: String?
     private var refreshTimer: Timer?
     private var refreshTimerInterval: TimeInterval?
@@ -175,6 +176,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var desktopActivityRefreshTask: Task<Void, Never>?
     private var threadRefreshGate = RefreshRequestGate()
     private var threadRefreshTask: Task<Void, Never>?
+    private var threadMetadataRefreshTask: Task<Void, Never>?
     private var notificationRenderTask: Task<Void, Never>?
     private var shouldRefreshDesktopActivityAfterNextThreadRefresh = false
     private var hoverTooltipContentsByThreadID: [String: MenubarStatusPresentation.ThreadTooltipContent] = [:]
@@ -1780,7 +1782,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         if requestThreadMetadataRefresh {
-            requestThreadRefresh(force: false, now: now)
+            requestLiveThreadMetadataRefresh(threadID: threadID, now: now)
         }
 
         if subscribe {
@@ -1798,6 +1800,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let self else { return }
             await resumeThreadSubscriptions([threadID])
             renderMenu()
+        }
+    }
+
+    private func requestLiveThreadMetadataRefresh(threadID: String, now: Date = Date()) {
+        pendingThreadMetadataRefreshIDs.insert(threadID)
+        requestThreadRefresh(force: false, now: now)
+
+        guard threadMetadataRefreshTask == nil else {
+            return
+        }
+
+        threadMetadataRefreshTask = Task { @MainActor [weak self] in
+            do {
+                try await Task.sleep(nanoseconds: NotificationRenderPolicy.coalescingDelayNanoseconds)
+            } catch {
+                return
+            }
+
+            guard let self else { return }
+            let threadIDs = self.pendingThreadMetadataRefreshIDs
+            self.pendingThreadMetadataRefreshIDs.removeAll()
+            self.threadMetadataRefreshTask = nil
+
+            guard !threadIDs.isEmpty else { return }
+            let effects = await self.controller.refreshThreadMetadata(threadIDs: threadIDs)
+            self.applyControllerEffects(effects)
+            self.renderMenu()
         }
     }
 

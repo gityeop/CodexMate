@@ -25,6 +25,30 @@ private extension AppStateStore.NotificationEvent {
             return nil
         }
     }
+
+    var discoveredThreadID: String? {
+        switch self {
+        case let .threadStarted(notification):
+            return notification.thread.id
+        case let .threadStatusChanged(notification):
+            return notification.threadId
+        case let .threadUnarchived(notification):
+            return notification.threadId
+        case let .threadNameUpdated(notification):
+            return notification.threadId
+        case let .turnStarted(notification):
+            return notification.threadId
+        case let .itemStarted(notification):
+            return notification.threadId
+        case let .turnCompleted(notification):
+            return notification.threadId
+        case let .error(notification):
+            return notification.threadId
+        case .threadArchived,
+             .serverRequestResolved:
+            return nil
+        }
+    }
 }
 
 protocol RecentThreadListing: Sendable {
@@ -597,9 +621,13 @@ final class MenubarController {
         }
         state.apply(notification: notification)
 
-        if case let .threadStarted(notification) = notification {
-            _ = pendingDiscoveredThreads.observe([notification.thread.id], now: now())
+        if let threadID = notification.discoveredThreadID {
+            _ = pendingDiscoveredThreads.observe([threadID], now: now())
         }
+    }
+
+    func refreshThreadMetadata(threadIDs: Set<String>) async -> MenubarControllerEffects {
+        await seedDiscoveredThreads(threadIDs)
     }
 
     func apply(serverRequest: AppStateStore.ServerRequestEvent) {

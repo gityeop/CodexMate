@@ -71,6 +71,61 @@ verify_resource_bundles() {
   fi
 }
 
+append_unique_resource_bundle_name() {
+  local bundle_name="$1"
+  local existing_bundle_name
+
+  for existing_bundle_name in "${RESOURCE_BUNDLE_NAMES[@]}"; do
+    if [[ "$existing_bundle_name" == "$bundle_name" ]]; then
+      return
+    fi
+  done
+
+  RESOURCE_BUNDLE_NAMES+=("$bundle_name")
+}
+
+resource_bundle_names_for_product() {
+  local product_name="$1"
+  local link_file_list="$BIN_DIR/$product_name.product/Objects.LinkFileList"
+  local object_path build_dir accessor_path bundle_name
+
+  if [[ ! -f "$link_file_list" ]]; then
+    return
+  fi
+
+  while IFS= read -r object_path; do
+    if [[ "${object_path:t}" != "resource_bundle_accessor.swift.o" ]]; then
+      continue
+    fi
+
+    build_dir="${object_path:h}"
+    accessor_path="$build_dir/DerivedSources/resource_bundle_accessor.swift"
+    if [[ ! -f "$accessor_path" ]]; then
+      continue
+    fi
+
+    bundle_name="$(sed -n -E \
+      -e 's/^[[:space:]]*let bundleName = "([^"]+)".*/\1.bundle/p' \
+      -e 's/.*appendingPathComponent\("([^"]+\.bundle)".*/\1/p' \
+      "$accessor_path" | head -n 1)"
+    if [[ -n "$bundle_name" ]]; then
+      append_unique_resource_bundle_name "$bundle_name"
+    fi
+  done < "$link_file_list"
+}
+
+resource_bundle_path() {
+  local bundle_name="$1"
+  local candidate_dir
+
+  for candidate_dir in "$BIN_DIR" "$APPLE_PRODUCTS_DIR"; do
+    if [[ -d "$candidate_dir/$bundle_name" ]]; then
+      echo "$candidate_dir/$bundle_name"
+      return
+    fi
+  done
+}
+
 default_sparkle_feed_url() {
   local remote_url
 
@@ -182,20 +237,27 @@ cp "$EXECUTABLE_PATH" "$MACOS_DIR/$APP_NAME"
 
 install_name_tool -add_rpath "@executable_path/../Frameworks" "$MACOS_DIR/$APP_NAME" 2>/dev/null || true
 
-RESOURCE_PRODUCTS_DIR="$BIN_DIR"
 APPLE_PRODUCTS_DIR="$ROOT_DIR/.build/apple/Products/${(C)CONFIGURATION}"
-if [[ -d "$APPLE_PRODUCTS_DIR" ]]; then
-  RESOURCE_PRODUCTS_DIR="$APPLE_PRODUCTS_DIR"
-fi
 
-typeset -a RESOURCE_BUNDLE_PATHS
-RESOURCE_BUNDLE_PATHS=("$RESOURCE_PRODUCTS_DIR"/*_*.bundle(N/))
-for resource_bundle_path in "$RESOURCE_BUNDLE_PATHS[@]"; do
-  cp -R "$resource_bundle_path" "$RESOURCES_DIR/"
-  verify_resource_bundles "$resource_bundle_path"
+typeset -a RESOURCE_BUNDLE_NAMES
+RESOURCE_BUNDLE_NAMES=()
+resource_bundle_names_for_product "$APP_NAME"
+for required_bundle in "${REQUIRED_RESOURCE_BUNDLES[@]}"; do
+  append_unique_resource_bundle_name "$required_bundle"
 done
 
-for required_bundle in "$REQUIRED_RESOURCE_BUNDLES[@]"; do
+for resource_bundle_name in "${RESOURCE_BUNDLE_NAMES[@]}"; do
+  resource_bundle_source_path="$(resource_bundle_path "$resource_bundle_name")"
+  if [[ -z "$resource_bundle_source_path" ]]; then
+    echo "Missing build resource bundle: $resource_bundle_name" >&2
+    exit 1
+  fi
+
+  cp -R "$resource_bundle_source_path" "$RESOURCES_DIR/"
+  verify_resource_bundles "$resource_bundle_source_path"
+done
+
+for required_bundle in "${REQUIRED_RESOURCE_BUNDLES[@]}"; do
   if [[ ! -d "$RESOURCES_DIR/$required_bundle" ]]; then
     echo "Missing required packaged resource bundle: $required_bundle" >&2
     exit 1

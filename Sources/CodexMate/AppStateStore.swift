@@ -1479,6 +1479,7 @@ struct AppStateStore {
             listedStatus: .notLoaded,
             updatedAt: .distantPast,
             statusUpdatedAt: .distantPast,
+            authoritativeListPresence: .pendingInclusion,
             isWatched: false,
             activeTurnID: nil,
             lastTerminalActivityAt: nil,
