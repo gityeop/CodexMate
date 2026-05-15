@@ -37,6 +37,26 @@ final class ThreadSubscriptionPlannerTests: XCTestCase {
         XCTAssertEqual(plan.threadIDsToUnsubscribe, ["thread-4"])
     }
 
+    func testMakePlanWithZeroLimitDoesNotResumeBackgroundThreadsAndUnsubscribesExistingOnes() {
+        let recentThreads = [
+            threadRow(id: "thread-1", updatedAt: 300),
+            threadRow(id: "thread-2", updatedAt: 290),
+        ]
+
+        let plan = ThreadSubscriptionPlanner.makePlan(
+            recentThreads: recentThreads,
+            liveThreadUpdatedAtByID: [
+                "thread-1": Date(timeIntervalSince1970: 300),
+                "thread-3": Date(timeIntervalSince1970: 280),
+            ],
+            maxSubscribedThreads: 0
+        )
+
+        XCTAssertEqual(plan.targetThreadIDs, [])
+        XCTAssertEqual(plan.threadIDsToResume, [])
+        XCTAssertEqual(plan.threadIDsToUnsubscribe, ["thread-1", "thread-3"])
+    }
+
     private func threadRow(
         id: String,
         updatedAt: TimeInterval,

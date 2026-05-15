@@ -13,10 +13,10 @@ final class RefreshSchedulingPolicyTests: XCTestCase {
                 timerInterval: TimeInterval
             )
         ] = [
-            (false, .idle, true, 5, 60, 5),
-            (false, .running, true, 1, 15, 1),
+            (false, .idle, true, 30, 60, 30),
+            (false, .running, true, 5, 15, 5),
             (true, .idle, true, 1, 5, 1),
-            (false, .idle, false, 5, 5, 5),
+            (false, .idle, false, 30, 5, 5),
         ]
 
         for testCase in cases {

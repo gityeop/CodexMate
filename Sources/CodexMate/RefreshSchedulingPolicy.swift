@@ -3,7 +3,8 @@ import Foundation
 struct RefreshSchedulingPolicy: Equatable {
     private enum Interval {
         static let fastDesktopActivity: TimeInterval = 1
-        static let idleDesktopActivity: TimeInterval = 5
+        static let activeDesktopActivity: TimeInterval = 5
+        static let idleDesktopActivity: TimeInterval = 30
         static let menuThreadList: TimeInterval = 5
         static let activeThreadList: TimeInterval = 15
         static let idleThreadList: TimeInterval = 60
@@ -37,7 +38,7 @@ struct RefreshSchedulingPolicy: Equatable {
 
         if overallStatus == .running {
             return RefreshSchedulingPolicy(
-                desktopActivityInterval: Interval.fastDesktopActivity,
+                desktopActivityInterval: Interval.activeDesktopActivity,
                 threadListInterval: Interval.activeThreadList
             )
         }

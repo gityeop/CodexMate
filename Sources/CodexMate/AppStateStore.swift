@@ -707,6 +707,12 @@ struct AppStateStore {
             runningThreadIDs: desktopSnapshot.runningThreadIDs,
             observedAt: observedAt
         )
+        reconcileCompletedPendingThreads(
+            completedAtByThreadID: desktopSnapshot.latestTurnCompletedAtByThreadID,
+            pendingThreadIDs: desktopSnapshot.waitingForInputThreadIDs.union(desktopSnapshot.approvalThreadIDs),
+            runningThreadIDs: desktopSnapshot.runningThreadIDs,
+            observedAt: observedAt
+        )
         reconcileFailedThreads(
             failedThreadIDs: Set(desktopSnapshot.failedThreads.keys),
             observedAt: observedAt
@@ -731,6 +737,17 @@ struct AppStateStore {
         reconcileRunningThreads(
             runningThreadIDs: trustedRunningThreadIDs,
             activeTurnCount: desktopSnapshot.activeTurnCount,
+            observedAt: observedAt
+        )
+        reconcilePendingThreads(
+            pendingThreadIDs: desktopSnapshot.waitingForInputThreadIDs.union(desktopSnapshot.approvalThreadIDs),
+            runningThreadIDs: trustedRunningThreadIDs,
+            observedAt: observedAt
+        )
+        reconcileCompletedPendingThreads(
+            completedAtByThreadID: desktopSnapshot.latestTurnCompletedAtByThreadID,
+            pendingThreadIDs: desktopSnapshot.waitingForInputThreadIDs.union(desktopSnapshot.approvalThreadIDs),
+            runningThreadIDs: trustedRunningThreadIDs,
             observedAt: observedAt
         )
         desktopActiveTurnCount = connectedDesktopActiveTurnCount(
@@ -793,7 +810,11 @@ struct AppStateStore {
             row.pendingRequestReason = nil
             row.runtimePhase = .none
             row.activeTurnID = nil
-            row.status = Self.terminalStatusAfterDesktopCompletion(for: row)
+            let terminalStatus = Self.terminalStatusAfterDesktopCompletion(for: row)
+            row.status = terminalStatus
+            if Self.shouldReplaceStaleAuthoritativeRuntimeStatus(row.listedStatus) {
+                row.listedStatus = terminalStatus
+            }
             row.lastRuntimeEventAt = max(row.lastRuntimeEventAt ?? .distantPast, completedAt)
             row.statusUpdatedAt = max(row.statusUpdatedAt, completedAt)
             row.lastTerminalActivityAt = max(row.lastTerminalActivityAt ?? .distantPast, completedAt)
@@ -876,7 +897,10 @@ struct AppStateStore {
         observedAt: Date = Date()
     ) {
         for threadID in threadsByID.keys.sorted() {
-            guard var row = threadsByID[threadID], row.pendingRequestKind != nil, !pendingThreadIDs.contains(threadID) else {
+            guard var row = threadsByID[threadID],
+                  (row.pendingRequestKind != nil || row.status.isPending),
+                  !pendingThreadIDs.contains(threadID)
+            else {
                 continue
             }
 
@@ -892,10 +916,15 @@ struct AppStateStore {
                 row.status = .running
                 row.lastRuntimeEventAt = max(row.lastRuntimeEventAt ?? .distantPast, observedAt)
             } else {
-                row.status = row.listedStatus
                 row.pendingRequestKind = nil
                 row.pendingRequestReason = nil
                 row.runtimePhase = .none
+                row.activeTurnID = nil
+                let terminalStatus = Self.terminalStatusAfterDesktopPendingReconciliation(for: row)
+                row.status = terminalStatus
+                if Self.shouldReplaceStaleAuthoritativeRuntimeStatus(row.listedStatus) {
+                    row.listedStatus = terminalStatus
+                }
                 row.lastRuntimeEventAt = max(row.lastRuntimeEventAt ?? .distantPast, observedAt)
             }
             row.statusUpdatedAt = max(row.statusUpdatedAt, observedAt)
@@ -903,6 +932,46 @@ struct AppStateStore {
             guard row.displayStatus != previousStatus else { continue }
             threadsByID[threadID] = row
             recordDiagnostic("cleared stale pending thread=\(shortThreadID(threadID)) from=\(previousStatus.displayName) to=\(row.displayStatus.displayName) via desktop snapshot")
+        }
+    }
+
+    private mutating func reconcileCompletedPendingThreads(
+        completedAtByThreadID: [String: Date],
+        pendingThreadIDs: Set<String>,
+        runningThreadIDs: Set<String>,
+        observedAt: Date = Date()
+    ) {
+        guard !completedAtByThreadID.isEmpty else { return }
+
+        for threadID in completedAtByThreadID.keys.sorted() {
+            guard let completedAt = completedAtByThreadID[threadID],
+                  !pendingThreadIDs.contains(threadID),
+                  !runningThreadIDs.contains(threadID),
+                  var row = threadsByID[threadID],
+                  row.presentationStatus == .waitingForUser || row.status.isPending || row.listedStatus.isPending,
+                  Self.shouldAcceptDesktopPendingCompletion(for: row, completedAt: completedAt)
+            else {
+                continue
+            }
+
+            let previousStatus = row.displayStatus
+            row.pendingRequestKind = nil
+            row.pendingRequestReason = nil
+            row.runtimePhase = .none
+            row.activeTurnID = nil
+            let terminalStatus = Self.terminalStatusAfterDesktopCompletion(for: row)
+            row.status = terminalStatus
+            if Self.shouldReplaceStaleAuthoritativeRuntimeStatus(row.listedStatus) {
+                row.listedStatus = terminalStatus
+            }
+            row.lastRuntimeEventAt = max(row.lastRuntimeEventAt ?? .distantPast, observedAt)
+            row.statusUpdatedAt = max(row.statusUpdatedAt, observedAt)
+            row.lastTerminalActivityAt = max(row.lastTerminalActivityAt ?? .distantPast, completedAt)
+            row.hasInferredTerminalActivity = false
+            threadsByID[threadID] = row
+
+            guard row.displayStatus != previousStatus else { continue }
+            recordDiagnostic("cleared stale pending thread=\(shortThreadID(threadID)) from=\(previousStatus.displayName) to=\(row.displayStatus.displayName) via desktop completion")
         }
     }
 
@@ -1110,6 +1179,15 @@ struct AppStateStore {
             && completedAt >= lastTerminalActivityAt
     }
 
+    private static func shouldAcceptDesktopPendingCompletion(for row: ThreadRow, completedAt: Date) -> Bool {
+        let lastTerminalActivityAt = row.lastTerminalActivityAt ?? .distantPast
+        guard completedAt > lastTerminalActivityAt else {
+            return false
+        }
+
+        return completedAt.addingTimeInterval(completionHintClockTolerance) >= row.updatedAt
+    }
+
     private static func shouldAcceptDesktopTurnStart(for row: ThreadRow, startedAt: Date) -> Bool {
         guard startedAt >= (row.lastRuntimeEventAt ?? .distantPast) else {
             return false
@@ -1133,6 +1211,23 @@ struct AppStateStore {
             }
 
             return .idle
+        }
+    }
+
+    private static func terminalStatusAfterDesktopPendingReconciliation(for row: ThreadRow) -> ThreadStatus {
+        guard shouldReplaceStaleAuthoritativeRuntimeStatus(row.listedStatus) else {
+            return row.listedStatus
+        }
+
+        return terminalStatusAfterDesktopCompletion(for: row)
+    }
+
+    private static func shouldReplaceStaleAuthoritativeRuntimeStatus(_ status: ThreadStatus) -> Bool {
+        switch status {
+        case .waitingForInput, .needsApproval, .running:
+            return true
+        case .notLoaded, .idle, .failed:
+            return false
         }
     }
 

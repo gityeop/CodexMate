@@ -57,10 +57,15 @@ protocol RecentThreadListing: Sendable {
 
 protocol ThreadMetadataReading: Sendable {
     func threads(threadIDs: Set<String>) async throws -> [CodexThread]
+    func presentThreadIDs(threadIDs: Set<String>) async throws -> Set<String>
     func archivedThreadIDs(threadIDs: Set<String>) async throws -> Set<String>
 }
 
 extension ThreadMetadataReading {
+    func presentThreadIDs(threadIDs: Set<String>) async throws -> Set<String> {
+        Set(try await threads(threadIDs: threadIDs).map(\.id))
+    }
+
     func archivedThreadIDs(threadIDs: Set<String>) async throws -> Set<String> {
         []
     }
@@ -83,8 +88,24 @@ actor DesktopStateThreadMetadataReader: ThreadMetadataReading {
         try reader.threads(threadIDs: threadIDs)
     }
 
+    func presentThreadIDs(threadIDs: Set<String>) async throws -> Set<String> {
+        try reader.presentThreadIDs(threadIDs: threadIDs)
+    }
+
     func archivedThreadIDs(threadIDs: Set<String>) async throws -> Set<String> {
         try reader.archivedThreadIDs(threadIDs: threadIDs)
+    }
+}
+
+actor DesktopStateRecentThreadListing: RecentThreadListing {
+    private let reader: CodexDesktopStateReader
+
+    init(codexDirectoryURLProvider: @escaping @Sendable () -> URL) {
+        reader = CodexDesktopStateReader(codexDirectoryURLProvider: codexDirectoryURLProvider)
+    }
+
+    func recentThreads(limit: Int) async throws -> [CodexThread] {
+        try reader.recentThreads(limit: limit)
     }
 }
 
@@ -230,13 +251,14 @@ struct MenubarStatusSnapshot: Equatable {
 @MainActor
 final class MenubarController {
     private enum DesktopActivityScanPolicy {
-        static let candidateLimit = 64
+        static let candidateLimit = 16
         static let recentRuntimeLookback: TimeInterval = 5 * 60
     }
 
     private let loadDesktopActivity: @Sendable ([String: ThreadSessionContext], Date) async -> DesktopActivityUpdate
     private let loadRecentThreads: @Sendable (Int) async throws -> [CodexThread]
     private let loadThreadsByID: (Set<String>) async throws -> [CodexThread]
+    private let loadPresentThreadIDs: (Set<String>) async throws -> Set<String>
     private let loadArchivedThreadIDs: (Set<String>) async throws -> Set<String>
     private let loadProjectCatalog: () async throws -> CodexDesktopProjectCatalog
     private let configuration: MenubarControllerConfiguration
@@ -264,6 +286,9 @@ final class MenubarController {
         }
         self.loadThreadsByID = { threadIDs in
             try await threadMetadataReader.threads(threadIDs: threadIDs)
+        }
+        self.loadPresentThreadIDs = { threadIDs in
+            try await threadMetadataReader.presentThreadIDs(threadIDs: threadIDs)
         }
         self.loadArchivedThreadIDs = { threadIDs in
             try await threadMetadataReader.archivedThreadIDs(threadIDs: threadIDs)
@@ -389,7 +414,7 @@ final class MenubarController {
 
         do {
             let archivedThreadIDs = try await loadArchivedThreadIDs(candidateThreadIDs)
-            let presentThreadIDs = Set(try await loadThreadsByID(candidateThreadIDs).map(\.id))
+            let presentThreadIDs = try await loadPresentThreadIDs(candidateThreadIDs)
             let missingThreadIDs = staleThreadIDs
                 .subtracting(presentThreadIDs)
                 .subtracting(archivedThreadIDs)
@@ -952,8 +977,7 @@ final class MenubarController {
     private func requiresMetadataHydration(for thread: CodexThread) -> Bool {
         thread.path == nil
             || thread.source == nil
-            || thread.agentRole == nil
-            || thread.agentNickname == nil
+            || (thread.isSubagent && (thread.agentRole == nil || thread.agentNickname == nil))
     }
 
     private func bootstrapRecentThreads(

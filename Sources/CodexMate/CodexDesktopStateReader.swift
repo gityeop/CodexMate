@@ -42,6 +42,8 @@ struct CodexDesktopRuntimeSnapshot {
 struct CodexDesktopStateReader {
     private static let staleSessionPendingTolerance: TimeInterval = 1
     private static let sessionReadChunkSize = 64 * 1024
+    private static let sessionMaxLineReadSize = 1 * 1024 * 1024
+    private static let sessionMaxTailReadSize = 16 * 1024 * 1024
     private static let desktopLogDirectoryCalendar: Calendar = {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(secondsFromGMT: 0)!
@@ -281,7 +283,13 @@ struct CodexDesktopStateReader {
         let desktopApprovalStates = queryDesktopPendingApprovalThreadStates(
             candidateThreadIDs: Set(candidateSessionContexts.keys)
         )
-        let approvalThreadIDs = sessionStates.approvalThreadIDs.union(desktopApprovalStates.approvalThreadIDs)
+        let desktopApprovals = activeDesktopApprovalThreadIDs(
+            desktopApprovalStates.approvalThreadIDs,
+            sessionApprovalThreadIDs: sessionStates.approvalThreadIDs,
+            activeTaskThreadIDs: sessionStates.activeTaskThreadIDs,
+            latestTaskCompletedAtByThreadID: sessionStates.latestTaskCompletedAtByThreadID
+        )
+        let approvalThreadIDs = sessionStates.approvalThreadIDs.union(desktopApprovals.threadIDs)
         let runningThreadIDs = sessionStates.activeTaskThreadIDs
             .subtracting(sessionStates.waitingForInputThreadIDs)
             .subtracting(approvalThreadIDs)
@@ -291,8 +299,8 @@ struct CodexDesktopStateReader {
             "running=\(runningThreadIDs.count)",
             "waiting=\(sessionStates.waitingForInputThreadIDs.count)",
             "approval=\(approvalThreadIDs.count)",
-            "rows=\(sessionStates.debugRows.count + desktopApprovalStates.debugRows.count)",
-            "sample=\(desktopApprovalDebugSample(sessionDebugRows: sessionStates.debugRows, desktopDebugRows: desktopApprovalStates.debugRows))",
+            "rows=\(sessionStates.debugRows.count + desktopApprovals.debugRows.count)",
+            "sample=\(desktopApprovalDebugSample(sessionDebugRows: sessionStates.debugRows, desktopDebugRows: desktopApprovals.debugRows))",
             "databaseError=\(databaseError ?? "-")",
         ].joined(separator: " ")
 
@@ -310,6 +318,40 @@ struct CodexDesktopStateReader {
     }
 
     func threads(threadIDs: Set<String>) throws -> [CodexThread] {
+        try threads(threadIDs: threadIDs, includeSessionStatus: true)
+    }
+
+    func presentThreadIDs(threadIDs: Set<String>) throws -> Set<String> {
+        guard !threadIDs.isEmpty else {
+            return []
+        }
+
+        let candidateList = threadIDs
+            .map(sqlQuoted)
+            .sorted()
+            .joined(separator: ", ")
+        let output = try withStateDatabase { databaseURL in
+            try runSQLite(
+                sql: """
+                SELECT id
+                FROM threads
+                WHERE archived = 0
+                  AND id IN (\(candidateList));
+                """,
+                databaseURL: databaseURL
+            )
+        }
+        let databaseThreadIDs = Set(parseSQLiteLines(output.split(separator: "\n").map(String.init)))
+        let missingThreadIDs = threadIDs.subtracting(databaseThreadIDs)
+        let sessionBackedThreadIDs = Set(locateSessionFileURLs(threadIDs: missingThreadIDs).keys)
+
+        return databaseThreadIDs.union(sessionBackedThreadIDs)
+    }
+
+    private func threads(
+        threadIDs: Set<String>,
+        includeSessionStatus: Bool
+    ) throws -> [CodexThread] {
         guard !threadIDs.isEmpty else {
             return []
         }
@@ -364,7 +406,7 @@ struct CodexDesktopStateReader {
                     preview: preview,
                     createdAt: createdAt,
                     updatedAt: updatedAt,
-                    status: sessionBackedStatus(path: object["path"] as? String),
+                    status: includeSessionStatus ? sessionBackedStatus(path: object["path"] as? String) : .notLoaded,
                     cwd: cwd,
                     name: object["name"] as? String,
                     path: object["path"] as? String,
@@ -458,7 +500,10 @@ struct CodexDesktopStateReader {
         }
 
         let threadsByID = Dictionary(
-            uniqueKeysWithValues: try threads(threadIDs: Set(recentThreadIDs)).map { ($0.id, $0) }
+            uniqueKeysWithValues: try threads(
+                threadIDs: Set(recentThreadIDs),
+                includeSessionStatus: false
+            ).map { ($0.id, $0) }
         )
 
         return recentThreadIDs.compactMap { threadsByID[$0] }
@@ -893,10 +938,16 @@ struct CodexDesktopStateReader {
         let desktopApprovalStates = queryDesktopPendingApprovalThreadStates(
             candidateThreadIDs: Set(candidateSessionContexts.keys)
         )
+        let desktopApprovals = activeDesktopApprovalThreadIDs(
+            desktopApprovalStates.approvalThreadIDs,
+            sessionApprovalThreadIDs: sessionStates.approvalThreadIDs,
+            activeTaskThreadIDs: sessionStates.activeTaskThreadIDs,
+            latestTaskCompletedAtByThreadID: sessionStates.latestTaskCompletedAtByThreadID
+        )
         let waitingForInputThreadIDs = logStates.waitingForInputThreadIDs.union(sessionStates.waitingForInputThreadIDs)
         let approvalThreadIDs = logStates.approvalThreadIDs
             .union(sessionStates.approvalThreadIDs)
-            .union(desktopApprovalStates.approvalThreadIDs)
+            .union(desktopApprovals.threadIDs)
         let runningThreadIDs = sessionStates.activeTaskThreadIDs
             .subtracting(waitingForInputThreadIDs)
             .subtracting(approvalThreadIDs)
@@ -906,8 +957,30 @@ struct CodexDesktopStateReader {
             approvalThreadIDs: approvalThreadIDs,
             runningThreadIDs: runningThreadIDs,
             latestTaskCompletedAtByThreadID: sessionStates.latestTaskCompletedAtByThreadID,
-            debugRows: logStates.debugRows + sessionStates.debugRows + desktopApprovalStates.debugRows
+            debugRows: logStates.debugRows + sessionStates.debugRows + desktopApprovals.debugRows
         )
+    }
+
+    private func activeDesktopApprovalThreadIDs(
+        _ desktopApprovalThreadIDs: Set<String>,
+        sessionApprovalThreadIDs: Set<String>,
+        activeTaskThreadIDs: Set<String>,
+        latestTaskCompletedAtByThreadID: [String: Date]
+    ) -> (threadIDs: Set<String>, debugRows: [String]) {
+        let completedThreadIDs = Set(latestTaskCompletedAtByThreadID.keys)
+        let staleThreadIDs = desktopApprovalThreadIDs
+            .intersection(completedThreadIDs)
+            .subtracting(sessionApprovalThreadIDs)
+            .subtracting(activeTaskThreadIDs)
+        let activeThreadIDs = desktopApprovalThreadIDs.subtracting(staleThreadIDs)
+        let activeRows = activeThreadIDs.sorted().map { threadID in
+            "\(String(threadID.prefix(8))):desktop-approval"
+        }
+        let staleRows = staleThreadIDs.sorted().map { threadID in
+            "\(String(threadID.prefix(8))):desktop-approval-stale-complete"
+        }
+
+        return (activeThreadIDs, activeRows + staleRows)
     }
 
     private func queryDesktopPendingApprovalThreadStates(
@@ -1151,10 +1224,22 @@ struct CodexDesktopStateReader {
             if line.contains("method=item/commandExecution/requestApproval"),
                let requestID = tokenValue(in: line, after: "id=") {
                 requestIDToThreadID.removeValue(forKey: requestID)
+                continue
+            }
+
+            if Self.isDesktopApprovalCompletionLine(line),
+               let conversationID = tokenValue(in: line, after: "conversationId=") {
+                requestIDToThreadID = requestIDToThreadID.filter { $0.value != conversationID }
             }
         }
 
         return Set(requestIDToThreadID.values)
+    }
+
+    private static func isDesktopApprovalCompletionLine(_ line: String) -> Bool {
+        line.contains("[desktop-notifications] show turn-complete")
+            || line.contains("turn_completed_with_incomplete_plan")
+            || line.contains("latestTurnStatus=completed")
     }
 
     private static func tokenValue(in line: String, after marker: String) -> String? {
@@ -1406,6 +1491,8 @@ struct CodexDesktopStateReader {
         let totalBytes = handle.seekToEndOfFile()
         var offset = Int(totalBytes)
         var buffer = Data()
+        var scannedBytes = 0
+        var skippingOversizedLine = false
         var resolvedRequestUserInputCallIDs: Set<String> = []
         var resolvedApprovalCallIDs: Set<String> = []
         var unresolvedRequestUserInputCallIDs: Set<String> = []
@@ -1484,27 +1571,37 @@ struct CodexDesktopStateReader {
             return nil
         }
 
-        while offset > 0 {
-            let chunkSize = min(Self.sessionReadChunkSize, offset)
+        while offset > 0 && scannedBytes < Self.sessionMaxTailReadSize {
+            let remainingTailBudget = Self.sessionMaxTailReadSize - scannedBytes
+            let chunkSize = min(Self.sessionReadChunkSize, offset, remainingTailBudget)
             offset -= chunkSize
 
+            let segment: Data
             do {
                 try handle.seek(toOffset: UInt64(offset))
-                let chunk = try handle.read(upToCount: chunkSize) ?? Data()
+                var chunk = try handle.read(upToCount: chunkSize) ?? Data()
                 if chunk.isEmpty {
                     continue
                 }
-                buffer.insert(contentsOf: chunk, at: 0)
+                scannedBytes += chunk.count
+                if !skippingOversizedLine && !buffer.isEmpty {
+                    chunk.append(buffer)
+                }
+                segment = chunk
             } catch {
                 return nil
             }
 
-            while let newlineIndex = buffer.lastIndex(of: 0x0A) {
-                let lineStart = buffer.index(after: newlineIndex)
-                let lineData = buffer.subdata(in: lineStart..<buffer.endIndex)
-                buffer.removeSubrange(newlineIndex..<buffer.endIndex)
+            let split = Self.splitReverseJSONLLines(
+                in: segment,
+                skippingOversizedSuffix: skippingOversizedLine,
+                maxLineBytes: Self.sessionMaxLineReadSize
+            )
+            buffer = split.prefix
+            skippingOversizedLine = split.skippingOversizedPrefix
 
-                guard let line = Self.decodedJSONLine(from: lineData) else {
+            for lineRange in split.lineRanges {
+                guard let line = Self.decodedJSONLine(from: segment.subdata(in: lineRange)) else {
                     continue
                 }
 
@@ -1514,12 +1611,83 @@ struct CodexDesktopStateReader {
             }
         }
 
-        if let line = Self.decodedJSONLine(from: buffer),
+        if offset == 0,
+           !skippingOversizedLine,
+           let line = Self.decodedJSONLine(from: buffer),
            let state = consume(line) {
             return state
         }
 
         return finalState(hasActiveTask: false)
+    }
+
+    private static func splitReverseJSONLLines(
+        in data: Data,
+        skippingOversizedSuffix: Bool,
+        maxLineBytes: Int
+    ) -> (lineRanges: [Range<Int>], prefix: Data, skippingOversizedPrefix: Bool) {
+        guard !data.isEmpty else {
+            return ([], Data(), skippingOversizedSuffix)
+        }
+
+        var lineRanges: [Range<Int>] = []
+        var prefixEnd = data.count
+        var isSkippingOversizedPrefix = false
+
+        data.withUnsafeBytes { rawBuffer in
+            let bytes = rawBuffer.bindMemory(to: UInt8.self)
+            guard !bytes.isEmpty else {
+                prefixEnd = 0
+                return
+            }
+
+            var lineEnd = bytes.count
+            if skippingOversizedSuffix {
+                var foundLineBoundary = false
+                while lineEnd > 0 {
+                    lineEnd -= 1
+                    if bytes[lineEnd] == 0x0A {
+                        foundLineBoundary = true
+                        break
+                    }
+                }
+
+                guard foundLineBoundary else {
+                    prefixEnd = 0
+                    isSkippingOversizedPrefix = true
+                    return
+                }
+            } else if bytes[lineEnd - 1] == 0x0A {
+                lineEnd -= 1
+            }
+
+            var index = lineEnd
+            while index > 0 {
+                index -= 1
+
+                guard bytes[index] == 0x0A else {
+                    continue
+                }
+
+                let lineStart = index + 1
+                if lineStart < lineEnd {
+                    let lineByteCount = lineEnd - lineStart
+                    if lineByteCount <= maxLineBytes {
+                        lineRanges.append(lineStart..<lineEnd)
+                    }
+                }
+                lineEnd = index
+            }
+
+            prefixEnd = lineEnd
+            if prefixEnd > maxLineBytes {
+                prefixEnd = 0
+                isSkippingOversizedPrefix = true
+            }
+        }
+
+        let prefix = prefixEnd > 0 ? data.subdata(in: 0..<prefixEnd) : Data()
+        return (lineRanges, prefix, isSkippingOversizedPrefix)
     }
 
     private func sessionBackedThreads(threadIDs: Set<String>) -> [CodexThread] {

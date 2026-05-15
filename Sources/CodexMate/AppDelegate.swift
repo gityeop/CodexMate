@@ -79,11 +79,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         static let initialFetchLimit = 32
         static let fetchPageLimit = 64
         static let maxTrackedThreads = 256
-        static let initialSubscriptionLimit = 8
+        static let liveSubscriptionLimit = 0
         static let subscriptionConcurrency = 4
         static let visibleThreadLimit = 8
         static let maxProjectDisplayNameLength = 28
         static let maxThreadDisplayTitleLength = 44
+    }
+
+    private enum RuntimeMode {
+        static let startsAppServer = ThreadListDisplay.liveSubscriptionLimit > 0
+        static let localConnectionDescription = "local desktop state"
     }
 
     private enum DefaultsKey {
@@ -127,6 +132,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         client: client,
         fetchPageLimit: ThreadListDisplay.fetchPageLimit
     )
+    private lazy var desktopRecentThreadListing = DesktopStateRecentThreadListing(
+        codexDirectoryURLProvider: { [codexHomeStore] in
+            codexHomeStore.currentDirectoryURL
+        }
+    )
     private lazy var desktopThreadMetadataReader = DesktopStateThreadMetadataReader(
         codexDirectoryURLProvider: { [codexHomeStore] in
             codexHomeStore.currentDirectoryURL
@@ -139,7 +149,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     )
     private lazy var controller = MenubarController(
         desktopActivityLoader: desktopActivityService,
-        recentThreadListing: appServerRecentThreadListing,
+        recentThreadListing: RuntimeMode.startsAppServer ? appServerRecentThreadListing : desktopRecentThreadListing,
         threadMetadataReader: desktopThreadMetadataReader,
         projectCatalogLoader: asyncProjectCatalogLoader,
         initialThreadReadMarkers: AppDelegate.loadThreadReadMarkers(),
@@ -603,6 +613,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         controller.setConnection(.connecting)
         renderMenu()
 
+        guard RuntimeMode.startsAppServer else {
+            connectedBinaryPath = RuntimeMode.localConnectionDescription
+            controller.setConnection(.connected(binaryPath: RuntimeMode.localConnectionDescription))
+            shouldRefreshDesktopActivityAfterNextThreadRefresh = true
+            renderMenu()
+
+            do {
+                try await loadInitialThreads()
+            } catch {
+                completeInitialThreadBootstrap(requestBackfill: false)
+                controller.recordDiagnostic("Initial local thread load failed: \(error.localizedDescription)")
+                renderMenu()
+                scheduleRefreshTimerIfNeeded()
+                armFastThreadDiscoveryRefreshWindow()
+                requestDesktopActivityRefresh()
+                requestThreadRefresh()
+                return
+            }
+
+            armFastThreadDiscoveryRefreshWindow()
+            scheduleRefreshTimerIfNeeded()
+            requestDesktopActivityRefresh()
+            return
+        }
+
         do {
             let binaryURL = try CodexBinaryLocator.locate()
             let initializeResponse = try await client.start(codexBinaryURL: binaryURL)
@@ -672,6 +707,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func handleClientTermination(reason: String?) {
         liveSubscribedThreadUpdatedAtByID.removeAll()
+        pendingLiveSubscriptionThreadIDs.removeAll()
         completeInitialThreadBootstrap(requestBackfill: false)
 
         let message = reason ?? "app-server process exited"
@@ -1158,13 +1194,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         guard isMenuOpen else {
             let statusOverride = debugStatusOverride
-            let statusSnapshot = controller.prepareStatusSnapshot(
-                projectLimit: preferences.projectLimit,
-                visibleThreadLimit: preferences.threadsPerProjectLimit
-            )
             renderStatusItem(
-                overallStatus: statusOverride ?? statusSnapshot.overallStatus,
-                hasUnreadThreads: statusOverride == nil ? statusSnapshot.hasUnreadThreads : false
+                overallStatus: statusOverride ?? controller.overallStatus,
+                hasUnreadThreads: statusOverride == nil ? controller.hasUnreadThreads : false
             )
             scheduleRefreshTimerIfNeeded()
             return
@@ -1766,6 +1798,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func requestInitialSubscriptionWarmup() {
+        guard ThreadListDisplay.liveSubscriptionLimit > 0 else {
+            return
+        }
+
         Task { @MainActor [weak self] in
             await self?.warmInitialSubscriptions()
         }
@@ -1792,6 +1828,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func requestImmediateThreadSubscription(threadID: String) {
+        guard ThreadListDisplay.liveSubscriptionLimit > 0 else {
+            return
+        }
+
         guard liveSubscribedThreadUpdatedAtByID[threadID] == nil,
               pendingLiveSubscriptionThreadIDs.insert(threadID).inserted else {
             return
@@ -1840,7 +1880,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let plan = ThreadSubscriptionPlanner.makePlan(
             recentThreads: controller.recentThreads,
             liveThreadUpdatedAtByID: subscribedOrPendingThreadUpdatedAtByID,
-            maxSubscribedThreads: ThreadListDisplay.maxTrackedThreads
+            maxSubscribedThreads: ThreadListDisplay.liveSubscriptionLimit
         )
 
         if !plan.threadIDsToUnsubscribe.isEmpty {
@@ -1875,7 +1915,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             seenThreadIDs.insert(threadID)
             threadIDsToResume.append(threadID)
 
-            if threadIDsToResume.count == ThreadListDisplay.initialSubscriptionLimit {
+            if threadIDsToResume.count == ThreadListDisplay.liveSubscriptionLimit {
                 break
             }
         }
