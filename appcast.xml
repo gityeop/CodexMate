@@ -3,20 +3,20 @@
     <channel>
         <title>CodexMate</title>
         <item>
-            <title>0.0.23</title>
-            <pubDate>Fri, 15 May 2026 04:14:38 +0900</pubDate>
-            <link>https://github.com/gityeop/CodexMate/releases/tag/v0.0.23</link>
-            <sparkle:version>23</sparkle:version>
-            <sparkle:shortVersionString>0.0.23</sparkle:shortVersionString>
+            <title>0.0.24</title>
+            <pubDate>Sat, 16 May 2026 04:22:38 +0900</pubDate>
+            <link>https://github.com/gityeop/CodexMate/releases/tag/v0.0.24</link>
+            <sparkle:version>24</sparkle:version>
+            <sparkle:shortVersionString>0.0.24</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description sparkle:format="markdown"><![CDATA[# CodexMate 0.0.23
+            <description sparkle:format="markdown"><![CDATA[# CodexMate 0.0.24
 
-- Reduces idle energy use by pausing idle, unread, and failed notch sprite animations until the notch is hovered or the menu is open.
-- Keeps the initial loading three-dot animation moving while recent threads are loading.
-- Limits global pointer movement handling so off-notch mouse movement avoids unnecessary main-thread work.
+- Removes the dormant background `thread/resume` subscription path so menu status refreshes no longer wake Codex threads just to check state.
+- Keeps recent thread and activity status refreshes on lightweight local desktop/session state, reducing idle CPU and MCP process pressure.
+- Fixes stale waiting indicators and reduces retry polling pressure while keeping new activity discovery responsive.
 ]]></description>
-            <enclosure url="https://github.com/gityeop/CodexMate/releases/latest/download/CodexMate-0.0.23.zip" length="4646796" type="application/octet-stream" sparkle:edSignature="wzU3ZgLmNSY5lzVva3CQqeYEeUm75ZwmVfY5ove6THkT/fgySCvrTXam7DXxNHXLCQ/yIjnSiA/eY0uw+/MZBw=="/>
+            <enclosure url="https://github.com/gityeop/CodexMate/releases/latest/download/CodexMate-0.0.24.zip" length="4521826" type="application/octet-stream" sparkle:edSignature="DRoraR0J1jwLYKXrGFhQ0m8f6TE33FRrUz0Aviq+VSfIOcd9bxSfLJ2D/W/z9t48zl3LsGVq3l/3hwGVHyehAA=="/>
         </item>
     </channel>
 </rss>
