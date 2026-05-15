@@ -77,17 +77,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private enum ThreadListDisplay {
         static let initialFetchLimit = 32
-        static let fetchPageLimit = 64
         static let maxTrackedThreads = 256
-        static let liveSubscriptionLimit = 0
-        static let subscriptionConcurrency = 4
         static let visibleThreadLimit = 8
         static let maxProjectDisplayNameLength = 28
         static let maxThreadDisplayTitleLength = 44
     }
 
     private enum RuntimeMode {
-        static let startsAppServer = ThreadListDisplay.liveSubscriptionLimit > 0
         static let localConnectionDescription = "local desktop state"
     }
 
@@ -108,7 +104,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let relativeDateFormatter = RelativeDateTimeFormatter()
     private let preferences = AppPreferencesStore()
     private let strings = AppStrings.shared
-    private let client = CodexAppServerClient()
     private let codexHomeStore = CodexHomeStore()
     private lazy var desktopActivityService = DesktopActivityService(
         codexDirectoryURLProvider: { [codexHomeStore] in
@@ -128,10 +123,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let failedIndicatorImage = AppDelegate.makeTextIndicatorImage("⚠️")
     private let hoverTooltipController = ThreadHoverTooltipController()
     private let defaults = UserDefaults.standard
-    private lazy var appServerRecentThreadListing = AppServerRecentThreadListing(
-        client: client,
-        fetchPageLimit: ThreadListDisplay.fetchPageLimit
-    )
     private lazy var desktopRecentThreadListing = DesktopStateRecentThreadListing(
         codexDirectoryURLProvider: { [codexHomeStore] in
             codexHomeStore.currentDirectoryURL
@@ -149,7 +140,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     )
     private lazy var controller = MenubarController(
         desktopActivityLoader: desktopActivityService,
-        recentThreadListing: RuntimeMode.startsAppServer ? appServerRecentThreadListing : desktopRecentThreadListing,
+        recentThreadListing: desktopRecentThreadListing,
         threadMetadataReader: desktopThreadMetadataReader,
         projectCatalogLoader: asyncProjectCatalogLoader,
         initialThreadReadMarkers: AppDelegate.loadThreadReadMarkers(),
@@ -164,10 +155,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             threadReadMarkerRetentionSeconds: RetentionPolicy.threadReadMarkerSeconds
         )
     )
-    private var liveSubscribedThreadUpdatedAtByID: [String: Date] = [:]
-    private var pendingLiveSubscriptionThreadIDs: Set<String> = []
     private var pendingThreadMetadataRefreshIDs: Set<String> = []
-    private var connectedBinaryPath: String?
     private var refreshTimer: Timer?
     private var refreshTimerInterval: TimeInterval?
     private var currentStatusSprite: MenubarStatusPresentation.StatusSprite = .connecting
@@ -260,7 +248,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         relativeDateFormatter.locale = preferences.locale
         applyPresentationMode(force: true)
 
-        configureClientCallbacks()
         configureForegroundRefreshObservers()
         requestNotificationPermission()
         isInitialThreadBootstrapInProgress = true
@@ -300,10 +287,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         removeMenuShortcutEventMonitor()
         removeMenuDismissEventMonitors()
         notchStatusOverlay.hide()
-
-        Task {
-            await client.stop()
-        }
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
@@ -547,25 +530,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    private func configureClientCallbacks() {
-        Task { [weak self] in
-            guard let self else { return }
-
-            await client.setCallbacks(
-                onMessage: { [weak self] message in
-                    Task { @MainActor [weak self] in
-                        self?.handleClientMessage(message)
-                    }
-                },
-                onTermination: { [weak self] reason in
-                    Task { @MainActor [weak self] in
-                        self?.handleClientTermination(reason: reason)
-                    }
-                }
-            )
-        }
-    }
-
     private func requestNotificationPermission() {
         guard notificationsEnabled else {
             controller.recordDiagnostic("User notifications are disabled outside an .app bundle.")
@@ -613,67 +577,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         controller.setConnection(.connecting)
         renderMenu()
 
-        guard RuntimeMode.startsAppServer else {
-            connectedBinaryPath = RuntimeMode.localConnectionDescription
-            controller.setConnection(.connected(binaryPath: RuntimeMode.localConnectionDescription))
-            shouldRefreshDesktopActivityAfterNextThreadRefresh = true
+        controller.setConnection(.connected(binaryPath: RuntimeMode.localConnectionDescription))
+        shouldRefreshDesktopActivityAfterNextThreadRefresh = true
+        renderMenu()
+
+        do {
+            try await loadInitialThreads()
+        } catch {
+            completeInitialThreadBootstrap(requestBackfill: false)
+            controller.recordDiagnostic("Initial local thread load failed: \(error.localizedDescription)")
             renderMenu()
-
-            do {
-                try await loadInitialThreads()
-            } catch {
-                completeInitialThreadBootstrap(requestBackfill: false)
-                controller.recordDiagnostic("Initial local thread load failed: \(error.localizedDescription)")
-                renderMenu()
-                scheduleRefreshTimerIfNeeded()
-                armFastThreadDiscoveryRefreshWindow()
-                requestDesktopActivityRefresh()
-                requestThreadRefresh()
-                return
-            }
-
-            armFastThreadDiscoveryRefreshWindow()
             scheduleRefreshTimerIfNeeded()
+            armFastThreadDiscoveryRefreshWindow()
             requestDesktopActivityRefresh()
+            requestThreadRefresh()
             return
         }
 
-        do {
-            let binaryURL = try CodexBinaryLocator.locate()
-            let initializeResponse = try await client.start(codexBinaryURL: binaryURL)
-            codexHomeStore.update(codexHomePath: initializeResponse.codexHome)
-            connectedBinaryPath = binaryURL.path
-            controller.setConnection(.connected(binaryPath: binaryURL.path))
-            shouldRefreshDesktopActivityAfterNextThreadRefresh = true
-            renderMenu()
-
-            do {
-                try await loadInitialThreads()
-            } catch {
-                completeInitialThreadBootstrap(requestBackfill: false)
-                controller.recordDiagnostic("Initial thread load failed: \(error.localizedDescription)")
-                renderMenu()
-                scheduleRefreshTimerIfNeeded()
-                armFastThreadDiscoveryRefreshWindow()
-                requestDesktopActivityRefresh()
-                requestThreadRefresh()
-                requestInitialSubscriptionWarmup()
-                return
-            }
-
-            armFastThreadDiscoveryRefreshWindow()
-            scheduleRefreshTimerIfNeeded()
-            requestDesktopActivityRefresh()
-            requestInitialSubscriptionWarmup()
-        } catch {
-            completeInitialThreadBootstrap(requestBackfill: false)
-            controller.recordDiagnostic("Initial app-server connection failed; thread list unavailable until reconnect")
-            controller.setConnection(.failed(message: error.localizedDescription))
-            renderMenu()
-            scheduleRefreshTimerIfNeeded()
-            requestDesktopActivityRefresh()
-            requestThreadRefresh()
-        }
+        armFastThreadDiscoveryRefreshWindow()
+        scheduleRefreshTimerIfNeeded()
+        requestDesktopActivityRefresh()
     }
 
     private func refreshThreads() async throws {
@@ -681,12 +604,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let pruneEffects = await controller.pruneThreadsMissingFromDesktopState()
         let shouldFollowUpWithDesktopActivity = shouldRefreshDesktopActivityAfterNextThreadRefresh
         shouldRefreshDesktopActivityAfterNextThreadRefresh = false
-        if await client.isConnected() {
-            markConnectionHealthy()
-        }
         applyControllerEffects(effects)
         applyControllerEffects(pruneEffects)
-        await reconcileLiveSubscriptions()
         renderMenu()
         if shouldFollowUpWithDesktopActivity {
             requestDesktopActivityRefresh()
@@ -698,16 +617,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             projectLimit: preferences.projectLimit,
             visibleThreadLimit: preferences.threadsPerProjectLimit
         )
-        if await client.isConnected() {
-            markConnectionHealthy()
-        }
         completeInitialThreadBootstrap(requestBackfill: true)
         renderMenu()
     }
 
     private func handleClientTermination(reason: String?) {
-        liveSubscribedThreadUpdatedAtByID.removeAll()
-        pendingLiveSubscriptionThreadIDs.removeAll()
         completeInitialThreadBootstrap(requestBackfill: false)
 
         let message = reason ?? "app-server process exited"
@@ -740,7 +654,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 guard let self else { return }
                 controller.apply(notification: .threadStarted(notification))
                 debugLog("received thread/started thread=\(shortThreadID(notification.thread.id))")
-                trackLiveThread(
+                trackActivityThread(
                     notification.thread.id,
                     boostDiscovery: true,
                     requestThreadMetadataRefresh: true
@@ -750,13 +664,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             decodeAndApply(payload, as: ThreadStatusChangedNotification.self) { [weak self] notification in
                 guard let self else { return }
                 controller.apply(notification: .threadStatusChanged(notification))
-                trackLiveThread(notification.threadId)
+                trackActivityThread(notification.threadId)
             }
         case "thread/archived":
             decodeAndApply(payload, as: ThreadArchivedNotification.self) { [weak self] notification in
                 guard let self else { return }
-                liveSubscribedThreadUpdatedAtByID.removeValue(forKey: notification.threadId)
-                pendingLiveSubscriptionThreadIDs.remove(notification.threadId)
                 controller.apply(notification: .threadArchived(notification))
                 armFastThreadDiscoveryRefreshWindow()
                 requestThreadRefresh()
@@ -765,7 +677,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             decodeAndApply(payload, as: ThreadUnarchivedNotification.self) { [weak self] notification in
                 guard let self else { return }
                 controller.apply(notification: .threadUnarchived(notification))
-                trackLiveThread(
+                trackActivityThread(
                     notification.threadId,
                     boostDiscovery: true,
                     requestThreadMetadataRefresh: true
@@ -775,13 +687,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             decodeAndApply(payload, as: ThreadNameUpdatedNotification.self) { [weak self] notification in
                 guard let self else { return }
                 controller.apply(notification: .threadNameUpdated(notification))
-                trackLiveThread(notification.threadId, subscribe: false)
+                trackActivityThread(notification.threadId)
             }
         case "turn/started":
             decodeAndApply(payload, as: TurnStartedNotification.self) { [weak self] notification in
                 guard let self else { return }
                 controller.apply(notification: .turnStarted(notification))
-                trackLiveThread(
+                trackActivityThread(
                     notification.threadId,
                     boostDiscovery: true,
                     requestThreadMetadataRefresh: true
@@ -791,13 +703,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             decodeAndApply(payload, as: ItemStartedNotification.self) { [weak self] notification in
                 guard let self else { return }
                 controller.apply(notification: .itemStarted(notification))
-                trackLiveThread(notification.threadId)
+                trackActivityThread(notification.threadId)
             }
         case "turn/completed":
             decodeAndApply(payload, as: TurnCompletedNotification.self) { [weak self] notification in
                 guard let self else { return }
                 controller.apply(notification: .turnCompleted(notification))
-                trackLiveThread(
+                trackActivityThread(
                     notification.threadId,
                     requestThreadMetadataRefresh: true
                 )
@@ -816,7 +728,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             decodeAndApply(payload, as: ErrorNotificationPayload.self) { [weak self] notification in
                 guard let self else { return }
                 controller.apply(notification: .error(notification))
-                trackLiveThread(notification.threadId, requestThreadMetadataRefresh: true)
+                trackActivityThread(notification.threadId, requestThreadMetadataRefresh: true)
                 requestDesktopActivityRefresh()
 
                 if !notification.willRetry && preferences.failureNotificationsEnabled {
@@ -835,13 +747,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             decodeAndApply(payload, as: ServerRequestResolvedNotification.self) { [weak self] notification in
                 guard let self else { return }
                 controller.apply(notification: .serverRequestResolved(notification))
-                trackLiveThread(notification.threadId)
+                trackActivityThread(notification.threadId)
             }
         case "thread/closed":
             decodeAndApply(payload, as: ThreadClosedNotification.self) { [weak self] notification in
                 guard let self else { return }
-                liveSubscribedThreadUpdatedAtByID.removeValue(forKey: notification.threadId)
-                pendingLiveSubscriptionThreadIDs.remove(notification.threadId)
                 controller.markUnwatched(threadIDs: Set([notification.threadId]))
                 requestThreadRefresh()
             }
@@ -879,7 +789,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
 
             controller.apply(serverRequest: .toolUserInput(request))
-            trackLiveThread(
+            trackActivityThread(
                 request.threadId,
                 boostDiscovery: true,
                 requestThreadMetadataRefresh: true
@@ -902,7 +812,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
 
             controller.apply(serverRequest: .approval(request))
-            trackLiveThread(
+            trackActivityThread(
                 request.threadId,
                 boostDiscovery: true,
                 requestThreadMetadataRefresh: true
@@ -1099,11 +1009,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         renderMenu()
     }
 
-    private func markConnectionHealthy() {
-        guard let connectedBinaryPath else { return }
-        controller.setConnection(.connected(binaryPath: connectedBinaryPath))
-    }
-
     private func renderStatusItem(overallStatus: AppStateStore.OverallStatus, hasUnreadThreads: Bool) {
         let sprite = MenubarStatusPresentation.statusItemSprite(
             overallStatus: overallStatus,
@@ -1203,7 +1108,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         let preparedSnapshot = controller.prepareSnapshot(
-            additionalTrackedThreadIDs: Set(liveSubscribedThreadUpdatedAtByID.keys),
             projectLimit: preferences.projectLimit,
             visibleThreadLimit: preferences.threadsPerProjectLimit
         )
@@ -1797,21 +1701,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    private func requestInitialSubscriptionWarmup() {
-        guard ThreadListDisplay.liveSubscriptionLimit > 0 else {
-            return
-        }
-
-        Task { @MainActor [weak self] in
-            await self?.warmInitialSubscriptions()
-        }
-    }
-
-    private func trackLiveThread(
+    private func trackActivityThread(
         _ threadID: String,
         boostDiscovery: Bool = false,
         requestThreadMetadataRefresh: Bool = false,
-        subscribe: Bool = true,
         now: Date = Date()
     ) {
         if boostDiscovery {
@@ -1820,27 +1713,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         if requestThreadMetadataRefresh {
             requestLiveThreadMetadataRefresh(threadID: threadID, now: now)
-        }
-
-        if subscribe {
-            requestImmediateThreadSubscription(threadID: threadID)
-        }
-    }
-
-    private func requestImmediateThreadSubscription(threadID: String) {
-        guard ThreadListDisplay.liveSubscriptionLimit > 0 else {
-            return
-        }
-
-        guard liveSubscribedThreadUpdatedAtByID[threadID] == nil,
-              pendingLiveSubscriptionThreadIDs.insert(threadID).inserted else {
-            return
-        }
-
-        Task { @MainActor [weak self] in
-            guard let self else { return }
-            await resumeThreadSubscriptions([threadID])
-            renderMenu()
         }
     }
 
@@ -1869,163 +1741,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.applyControllerEffects(effects)
             self.renderMenu()
         }
-    }
-
-    private func reconcileLiveSubscriptions() async {
-        var subscribedOrPendingThreadUpdatedAtByID = liveSubscribedThreadUpdatedAtByID
-        for threadID in pendingLiveSubscriptionThreadIDs {
-            subscribedOrPendingThreadUpdatedAtByID[threadID] = .distantFuture
-        }
-
-        let plan = ThreadSubscriptionPlanner.makePlan(
-            recentThreads: controller.recentThreads,
-            liveThreadUpdatedAtByID: subscribedOrPendingThreadUpdatedAtByID,
-            maxSubscribedThreads: ThreadListDisplay.liveSubscriptionLimit
-        )
-
-        if !plan.threadIDsToUnsubscribe.isEmpty {
-            await unsubscribeThreadSubscriptions(plan.threadIDsToUnsubscribe)
-        }
-
-        if !plan.threadIDsToResume.isEmpty {
-            await resumeThreadSubscriptions(plan.threadIDsToResume)
-        }
-    }
-
-    private func warmInitialSubscriptions() async {
-        let threadIDs = initialWarmSubscriptionThreadIDs()
-        guard !threadIDs.isEmpty else {
-            return
-        }
-
-        await resumeThreadSubscriptions(threadIDs)
-        renderMenu()
-    }
-
-    private func initialWarmSubscriptionThreadIDs() -> [String] {
-        let candidates = controller.recentThreads.map(\.id)
-        var seenThreadIDs: Set<String> = Set(liveSubscribedThreadUpdatedAtByID.keys)
-        var threadIDsToResume: [String] = []
-
-        for threadID in candidates {
-            guard !seenThreadIDs.contains(threadID) else {
-                continue
-            }
-
-            seenThreadIDs.insert(threadID)
-            threadIDsToResume.append(threadID)
-
-            if threadIDsToResume.count == ThreadListDisplay.liveSubscriptionLimit {
-                break
-            }
-        }
-
-        return threadIDsToResume
-    }
-
-    private func resumeThreadSubscriptions(_ threadIDs: [String]) async {
-        guard !threadIDs.isEmpty else {
-            return
-        }
-
-        let client = self.client
-        let results = await batchedThreadRequests(threadIDs: threadIDs) { threadID in
-            do {
-                let response: ThreadResumeResponse = try await client.call(
-                    method: "thread/resume",
-                    params: ThreadResumeParams(threadId: threadID, persistExtendedHistory: false)
-                )
-
-                return (threadID: threadID, thread: Optional(response.thread), errorMessage: Optional<String>.none)
-            } catch {
-                return (threadID: threadID, thread: Optional<CodexThread>.none, errorMessage: error.localizedDescription)
-            }
-        }
-
-        for result in results {
-            pendingLiveSubscriptionThreadIDs.remove(result.threadID)
-            if let thread = result.thread {
-                guard controller.recentThreads.contains(where: { $0.id == thread.id }) else {
-                    liveSubscribedThreadUpdatedAtByID.removeValue(forKey: thread.id)
-                    continue
-                }
-
-                markConnectionHealthy()
-                liveSubscribedThreadUpdatedAtByID[thread.id] = thread.updatedDate
-                if controller.markWatched(thread: thread) {
-                    persistThreadReadMarkers()
-                }
-            } else if let errorMessage = result.errorMessage {
-                controller.recordDiagnostic("Failed to resume thread \(result.threadID.prefix(8)): \(errorMessage)")
-            }
-        }
-    }
-
-    private func unsubscribeThreadSubscriptions(_ threadIDs: [String]) async {
-        guard !threadIDs.isEmpty else {
-            return
-        }
-
-        let client = self.client
-        let results = await batchedThreadRequests(threadIDs: threadIDs) { threadID in
-            do {
-                let response: ThreadUnsubscribeResponse = try await client.call(
-                    method: "thread/unsubscribe",
-                    params: ThreadUnsubscribeParams(threadId: threadID)
-                )
-
-                return (threadID: threadID, responseStatus: Optional(response.status), errorMessage: Optional<String>.none)
-            } catch {
-                return (threadID: threadID, responseStatus: Optional<String>.none, errorMessage: error.localizedDescription)
-            }
-        }
-
-        for result in results {
-            pendingLiveSubscriptionThreadIDs.remove(result.threadID)
-            if let status = result.responseStatus {
-                liveSubscribedThreadUpdatedAtByID.removeValue(forKey: result.threadID)
-                if ["unsubscribed", "notSubscribed", "notLoaded"].contains(status) {
-                    controller.markUnwatched(threadIDs: Set([result.threadID]))
-                }
-            } else if let errorMessage = result.errorMessage {
-                controller.recordDiagnostic("Failed to unsubscribe thread \(result.threadID.prefix(8)): \(errorMessage)")
-            }
-        }
-    }
-
-    private func batchedThreadRequests<Result: Sendable>(
-        threadIDs: [String],
-        operation: @escaping @Sendable (String) async -> Result
-    ) async -> [Result] {
-        var results: [Result] = []
-        var index = 0
-
-        while index < threadIDs.count {
-            let upperBound = min(index + ThreadListDisplay.subscriptionConcurrency, threadIDs.count)
-            let batch = Array(threadIDs[index..<upperBound])
-
-            let batchResults = await withTaskGroup(of: (Int, Result).self) { group in
-                for (offset, threadID) in batch.enumerated() {
-                    group.addTask {
-                        (offset, await operation(threadID))
-                    }
-                }
-
-                var collected: [(Int, Result)] = []
-                for await result in group {
-                    collected.append(result)
-                }
-
-                return collected
-                    .sorted { $0.0 < $1.0 }
-                    .map(\.1)
-            }
-
-            results.append(contentsOf: batchResults)
-            index = upperBound
-        }
-
-        return results
     }
 
     private func openMenu() {

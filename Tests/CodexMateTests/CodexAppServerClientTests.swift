@@ -143,12 +143,6 @@ final class CodexAppServerClientTests: XCTestCase {
         XCTAssertEqual(object["archived"] as? Bool, false)
     }
 
-    func testThreadUnsubscribeParamsEncodeThreadID() throws {
-        let data = try JSONEncoder().encode(ThreadUnsubscribeParams(threadId: "thread-1"))
-        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
-
-        XCTAssertEqual(object["threadId"] as? String, "thread-1")
-    }
     private func makeFakeCodexBinary(
         delayedShutdownSeconds: TimeInterval = 0,
         keepRunningUntilStopped: Bool = false,

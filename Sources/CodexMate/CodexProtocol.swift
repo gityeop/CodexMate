@@ -49,26 +49,9 @@ struct ThreadListParams: Encodable {
     }
 }
 
-struct ThreadResumeParams: Encodable {
-    let threadId: String
-    let persistExtendedHistory: Bool
-}
-
-struct ThreadUnsubscribeParams: Encodable {
-    let threadId: String
-}
-
 struct ThreadListResponse: Decodable {
     let data: [CodexThread]
     let nextCursor: String?
-}
-
-struct ThreadResumeResponse: Decodable {
-    let thread: CodexThread
-}
-
-struct ThreadUnsubscribeResponse: Decodable, Equatable {
-    let status: String
 }
 
 struct CodexThread: Decodable, Equatable {
