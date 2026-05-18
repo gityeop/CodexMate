@@ -36,6 +36,13 @@ struct RefreshSchedulingPolicy: Equatable {
             )
         }
 
+        if overallStatus == .waitingForUser {
+            return RefreshSchedulingPolicy(
+                desktopActivityInterval: Interval.activeDesktopActivity,
+                threadListInterval: Interval.idleThreadList
+            )
+        }
+
         if overallStatus == .running {
             return RefreshSchedulingPolicy(
                 desktopActivityInterval: Interval.activeDesktopActivity,

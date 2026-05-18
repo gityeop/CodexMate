@@ -15,6 +15,7 @@ final class RefreshSchedulingPolicyTests: XCTestCase {
         ] = [
             (false, .idle, true, 30, 60, 30),
             (false, .running, true, 5, 15, 5),
+            (false, .waitingForUser, true, 5, 60, 5),
             (true, .idle, true, 1, 5, 1),
             (false, .idle, false, 30, 5, 5),
         ]
