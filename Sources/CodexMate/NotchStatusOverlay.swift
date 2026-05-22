@@ -741,7 +741,7 @@ private final class NotchStatusDotView: NSView {
         case .gray:
             return NSColor(calibratedWhite: 0.62, alpha: 1)
         case .blue:
-            return NSColor(calibratedRed: 0.47, green: 0.72, blue: 1.0, alpha: 1)
+            return .systemBlue
         case .green:
             return NSColor(calibratedRed: 0.32, green: 0.88, blue: 0.70, alpha: 1)
         case .amber:
