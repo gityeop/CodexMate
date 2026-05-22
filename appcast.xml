@@ -3,19 +3,20 @@
     <channel>
         <title>CodexMate</title>
         <item>
-            <title>0.0.25</title>
-            <pubDate>Mon, 18 May 2026 10:55:20 +0900</pubDate>
-            <link>https://github.com/gityeop/CodexMate/releases/tag/v0.0.25</link>
-            <sparkle:version>25</sparkle:version>
-            <sparkle:shortVersionString>0.0.25</sparkle:shortVersionString>
+            <title>0.0.26</title>
+            <pubDate>Sat, 23 May 2026 05:14:15 +0900</pubDate>
+            <link>https://github.com/gityeop/CodexMate/releases/tag/v0.0.26</link>
+            <sparkle:version>26</sparkle:version>
+            <sparkle:shortVersionString>0.0.26</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description sparkle:format="markdown"><![CDATA[# CodexMate 0.0.25
+            <description sparkle:format="markdown"><![CDATA[# CodexMate 0.0.26
 
-- Keeps the notch status responsive when a user-input wait clears while the notch is closed.
-- Limits the faster waiting-state polling to lightweight desktop activity checks, keeping full thread-list refreshes on the idle cadence until the notch menu is opened.
+- Adds an optional notch status dot and compact label so the current Codex state is visible before opening the notch menu.
+- Adds localized notch status text and a settings toggle for hiding the notch status content.
+- Filters empty Codex Desktop placeholder threads from recent and active thread lists while preserving preview-only and session-backed threads with real user content.
 ]]></description>
-            <enclosure url="https://github.com/gityeop/CodexMate/releases/latest/download/CodexMate-0.0.25.zip" length="4521843" type="application/octet-stream" sparkle:edSignature="3WPi6vDsITv5BG7ykUfwOp4OBVzm/fdw0z2G1VF+gx+qaDSebWHY94YCn/y9snffl/R7zWPe7JodGi1YAj/aCw=="/>
+            <enclosure url="https://github.com/gityeop/CodexMate/releases/latest/download/CodexMate-0.0.26.zip" length="4530732" type="application/octet-stream" sparkle:edSignature="YuTAntS29QI2qcTEQ9zh4xXH8M00JkKGeTJbS7Ut4DxMoGm3yJCFa0NkBkt51yWH7XzlIQ0qwasf8IBdu4fDAg=="/>
         </item>
     </channel>
 </rss>
