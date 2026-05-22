@@ -23,6 +23,26 @@ struct MenubarStatusPresentation {
         case failed
     }
 
+    enum StatusDotTone: Equatable {
+        case gray
+        case blue
+        case green
+        case amber
+        case red
+    }
+
+    struct NotchStatusContent: Equatable {
+        let primaryText: String
+        let secondaryText: String?
+        let dotTone: StatusDotTone
+
+        static let empty = NotchStatusContent(
+            primaryText: "",
+            secondaryText: nil,
+            dotTone: .blue
+        )
+    }
+
     struct ThreadTooltipContent: Equatable {
         struct Detail: Equatable {
             enum Kind: Equatable {
@@ -100,6 +120,24 @@ struct MenubarStatusPresentation {
         }
 
         return overallStatus.displayName
+    }
+
+    static func notchStatusContent(
+        overallStatus: AppStateStore.OverallStatus,
+        hasUnreadThreads: Bool,
+        strings: AppStrings = .shared,
+        language: AppLanguage = .english
+    ) -> NotchStatusContent {
+        let sprite = statusItemSprite(
+            overallStatus: overallStatus,
+            hasUnreadThreads: hasUnreadThreads
+        )
+
+        return NotchStatusContent(
+            primaryText: notchPrimaryText(for: sprite),
+            secondaryText: notchSecondaryText(for: sprite, strings: strings, language: language),
+            dotTone: notchDotTone(for: sprite)
+        )
     }
 
     static func threadTitle(
@@ -248,5 +286,61 @@ struct MenubarStatusPresentation {
 
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private static func notchPrimaryText(for sprite: StatusSprite) -> String {
+        switch sprite {
+        case .connecting:
+            return "Conn"
+        case .idle:
+            return "Idle"
+        case .waitingForUser:
+            return "Wait"
+        case .running:
+            return "Run"
+        case .failed:
+            return "Err"
+        case .unread:
+            return "Unread"
+        }
+    }
+
+    private static func notchSecondaryText(
+        for sprite: StatusSprite,
+        strings: AppStrings,
+        language: AppLanguage
+    ) -> String {
+        let key: String
+        switch sprite {
+        case .connecting:
+            key = "status.notch.connecting"
+        case .idle:
+            key = "status.notch.idle"
+        case .waitingForUser:
+            key = "status.notch.waitingForUser"
+        case .running:
+            key = "status.notch.running"
+        case .failed:
+            key = "status.notch.failed"
+        case .unread:
+            key = "status.notch.unread"
+        }
+
+        return strings.text(key, language: language)
+    }
+
+    private static func notchDotTone(for sprite: StatusSprite) -> StatusDotTone {
+        switch sprite {
+        case .idle:
+            return .gray
+        case .unread:
+            return .blue
+        case .running:
+            return .green
+        case .connecting, .waitingForUser:
+            return .amber
+        case .failed:
+            return .red
+        }
     }
 }

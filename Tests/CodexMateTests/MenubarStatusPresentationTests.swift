@@ -32,6 +32,76 @@ final class MenubarStatusPresentationTests: XCTestCase {
         )
     }
 
+    func testNotchStatusContentMapsOverallStatusToDisplayContent() {
+        let cases: [(AppStateStore.OverallStatus, Bool, MenubarStatusPresentation.NotchStatusContent)] = [
+            (
+                .connecting,
+                false,
+                MenubarStatusPresentation.NotchStatusContent(
+                    primaryText: "Conn",
+                    secondaryText: "연결 중",
+                    dotTone: .amber
+                )
+            ),
+            (
+                .idle,
+                false,
+                MenubarStatusPresentation.NotchStatusContent(
+                    primaryText: "Idle",
+                    secondaryText: "대기 중",
+                    dotTone: .gray
+                )
+            ),
+            (
+                .waitingForUser,
+                false,
+                MenubarStatusPresentation.NotchStatusContent(
+                    primaryText: "Wait",
+                    secondaryText: "입력 대기 중",
+                    dotTone: .amber
+                )
+            ),
+            (
+                .running,
+                true,
+                MenubarStatusPresentation.NotchStatusContent(
+                    primaryText: "Run",
+                    secondaryText: "Codex 작업 중",
+                    dotTone: .green
+                )
+            ),
+            (
+                .failed,
+                false,
+                MenubarStatusPresentation.NotchStatusContent(
+                    primaryText: "Err",
+                    secondaryText: "확인 필요",
+                    dotTone: .red
+                )
+            ),
+            (
+                .failed,
+                true,
+                MenubarStatusPresentation.NotchStatusContent(
+                    primaryText: "Unread",
+                    secondaryText: "새 알림",
+                    dotTone: .blue
+                )
+            ),
+        ]
+
+        for (overallStatus, hasUnreadThreads, expectedContent) in cases {
+            XCTAssertEqual(
+                MenubarStatusPresentation.notchStatusContent(
+                    overallStatus: overallStatus,
+                    hasUnreadThreads: hasUnreadThreads,
+                    language: .korean
+                ),
+                expectedContent
+            )
+        }
+    }
+
 
     func testThreadIndicatorTextMapsKnownIndicators() {
         XCTAssertEqual(MenubarStatusPresentation.threadIndicatorText(for: .waitingForUser), "💬")

@@ -160,6 +160,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var refreshTimerInterval: TimeInterval?
     private var currentStatusSprite: MenubarStatusPresentation.StatusSprite = .connecting
     private var currentStatusDisplayName = AppStateStore.OverallStatus.connecting.displayName
+    private var currentNotchStatusContent = MenubarStatusPresentation.notchStatusContent(
+        overallStatus: .connecting,
+        hasUnreadThreads: false
+    )
     private var currentStatusFallbackIcon = AppStateStore.OverallStatus.connecting.icon
     private var currentEffectiveDisplayMode: AppDisplayMode?
     private var isMenuOpen = false
@@ -507,6 +511,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 guard let self else { return }
                 self.renderMenu()
                 self.requestThreadRefresh()
+            }
+            .store(in: &cancellables)
+
+        preferences.$notchStatusContentEnabled
+            .dropFirst()
+            .sink { [weak self] _ in
+                self?.applyStatusPresentation()
             }
             .store(in: &cancellables)
 
@@ -1024,6 +1035,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             strings: strings,
             language: preferences.language
         )
+        currentNotchStatusContent = MenubarStatusPresentation.notchStatusContent(
+            overallStatus: overallStatus,
+            hasUnreadThreads: hasUnreadThreads,
+            strings: strings,
+            language: preferences.language
+        )
         currentStatusFallbackIcon = MenubarStatusPresentation.statusItemIcon(
             overallStatus: overallStatus,
             hasUnreadThreads: hasUnreadThreads
@@ -1074,14 +1091,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 renderedPixelSize: 128,
                 renderedPointSize: NotchStatusOverlayController.Metrics.spritePointSize
             )
-        let statusText = isShowingInitialThreadBootstrapLoading
-            ? strings.text("menu.loadingRecentThreads", language: preferences.language)
-            : currentStatusDisplayName
+        let statusContent: MenubarStatusPresentation.NotchStatusContent
+        if !preferences.notchStatusContentEnabled {
+            statusContent = .empty
+        } else if isShowingInitialThreadBootstrapLoading {
+            statusContent = MenubarStatusPresentation.NotchStatusContent(
+                primaryText: "Load",
+                secondaryText: strings.text("menu.loadingRecentThreads", language: preferences.language),
+                dotTone: .amber
+            )
+        } else {
+            statusContent = currentNotchStatusContent
+        }
 
         notchStatusOverlay.update(
             spriteImages: spriteImages,
             statusSprite: currentStatusSprite,
-            statusText: statusText,
+            statusContent: statusContent,
             frameInterval: isShowingInitialThreadBootstrapLoading
                 ? StatusAnimation.loadingFrameInterval
                 : StatusAnimation.frameInterval,

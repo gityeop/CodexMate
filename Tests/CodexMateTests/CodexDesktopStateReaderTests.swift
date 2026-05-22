@@ -1277,6 +1277,57 @@ final class CodexDesktopStateReaderTests: XCTestCase {
         XCTAssertEqual(threads.map(\.id), ["thread-2", "thread-3"])
     }
 
+    func testRecentThreadsSkipsEmptyUnstartedRows() throws {
+        let tempDirectoryURL = FileManager.default.temporaryDirectory
+            .appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: tempDirectoryURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDirectoryURL) }
+
+        let databaseURL = tempDirectoryURL.appending(path: "state.sqlite")
+        try createStateDatabase(
+            at: databaseURL,
+            sql: """
+            CREATE TABLE threads (
+                id TEXT PRIMARY KEY,
+                first_user_message TEXT NOT NULL DEFAULT '',
+                title TEXT NOT NULL DEFAULT '',
+                preview TEXT NOT NULL DEFAULT '',
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                cwd TEXT NOT NULL,
+                rollout_path TEXT,
+                source TEXT NOT NULL DEFAULT 'vscode',
+                tokens_used INTEGER NOT NULL DEFAULT 0,
+                has_user_event INTEGER NOT NULL DEFAULT 0,
+                archived INTEGER NOT NULL DEFAULT 0
+            );
+            INSERT INTO threads (
+                id,
+                first_user_message,
+                title,
+                preview,
+                created_at,
+                updated_at,
+                cwd,
+                rollout_path,
+                source,
+                tokens_used,
+                has_user_event,
+                archived
+            ) VALUES
+                ('empty-stub', '', '', '', 100, 500, '/tmp/empty', '/tmp/empty.jsonl', 'vscode', 0, 0, 0),
+                ('preview-thread', '', '', 'Preview only title', 100, 400, '/tmp/preview', '/tmp/preview.jsonl', 'vscode', 0, 0, 0),
+                ('message-thread', 'Message preview', '', '', 100, 300, '/tmp/message', '/tmp/message.jsonl', 'vscode', 0, 1, 0);
+            """
+        )
+
+        let reader = CodexDesktopStateReader(stateDatabaseURLOverride: databaseURL)
+        let threads = try reader.recentThreads(limit: 3)
+
+        XCTAssertEqual(threads.map(\.id), ["preview-thread", "message-thread"])
+        XCTAssertEqual(threads.first?.displayTitle, "Preview only title")
+    }
+
     func testThreadsFallsBackToSessionMetadataWhenStateRowIsMissing() throws {
         let tempDirectoryURL = FileManager.default.temporaryDirectory
             .appending(path: UUID().uuidString)
@@ -1471,7 +1522,10 @@ final class CodexDesktopStateReaderTests: XCTestCase {
             .appending(path: "05")
             .appending(path: "15")
         try FileManager.default.createDirectory(at: sessionDirectoryURL, withIntermediateDirectories: true)
-        try "".write(
+        try """
+        {"timestamp":"2026-05-15T00:00:00.000Z","type":"session_meta","payload":{"id":"thread-session","timestamp":"2026-05-15T00:00:00.000Z","cwd":"/tmp/session","source":"vscode"}}
+        {"timestamp":"2026-05-15T00:00:01.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Session backed thread"}]}}
+        """.write(
             to: sessionDirectoryURL.appending(path: "rollout-thread-session.jsonl"),
             atomically: true,
             encoding: .utf8
@@ -1491,6 +1545,82 @@ final class CodexDesktopStateReaderTests: XCTestCase {
             ]),
             ["thread-live", "thread-session"]
         )
+    }
+
+    func testPresentThreadIDsSkipsEmptyUnstartedRowsAndSessionFiles() throws {
+        let tempDirectoryURL = FileManager.default.temporaryDirectory
+            .appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: tempDirectoryURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDirectoryURL) }
+
+        let databaseURL = tempDirectoryURL.appending(path: "state.sqlite")
+        let sessionURL = tempDirectoryURL
+            .appending(path: "sessions")
+            .appending(path: "2026")
+            .appending(path: "05")
+            .appending(path: "20")
+            .appending(path: "rollout-empty-stub.jsonl")
+        try FileManager.default.createDirectory(
+            at: sessionURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try """
+        {"timestamp":"2026-05-20T00:00:00.000Z","type":"session_meta","payload":{"id":"empty-stub","timestamp":"2026-05-20T00:00:00.000Z","cwd":"/tmp/empty","source":"vscode"}}
+        """.write(to: sessionURL, atomically: true, encoding: .utf8)
+
+        try createStateDatabase(
+            at: databaseURL,
+            sql: """
+            CREATE TABLE threads (
+                id TEXT PRIMARY KEY,
+                first_user_message TEXT NOT NULL DEFAULT '',
+                title TEXT NOT NULL DEFAULT '',
+                preview TEXT NOT NULL DEFAULT '',
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                cwd TEXT NOT NULL,
+                rollout_path TEXT,
+                source TEXT NOT NULL DEFAULT 'vscode',
+                tokens_used INTEGER NOT NULL DEFAULT 0,
+                has_user_event INTEGER NOT NULL DEFAULT 0,
+                archived INTEGER NOT NULL DEFAULT 0
+            );
+            INSERT INTO threads (
+                id,
+                first_user_message,
+                title,
+                preview,
+                created_at,
+                updated_at,
+                cwd,
+                rollout_path,
+                source,
+                tokens_used,
+                has_user_event,
+                archived
+            ) VALUES (
+                'empty-stub',
+                '',
+                '',
+                '',
+                100,
+                200,
+                '/tmp/empty',
+                '\(sessionURL.path.replacingOccurrences(of: "'", with: "''"))',
+                'vscode',
+                0,
+                0,
+                0
+            );
+            """
+        )
+
+        let reader = CodexDesktopStateReader(
+            stateDatabaseURLOverride: databaseURL,
+            codexDirectoryURLOverride: tempDirectoryURL
+        )
+
+        XCTAssertEqual(try reader.presentThreadIDs(threadIDs: ["empty-stub"]), [])
     }
 
     func testSnapshotDoesNotTreatPendingSessionTaskAsRunning() throws {

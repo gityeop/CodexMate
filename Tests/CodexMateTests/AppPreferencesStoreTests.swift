@@ -28,6 +28,7 @@ final class AppPreferencesStoreTests: XCTestCase {
         XCTAssertTrue(store.attentionNotificationsEnabled)
         XCTAssertTrue(store.completionNotificationsEnabled)
         XCTAssertTrue(store.failureNotificationsEnabled)
+        XCTAssertTrue(store.notchStatusContentEnabled)
         XCTAssertEqual(store.projectLimit, AppPreferencesStore.defaultProjectLimit)
         XCTAssertEqual(store.threadsPerProjectLimit, AppPreferencesStore.defaultThreadsPerProjectLimit)
     }
@@ -50,6 +51,7 @@ final class AppPreferencesStoreTests: XCTestCase {
         store.attentionNotificationsEnabled = false
         store.completionNotificationsEnabled = false
         store.failureNotificationsEnabled = false
+        store.notchStatusContentEnabled = false
         store.projectLimit = 7
         store.threadsPerProjectLimit = 12
 
@@ -59,6 +61,7 @@ final class AppPreferencesStoreTests: XCTestCase {
         XCTAssertFalse(reloaded.attentionNotificationsEnabled)
         XCTAssertFalse(reloaded.completionNotificationsEnabled)
         XCTAssertFalse(reloaded.failureNotificationsEnabled)
+        XCTAssertFalse(reloaded.notchStatusContentEnabled)
         XCTAssertEqual(reloaded.projectLimit, 7)
         XCTAssertEqual(reloaded.threadsPerProjectLimit, 12)
     }

@@ -19,6 +19,7 @@ final class AppPreferencesStore: ObservableObject {
         static let attentionNotificationsEnabled = "attentionNotificationsEnabled"
         static let completionNotificationsEnabled = "completionNotificationsEnabled"
         static let failureNotificationsEnabled = "failureNotificationsEnabled"
+        static let notchStatusContentEnabled = "notchStatusContentEnabled"
         static let projectLimit = "projectLimit"
         static let threadsPerProjectLimit = "threadsPerProjectLimit"
     }
@@ -56,6 +57,12 @@ final class AppPreferencesStore: ObservableObject {
     @Published var failureNotificationsEnabled: Bool {
         didSet {
             defaults.set(failureNotificationsEnabled, forKey: DefaultsKey.failureNotificationsEnabled)
+        }
+    }
+
+    @Published var notchStatusContentEnabled: Bool {
+        didSet {
+            defaults.set(notchStatusContentEnabled, forKey: DefaultsKey.notchStatusContentEnabled)
         }
     }
 
@@ -103,6 +110,11 @@ final class AppPreferencesStore: ObservableObject {
             failureNotificationsEnabled = true
         } else {
             failureNotificationsEnabled = defaults.bool(forKey: DefaultsKey.failureNotificationsEnabled)
+        }
+        if defaults.object(forKey: DefaultsKey.notchStatusContentEnabled) == nil {
+            notchStatusContentEnabled = true
+        } else {
+            notchStatusContentEnabled = defaults.bool(forKey: DefaultsKey.notchStatusContentEnabled)
         }
         if defaults.object(forKey: DefaultsKey.projectLimit) == nil {
             projectLimit = Self.defaultProjectLimit

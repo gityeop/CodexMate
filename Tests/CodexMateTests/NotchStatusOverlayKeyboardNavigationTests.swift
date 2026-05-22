@@ -253,6 +253,124 @@ final class NotchStatusOverlayKeyboardNavigationTests: XCTestCase {
         assertEqualColor(scrollView.contentView.backgroundColor, .black)
     }
 
+    func testCollapsedHardwareNotchShowsOnlyStatusDot() throws {
+        let view = NotchStatusOverlayView(frame: NSRect(x: 0, y: 0, width: 640, height: 220))
+        view.statusContent = MenubarStatusPresentation.NotchStatusContent(
+            primaryText: "Run",
+            secondaryText: "Codex 작업 중",
+            dotTone: .green
+        )
+        view.layoutSubtreeIfNeeded()
+
+        let dotView = try XCTUnwrap(firstView(in: view, identifier: "CodexMateNotchStatusDot"))
+        let primaryLabel = try XCTUnwrap(firstLabel(in: view, identifier: "CodexMateNotchStatusPrimaryLabel"))
+        let secondaryLabel = try XCTUnwrap(firstLabel(in: view, identifier: "CodexMateNotchStatusSecondaryLabel"))
+
+        XCTAssertFalse(dotView.isHidden)
+        XCTAssertGreaterThan(dotView.alphaValue, 0.9)
+        XCTAssertEqual(primaryLabel.stringValue, "Run")
+        XCTAssertEqual(primaryLabel.font?.pointSize, 12)
+        XCTAssertTrue(primaryLabel.isHidden)
+        XCTAssertEqual(primaryLabel.alphaValue, 0)
+        XCTAssertEqual(secondaryLabel.stringValue, "Codex 작업 중")
+        XCTAssertTrue(secondaryLabel.isHidden)
+        XCTAssertEqual(secondaryLabel.alphaValue, 0)
+    }
+
+    func testExpandedHardwareNotchShowsStatusDotAndTextLabel() throws {
+        let view = NotchStatusOverlayView(frame: NSRect(x: 0, y: 0, width: 640, height: 220))
+        view.statusContent = MenubarStatusPresentation.NotchStatusContent(
+            primaryText: "Unread",
+            secondaryText: "새 알림",
+            dotTone: .blue
+        )
+        view.layoutSubtreeIfNeeded()
+        let collapsedSpriteMinY = try XCTUnwrap(firstImageView(in: view)).frame.minY
+
+        view.menuExpansionProgress = 1
+        view.layoutSubtreeIfNeeded()
+
+        let dotView = try XCTUnwrap(firstView(in: view, identifier: "CodexMateNotchStatusDot"))
+        let primaryLabel = try XCTUnwrap(firstLabel(in: view, identifier: "CodexMateNotchStatusPrimaryLabel"))
+        let secondaryLabel = try XCTUnwrap(firstLabel(in: view, identifier: "CodexMateNotchStatusSecondaryLabel"))
+        let spriteView = try XCTUnwrap(firstImageView(in: view))
+
+        XCTAssertFalse(dotView.isHidden)
+        XCTAssertGreaterThan(dotView.alphaValue, 0.9)
+        XCTAssertEqual(primaryLabel.stringValue, "Unread")
+        XCTAssertFalse(primaryLabel.isHidden)
+        XCTAssertGreaterThan(primaryLabel.alphaValue, 0.9)
+        let primaryFont = try XCTUnwrap(primaryLabel.font)
+        let unreadTextWidth = ceil(("Unread" as NSString).size(withAttributes: [.font: primaryFont]).width)
+        XCTAssertGreaterThanOrEqual(primaryLabel.frame.width, unreadTextWidth + 14)
+        XCTAssertTrue(secondaryLabel.isHidden)
+        XCTAssertLessThan(primaryLabel.frame.maxX, spriteView.frame.minX)
+        let expandedSurfaceMinX = (view.bounds.width - NotchStatusOverlayController.Metrics.expandedSurfaceWidth) / 2
+        let expandedSurfaceMaxX = expandedSurfaceMinX + NotchStatusOverlayController.Metrics.expandedSurfaceWidth
+        let mirroredSpriteTrailingInset = expandedSurfaceMaxX - spriteView.frame.maxX
+        XCTAssertEqual(
+            dotView.frame.minX,
+            expandedSurfaceMinX + max(28, mirroredSpriteTrailingInset),
+            accuracy: 0.5
+        )
+        XCTAssertEqual(spriteView.frame.minY, collapsedSpriteMinY - 2, accuracy: 0.5)
+        XCTAssertEqual(dotView.frame.midY, view.bounds.maxY - 24, accuracy: 0.5)
+        XCTAssertLessThan(dotView.frame.minX, view.bounds.midX)
+        XCTAssertLessThan(dotView.frame.maxX, primaryLabel.frame.minX)
+    }
+
+    func testStatusContentHidesForCompactLayout() throws {
+        let view = NotchStatusOverlayView(frame: NSRect(x: 0, y: 0, width: 640, height: 220))
+        view.statusContent = MenubarStatusPresentation.NotchStatusContent(
+            primaryText: "Idle",
+            secondaryText: "대기 중",
+            dotTone: .blue
+        )
+        view.layoutSubtreeIfNeeded()
+
+        let dotView = try XCTUnwrap(firstView(in: view, identifier: "CodexMateNotchStatusDot"))
+        let primaryLabel = try XCTUnwrap(firstLabel(in: view, identifier: "CodexMateNotchStatusPrimaryLabel"))
+        let secondaryLabel = try XCTUnwrap(firstLabel(in: view, identifier: "CodexMateNotchStatusSecondaryLabel"))
+        XCTAssertFalse(dotView.isHidden)
+
+        view.usesCompactLayout = true
+        view.layoutSubtreeIfNeeded()
+
+        XCTAssertTrue(dotView.isHidden)
+        XCTAssertTrue(primaryLabel.isHidden)
+        XCTAssertTrue(secondaryLabel.isHidden)
+    }
+
+    func testEmptyStatusContentHidesStatusDotAndText() throws {
+        let view = NotchStatusOverlayView(frame: NSRect(x: 0, y: 0, width: 640, height: 220))
+        view.statusContent = .empty
+        view.menuExpansionProgress = 1
+        view.layoutSubtreeIfNeeded()
+
+        let dotView = try XCTUnwrap(firstView(in: view, identifier: "CodexMateNotchStatusDot"))
+        let primaryLabel = try XCTUnwrap(firstLabel(in: view, identifier: "CodexMateNotchStatusPrimaryLabel"))
+        let secondaryLabel = try XCTUnwrap(firstLabel(in: view, identifier: "CodexMateNotchStatusSecondaryLabel"))
+
+        XCTAssertTrue(dotView.isHidden)
+        XCTAssertTrue(primaryLabel.isHidden)
+        XCTAssertTrue(secondaryLabel.isHidden)
+    }
+
+    func testCollapsedStatusContentDoesNotExpandActivationFrame() {
+        let view = NotchStatusOverlayView(frame: NSRect(x: 0, y: 0, width: 640, height: 220))
+        view.layoutSubtreeIfNeeded()
+        let emptyContentActivationWidth = view.activationFrame.width
+
+        view.statusContent = MenubarStatusPresentation.NotchStatusContent(
+            primaryText: "Run",
+            secondaryText: "Codex 작업 처리 묶음 · 5분 남음",
+            dotTone: .green
+        )
+        view.layoutSubtreeIfNeeded()
+
+        XCTAssertEqual(view.activationFrame.width, emptyContentActivationWidth, accuracy: 0.5)
+    }
+
     func testReturnActivatesSelectedRow() throws {
         let expectation = expectation(description: "selected row activates")
         var activationCount = 0
@@ -580,10 +698,20 @@ final class NotchStatusOverlayKeyboardNavigationTests: XCTestCase {
         allSubviews(in: view).compactMap { $0 as? NSImageView }.first
     }
 
+    private func firstView(in view: NSView, identifier: String) -> NSView? {
+        allSubviews(in: view).first { $0.identifier?.rawValue == identifier }
+    }
+
     private func firstLabel(in view: NSView, stringValue: String) -> NSTextField? {
         allSubviews(in: view)
             .compactMap { $0 as? NSTextField }
             .first(where: { $0.stringValue == stringValue })
+    }
+
+    private func firstLabel(in view: NSView, identifier: String) -> NSTextField? {
+        allSubviews(in: view)
+            .compactMap { $0 as? NSTextField }
+            .first(where: { $0.identifier?.rawValue == identifier })
     }
 
     private func allRowViews(in view: NSView) -> [ThreadDropdownMenuRowView] {

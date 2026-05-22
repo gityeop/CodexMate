@@ -327,7 +327,7 @@ final class NotchStatusOverlayController {
     func update(
         spriteImages: [NSImage],
         statusSprite: MenubarStatusPresentation.StatusSprite,
-        statusText: String,
+        statusContent: MenubarStatusPresentation.NotchStatusContent,
         frameInterval: TimeInterval,
         animationIdentifier: String? = nil,
         forceAnimation: Bool = false
@@ -338,8 +338,9 @@ final class NotchStatusOverlayController {
             overlayView.statusSprite = statusSprite
         }
 
-        if overlayView.statusText != statusText {
-            overlayView.statusText = statusText
+        if overlayView.statusContent != statusContent {
+            overlayView.statusContent = statusContent
+            shouldApplyOverlayState = true
         }
 
         currentSpriteImages = spriteImages
@@ -716,6 +717,41 @@ private final class NotchMenuScrollView: NSScrollView {
     }
 }
 
+private final class NotchStatusDotView: NSView {
+    var tone: MenubarStatusPresentation.StatusDotTone = .blue {
+        didSet {
+            guard tone != oldValue else { return }
+            needsDisplay = true
+        }
+    }
+
+    override var isOpaque: Bool {
+        false
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+
+        dotColor.setFill()
+        NSBezierPath(ovalIn: bounds.insetBy(dx: 1, dy: 1)).fill()
+    }
+
+    private var dotColor: NSColor {
+        switch tone {
+        case .gray:
+            return NSColor(calibratedWhite: 0.62, alpha: 1)
+        case .blue:
+            return NSColor(calibratedRed: 0.47, green: 0.72, blue: 1.0, alpha: 1)
+        case .green:
+            return NSColor(calibratedRed: 0.32, green: 0.88, blue: 0.70, alpha: 1)
+        case .amber:
+            return NSColor(calibratedRed: 1.0, green: 0.77, blue: 0.33, alpha: 1)
+        case .red:
+            return NSColor(calibratedRed: 1.0, green: 0.42, blue: 0.42, alpha: 1)
+        }
+    }
+}
+
 final class NotchStatusOverlayView: NSView {
     private struct MenuItemSignature: Equatable {
         let kind: NotchStatusOverlayMenuEntry.Kind
@@ -747,7 +783,22 @@ final class NotchStatusOverlayView: NSView {
         static let notchSpriteTopInset: CGFloat = 2
         static let notchSpriteBottomInset: CGFloat = 1
         static let spriteVerticalLift: CGFloat = 2
-        static let expandedMenuSpriteHorizontalShift: CGFloat = 16
+        static let expandedMenuSpriteHorizontalShift: CGFloat = 24
+        static let expandedMenuSpriteVerticalDrop: CGFloat = 2
+        static let statusDotSize: CGFloat = 8
+        static let statusLeadingInset: CGFloat = 28
+        static let expandedStatusLeadingInset: CGFloat = 28
+        static let expandedStatusVerticalLift: CGFloat = 8
+        static let statusDotTextSpacing: CGFloat = 8
+        static let expandedSpriteTrailingInset: CGFloat = 12
+        static let statusTextWidthPadding: CGFloat = 14
+        static let statusTextHeight: CGFloat = 16
+        static var statusPrimaryFont: NSFont {
+            NSFont.systemFont(ofSize: 12, weight: .semibold)
+        }
+        static var statusSecondaryFont: NSFont {
+            NSFont.systemFont(ofSize: 11, weight: .medium)
+        }
         static let notchTopCornerRadius: CGFloat = 6
         static let notchBottomCornerRadius: CGFloat = 14
         static let expandedNotchTopCornerRadius: CGFloat = 19
@@ -780,6 +831,9 @@ final class NotchStatusOverlayView: NSView {
     }
 
     private let imageView = NSImageView()
+    private let statusDotView = NotchStatusDotView()
+    private let statusPrimaryLabel = NSTextField(labelWithString: "")
+    private let statusSecondaryLabel = NSTextField(labelWithString: "")
     private let menuScrollView = NotchMenuScrollView()
     private let menuDocumentView = NotchMenuDocumentView()
     private let surfaceMaskLayer = CAShapeLayer()
@@ -814,9 +868,11 @@ final class NotchStatusOverlayView: NSView {
         let isEnabled: Bool
     }
 
-    var statusText = "" {
+    var statusContent = MenubarStatusPresentation.NotchStatusContent.empty {
         didSet {
-            guard statusText != oldValue else { return }
+            guard statusContent != oldValue else { return }
+            applyStatusContent()
+            needsLayout = true
             needsDisplay = true
         }
     }
@@ -900,6 +956,24 @@ final class NotchStatusOverlayView: NSView {
         imageView.imageScaling = .scaleProportionallyUpOrDown
         addSubview(imageView)
 
+        statusDotView.identifier = NSUserInterfaceItemIdentifier("CodexMateNotchStatusDot")
+        addSubview(statusDotView)
+        configureStatusLabel(
+            statusPrimaryLabel,
+            identifier: "CodexMateNotchStatusPrimaryLabel",
+            font: Layout.statusPrimaryFont,
+            color: .white
+        )
+        configureStatusLabel(
+            statusSecondaryLabel,
+            identifier: "CodexMateNotchStatusSecondaryLabel",
+            font: Layout.statusSecondaryFont,
+            color: NSColor(calibratedWhite: 1, alpha: 0.54)
+        )
+        addSubview(statusPrimaryLabel)
+        addSubview(statusSecondaryLabel)
+        applyStatusContent()
+
         menuScrollView.drawsBackground = true
         menuScrollView.borderType = .noBorder
         menuScrollView.hasVerticalScroller = true
@@ -927,6 +1001,30 @@ final class NotchStatusOverlayView: NSView {
 
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
+    }
+
+    private func configureStatusLabel(
+        _ label: NSTextField,
+        identifier: String,
+        font: NSFont,
+        color: NSColor
+    ) {
+        label.identifier = NSUserInterfaceItemIdentifier(identifier)
+        label.font = font
+        label.textColor = color
+        label.lineBreakMode = .byTruncatingTail
+        label.cell?.lineBreakMode = .byTruncatingTail
+        label.cell?.truncatesLastVisibleLine = true
+        label.usesSingleLineMode = true
+        label.isHidden = true
+        label.alphaValue = 0
+    }
+
+    private func applyStatusContent() {
+        statusDotView.tone = statusContent.dotTone
+        statusPrimaryLabel.stringValue = statusContent.primaryText
+        statusSecondaryLabel.stringValue = statusContent.secondaryText ?? ""
+        updateStatusContentVisibility()
     }
 
     func setSpriteFrames(
@@ -1085,6 +1183,7 @@ final class NotchStatusOverlayView: NSView {
         let bobOffset = bobOffsets[frameIndex % bobOffsets.count]
         let collapsedFrame = collapsedSpriteFrame(bobOffset: bobOffset)
         imageView.frame = collapsedFrame
+        layoutStatusContent()
 
         let contentFrame = expandedContentFrame
         menuScrollView.frame = contentFrame
@@ -1129,8 +1228,94 @@ final class NotchStatusOverlayView: NSView {
                 width: islandFrame.width,
                 height: Layout.labelHeight
             )
-            (statusText as NSString).draw(in: textFrame, withAttributes: attributes)
+            let compactText = statusContent.secondaryText ?? statusContent.primaryText
+            (compactText as NSString).draw(in: textFrame, withAttributes: attributes)
         }
+    }
+
+    private func layoutStatusContent() {
+        guard shouldShowStatusDot else {
+            updateStatusContentVisibility()
+            return
+        }
+
+        let revealProgress = expandedRevealProgress
+        let primaryTextWidth = measuredStatusPrimaryTextWidth()
+        let dotFrame = revealProgress < 0.01
+            ? collapsedStatusDotFrame
+            : expandedStatusDotFrame
+        let textX = dotFrame.maxX + Layout.statusDotTextSpacing
+
+        statusDotView.frame = dotFrame
+
+        let textY = floor(dotFrame.midY - (Layout.statusTextHeight / 2))
+
+        statusPrimaryLabel.frame = CGRect(
+            x: floor(textX),
+            y: textY,
+            width: floor(primaryTextWidth),
+            height: Layout.statusTextHeight
+        )
+        statusSecondaryLabel.frame = .zero
+        updateStatusContentVisibility()
+    }
+
+    private var shouldShowStatusDot: Bool {
+        !usesCompactLayout && !statusContent.primaryText.isEmpty
+    }
+
+    private func updateStatusContentVisibility() {
+        let dotAlpha: CGFloat = shouldShowStatusDot ? 1 : 0
+        let textAlpha: CGFloat = shouldShowStatusDot ? expandedRevealProgress : 0
+
+        statusDotView.alphaValue = dotAlpha
+        statusDotView.isHidden = dotAlpha < 0.01
+        statusPrimaryLabel.alphaValue = textAlpha
+        statusPrimaryLabel.isHidden = textAlpha < 0.01 || statusPrimaryLabel.frame.width < 1
+        statusSecondaryLabel.alphaValue = 0
+        statusSecondaryLabel.isHidden = true
+    }
+
+    private var collapsedStatusDotFrame: CGRect {
+        let islandFrame = collapsedNotchFrame
+        return CGRect(
+            x: floor(islandFrame.minX + Layout.statusLeadingInset),
+            y: floor(islandFrame.midY - (Layout.statusDotSize / 2)),
+            width: Layout.statusDotSize,
+            height: Layout.statusDotSize
+        )
+    }
+
+    private var expandedStatusDotFrame: CGRect {
+        let headerFrame = expandedHeaderFrame
+        let mirroredSpriteTrailingInset = surfaceFrame.maxX - imageView.frame.maxX
+        let leadingInset = max(Layout.expandedStatusLeadingInset, mirroredSpriteTrailingInset)
+
+        return CGRect(
+            x: floor(headerFrame.minX + leadingInset),
+            y: floor(headerFrame.midY - (Layout.statusDotSize / 2) + Layout.expandedStatusVerticalLift),
+            width: Layout.statusDotSize,
+            height: Layout.statusDotSize
+        )
+    }
+
+    private func measuredStatusPrimaryTextWidth() -> CGFloat {
+        guard !statusContent.primaryText.isEmpty else {
+            return 0
+        }
+
+        return measuredTextWidth(
+            statusContent.primaryText,
+            font: Layout.statusPrimaryFont
+        ) + Layout.statusTextWidthPadding
+    }
+
+    private func measuredTextWidth(_ text: String, font: NSFont) -> CGFloat {
+        guard !text.isEmpty else {
+            return 0
+        }
+
+        return ceil((text as NSString).size(withAttributes: [.font: font]).width)
     }
 
     private func rebuildMenuRows(_ menuItems: [NotchStatusOverlayMenuEntry]) {
@@ -1685,11 +1870,17 @@ final class NotchStatusOverlayView: NSView {
         )
         let size = fittedCollapsedSpriteSize(baseSize: baseSize, in: islandFrame)
         let collapsedMaxX = islandFrame.maxX - Layout.notchSpriteTrailingInset - size.width
-        let expandedMaxX = expandedSurfaceFrame.maxX - Layout.expandedContentHorizontalInset - size.width
+        let expandedMaxX = expandedSurfaceFrame.maxX - Layout.expandedSpriteTrailingInset - size.width
         let baseX = min(hardwareFrame.maxX + Layout.notchSpriteOffsetFromHardwareNotch, collapsedMaxX)
-        let minY = islandFrame.minY + Layout.notchSpriteBottomInset
-        let maxY = islandFrame.maxY - Layout.notchSpriteTopInset - size.height
-        let desiredY = islandFrame.minY - Layout.notchSpriteBottomInset + bobOffset + islandEmphasisProgress + Layout.spriteVerticalLift
+        let expandedVerticalDrop = menuExpansionProgress * Layout.expandedMenuSpriteVerticalDrop
+        let minY = islandFrame.minY + Layout.notchSpriteBottomInset - expandedVerticalDrop
+        let maxY = islandFrame.maxY - Layout.notchSpriteTopInset - size.height - expandedVerticalDrop
+        let desiredY = islandFrame.minY
+            - Layout.notchSpriteBottomInset
+            + bobOffset
+            + islandEmphasisProgress
+            + Layout.spriteVerticalLift
+            - expandedVerticalDrop
 
         return CGRect(
             x: min(baseX + (menuExpansionProgress * Layout.expandedMenuSpriteHorizontalShift), expandedMaxX),

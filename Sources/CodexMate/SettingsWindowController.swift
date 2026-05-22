@@ -105,6 +105,11 @@ private struct SettingsView: View {
                     helpText(message)
                 }
 
+                Toggle(
+                    viewModel.text("settings.notchStatusContent"),
+                    isOn: notchStatusContentBinding
+                )
+
                 Stepper(
                     value: projectLimitBinding,
                     in: viewModel.projectLimitRange
@@ -210,6 +215,13 @@ private struct SettingsView: View {
         Binding(
             get: { viewModel.preferences.displayMode },
             set: { viewModel.setDisplayMode($0) }
+        )
+    }
+
+    private var notchStatusContentBinding: Binding<Bool> {
+        Binding(
+            get: { viewModel.preferences.notchStatusContentEnabled },
+            set: { viewModel.preferences.notchStatusContentEnabled = $0 }
         )
     }
 

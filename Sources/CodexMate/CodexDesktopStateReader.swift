@@ -112,6 +112,13 @@ struct CodexDesktopStateReader {
         let sql: String
     }
 
+    private struct ThreadTableProjection {
+        let previewExpression: String
+        let agentRoleExpression: String
+        let agentNicknameExpression: String
+        let meaningfulThreadPredicate: String
+    }
+
     private enum LogMessageColumn: String {
         case message
         case feedbackLogBody = "feedback_log_body"
@@ -331,19 +338,21 @@ struct CodexDesktopStateReader {
             .sorted()
             .joined(separator: ", ")
         let output = try withStateDatabase { databaseURL in
-            try runSQLite(
+            let projection = try threadTableProjection(in: databaseURL)
+            return try runSQLite(
                 sql: """
                 SELECT id
                 FROM threads
                 WHERE archived = 0
-                  AND id IN (\(candidateList));
+                  AND id IN (\(candidateList))
+                  AND (\(projection.meaningfulThreadPredicate));
                 """,
                 databaseURL: databaseURL
             )
         }
         let databaseThreadIDs = Set(parseSQLiteLines(output.split(separator: "\n").map(String.init)))
         let missingThreadIDs = threadIDs.subtracting(databaseThreadIDs)
-        let sessionBackedThreadIDs = Set(locateSessionFileURLs(threadIDs: missingThreadIDs).keys)
+        let sessionBackedThreadIDs = Set(sessionBackedThreads(threadIDs: missingThreadIDs).map(\.id))
 
         return databaseThreadIDs.union(sessionBackedThreadIDs)
     }
@@ -361,26 +370,25 @@ struct CodexDesktopStateReader {
             .sorted()
             .joined(separator: ", ")
         let output = try withStateDatabase { databaseURL in
-            try runSQLite(
+            let projection = try threadTableProjection(in: databaseURL)
+            return try runSQLite(
                 sql: """
                 SELECT json_object(
                     'id', id,
-                    'preview', CASE
-                        WHEN TRIM(first_user_message) != '' THEN first_user_message
-                        ELSE title
-                    END,
+                    'preview', \(projection.previewExpression),
                     'createdAt', created_at,
                     'updatedAt', updated_at,
                     'cwd', cwd,
                     'name', title,
                     'path', rollout_path,
                     'source', source,
-                    'agentRole', agent_role,
-                    'agentNickname', agent_nickname
+                    'agentRole', \(projection.agentRoleExpression),
+                    'agentNickname', \(projection.agentNicknameExpression)
                 )
                 FROM threads
                 WHERE archived = 0
                   AND id IN (\(candidateList))
+                  AND (\(projection.meaningfulThreadPredicate))
                 ORDER BY updated_at DESC;
                 """,
                 databaseURL: databaseURL
@@ -483,11 +491,13 @@ struct CodexDesktopStateReader {
         }
 
         let output = try withStateDatabase { databaseURL in
-            try runSQLite(
+            let projection = try threadTableProjection(in: databaseURL)
+            return try runSQLite(
                 sql: """
                 SELECT id
                 FROM threads
                 WHERE archived = 0
+                  AND (\(projection.meaningfulThreadPredicate))
                 ORDER BY updated_at DESC
                 LIMIT \(limit);
                 """,
@@ -605,6 +615,7 @@ struct CodexDesktopStateReader {
         recentProcessCutoff: Int
     ) throws -> SnapshotQueryResult {
         let logQuerySource = resolveLogQuerySource(stateDatabaseURL: databaseURL)
+        let projection = try threadTableProjection(in: databaseURL)
         let logsViewName = "codex_logs"
         var sections = [
             SQLiteQuerySection(
@@ -635,6 +646,7 @@ struct CodexDesktopStateReader {
                 FROM threads
                 WHERE archived = 0
                   AND updated_at >= \(threadUpdateCutoff)
+                  AND (\(projection.meaningfulThreadPredicate))
                 ORDER BY updated_at DESC
                 LIMIT \(recentActivityThreadLimit);
                 """
@@ -827,6 +839,57 @@ struct CodexDesktopStateReader {
         }
 
         return nil
+    }
+
+    private func threadTableProjection(in databaseURL: URL) throws -> ThreadTableProjection {
+        let columns = try threadTableColumns(in: databaseURL)
+        let previewExpression: String
+
+        if columns.contains("preview") {
+            previewExpression = """
+            CASE
+                WHEN TRIM(first_user_message) != '' THEN first_user_message
+                WHEN TRIM(preview) != '' THEN preview
+                ELSE title
+            END
+            """
+        } else {
+            previewExpression = """
+            CASE
+                WHEN TRIM(first_user_message) != '' THEN first_user_message
+                ELSE title
+            END
+            """
+        }
+
+        var meaningfulPredicates = [
+            "TRIM(first_user_message) != ''",
+            "TRIM(title) != ''",
+        ]
+        if columns.contains("preview") {
+            meaningfulPredicates.append("TRIM(preview) != ''")
+        }
+        if columns.contains("has_user_event") {
+            meaningfulPredicates.append("has_user_event != 0")
+        }
+        if columns.contains("tokens_used") {
+            meaningfulPredicates.append("tokens_used > 0")
+        }
+
+        return ThreadTableProjection(
+            previewExpression: previewExpression,
+            agentRoleExpression: columns.contains("agent_role") ? "agent_role" : "NULL",
+            agentNicknameExpression: columns.contains("agent_nickname") ? "agent_nickname" : "NULL",
+            meaningfulThreadPredicate: meaningfulPredicates.joined(separator: " OR ")
+        )
+    }
+
+    private func threadTableColumns(in databaseURL: URL) throws -> Set<String> {
+        let output = try runSQLite(
+            sql: "SELECT name FROM pragma_table_info('threads');",
+            databaseURL: databaseURL
+        )
+        return Set(parseSQLiteLines(output.split(separator: "\n").map(String.init)))
     }
 
     private func logsBootstrapSQL(for source: LogQuerySource, viewName: String) -> String? {
@@ -1706,9 +1769,10 @@ struct CodexDesktopStateReader {
             }
 
             let indexedTitle = Self.sanitizedSessionText(indexEntriesByThreadID[threadID]?.threadName)
-            let preview = indexedTitle
-                ?? Self.sanitizedSessionText(metadata.preview)
-                ?? String(threadID.prefix(8))
+            let sessionPreview = Self.sanitizedSessionText(metadata.preview)
+            guard let preview = indexedTitle ?? sessionPreview else {
+                return nil
+            }
             let updatedAtDate = indexEntriesByThreadID[threadID]?.updatedAt
                 ?? metadata.updatedAt
                 ?? metadata.createdAt
@@ -1722,7 +1786,7 @@ struct CodexDesktopStateReader {
                 updatedAt: Int(updatedAtDate.timeIntervalSince1970),
                 status: .notLoaded,
                 cwd: metadata.cwd,
-                name: indexedTitle ?? Self.sanitizedSessionText(metadata.preview),
+                name: indexedTitle ?? sessionPreview,
                 path: sessionFileURL.path,
                 source: metadata.source
             )
