@@ -330,6 +330,13 @@ final class MenubarController {
         }
     }
 
+    var currentStatusSnapshot: MenubarStatusSnapshot {
+        MenubarStatusSnapshot(
+            overallStatus: overallStatus,
+            hasUnreadThreads: hasUnreadThreads
+        )
+    }
+
     func prepareStatusSnapshot(
         projectLimit: Int? = nil,
         visibleThreadLimit: Int? = nil

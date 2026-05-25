@@ -1641,6 +1641,44 @@ final class MenubarControllerIntegrationTests: XCTestCase {
         XCTAssertEqual(snapshot.projectSections.dropFirst().first?.threads.map(\.id), ["thread-b-1"])
     }
 
+    func testCurrentStatusSnapshotKeepsUnreadOutsideVisibleMenuLimit() async throws {
+        let controller = makeController(
+            recentThreadResponses: [
+                [
+                    thread(id: "visible-thread", updatedAt: 4_000_000_000, cwd: "/tmp/A/work"),
+                    thread(id: "unread-thread", updatedAt: 100, cwd: "/tmp/A/work")
+                ]
+            ],
+            projectCatalog: .success(
+                CodexDesktopProjectCatalog(workspaceRoots: [
+                    .init(path: "/tmp/A", displayName: "A")
+                ])
+            )
+        )
+
+        try await controller.loadInitialThreads()
+        controller.apply(notification: .turnCompleted(
+            TurnCompletedNotification(
+                threadId: "unread-thread",
+                turn: CodexTurn(id: "turn-1", status: .completed, error: nil)
+            )
+        ))
+
+        let menuSnapshot = controller.prepareSnapshot(visibleThreadLimit: 1).snapshot
+        let statusSnapshot = controller.currentStatusSnapshot
+
+        XCTAssertEqual(menuSnapshot.projectSections.first?.threads.map(\.id), ["visible-thread"])
+        XCTAssertFalse(menuSnapshot.hasUnreadThreads)
+        XCTAssertTrue(statusSnapshot.hasUnreadThreads)
+        XCTAssertEqual(
+            MenubarStatusPresentation.statusItemSprite(
+                overallStatus: statusSnapshot.overallStatus,
+                hasUnreadThreads: statusSnapshot.hasUnreadThreads
+            ),
+            .unread
+        )
+    }
+
     func testLoadInitialThreadsExpandsBootstrapWindowUntilConfiguredProjectCountIsAvailable() async throws {
         let recentThreadListing = RecordingRecentThreadListing(threads: [
             thread(id: "thread-a-1", updatedAt: 500, cwd: "/tmp/A/work"),

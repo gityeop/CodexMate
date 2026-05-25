@@ -1124,11 +1124,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hoverTooltipWorkItem = nil
 
         guard isMenuOpen else {
-            let statusOverride = debugStatusOverride
-            renderStatusItem(
-                overallStatus: statusOverride ?? controller.overallStatus,
-                hasUnreadThreads: statusOverride == nil ? controller.hasUnreadThreads : false
-            )
+            renderCurrentStatusItem()
             scheduleRefreshTimerIfNeeded()
             return
         }
@@ -1150,15 +1146,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         optionShortcutTargetIDs = projectShortcutThreadIDs + [MenuNavigationIdentifier.settings]
         threadProjectIndexByThreadID[MenuNavigationIdentifier.settings] = projectShortcutThreadIDs.count
         self.threadProjectIndexByThreadID = threadProjectIndexByThreadID
-        let statusOverride = debugStatusOverride
-        renderStatusItem(
-            overallStatus: statusOverride ?? snapshot.overallStatus,
-            hasUnreadThreads: statusOverride == nil ? snapshot.hasUnreadThreads : false
-        )
         let didChangeReadMarkers = preparedSnapshot.didChangeReadMarkers
         if didChangeReadMarkers {
             persistThreadReadMarkers()
         }
+        renderCurrentStatusItem()
 
         var hoverTooltipContentsByThreadID: [String: MenubarStatusPresentation.ThreadTooltipContent] = [:]
         menu.removeAllItems()
@@ -1235,6 +1227,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             notchStatusOverlay.setMenuItems(overlayMenuEntries(from: menu.items))
         }
         scheduleRefreshTimerIfNeeded()
+    }
+
+    private func renderCurrentStatusItem() {
+        let statusOverride = debugStatusOverride
+        let statusSnapshot = controller.currentStatusSnapshot
+        renderStatusItem(
+            overallStatus: statusOverride ?? statusSnapshot.overallStatus,
+            hasUnreadThreads: statusOverride == nil ? statusSnapshot.hasUnreadThreads : false
+        )
     }
 
     private func overlayMenuEntries(from menuItems: [NSMenuItem]) -> [NotchStatusOverlayMenuEntry] {
