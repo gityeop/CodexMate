@@ -123,15 +123,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let failedIndicatorImage = AppDelegate.makeTextIndicatorImage("⚠️")
     private let hoverTooltipController = ThreadHoverTooltipController()
     private let defaults = UserDefaults.standard
-    private lazy var desktopRecentThreadListing = DesktopStateRecentThreadListing(
+    private lazy var localDesktopRecentThreadListing = DesktopStateRecentThreadListing(
         codexDirectoryURLProvider: { [codexHomeStore] in
             codexHomeStore.currentDirectoryURL
         }
     )
-    private lazy var desktopThreadMetadataReader = DesktopStateThreadMetadataReader(
+    private lazy var localDesktopThreadMetadataReader = DesktopStateThreadMetadataReader(
         codexDirectoryURLProvider: { [codexHomeStore] in
             codexHomeStore.currentDirectoryURL
         }
+    )
+    private lazy var remoteDesktopStateThreadReader = RemoteDesktopStateThreadReader(
+        codexDirectoryURLProvider: { [codexHomeStore] in
+            codexHomeStore.currentDirectoryURL
+        }
+    )
+    private lazy var desktopRecentThreadListing = CompositeRecentThreadListing(
+        primary: localDesktopRecentThreadListing,
+        fallbacks: [remoteDesktopStateThreadReader]
+    )
+    private lazy var desktopThreadMetadataReader = CompositeThreadMetadataReader(
+        primary: localDesktopThreadMetadataReader,
+        fallbacks: [remoteDesktopStateThreadReader]
     )
     private lazy var asyncProjectCatalogLoader = DesktopProjectCatalogLoader(
         codexDirectoryURLProvider: { [codexHomeStore] in

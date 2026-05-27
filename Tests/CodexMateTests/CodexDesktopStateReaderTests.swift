@@ -1454,6 +1454,69 @@ final class CodexDesktopStateReaderTests: XCTestCase {
         XCTAssertEqual(threads.first?.status, .active(flags: []))
     }
 
+    func testThreadsReflectsCompletedTaskFromSessionFileAsIdle() throws {
+        let tempDirectoryURL = FileManager.default.temporaryDirectory
+            .appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: tempDirectoryURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDirectoryURL) }
+
+        let sessionURL = tempDirectoryURL.appending(path: "thread-completed.jsonl")
+        try """
+        {"timestamp":"2026-05-04T03:11:37.043Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-1"}}
+        {"timestamp":"2026-05-04T03:12:37.043Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-1"}}
+        """.write(to: sessionURL, atomically: true, encoding: .utf8)
+
+        let databaseURL = tempDirectoryURL.appending(path: "state.sqlite")
+        try createStateDatabase(
+            at: databaseURL,
+            sql: """
+            CREATE TABLE threads (
+                id TEXT PRIMARY KEY,
+                first_user_message TEXT NOT NULL DEFAULT '',
+                title TEXT NOT NULL DEFAULT '',
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                cwd TEXT NOT NULL,
+                rollout_path TEXT,
+                source TEXT NOT NULL DEFAULT 'vscode',
+                agent_role TEXT,
+                agent_nickname TEXT,
+                archived INTEGER NOT NULL DEFAULT 0
+            );
+            INSERT INTO threads (
+                id,
+                first_user_message,
+                title,
+                created_at,
+                updated_at,
+                cwd,
+                rollout_path,
+                source,
+                agent_role,
+                agent_nickname,
+                archived
+            ) VALUES (
+                'thread-completed',
+                'Completed preview',
+                'Completed Thread',
+                100,
+                200,
+                '/tmp/completed',
+                '\(sessionURL.path.replacingOccurrences(of: "'", with: "''"))',
+                'vscode',
+                NULL,
+                NULL,
+                0
+            );
+            """
+        )
+
+        let reader = CodexDesktopStateReader(stateDatabaseURLOverride: databaseURL)
+        let threads = try reader.threads(threadIDs: ["thread-completed"])
+
+        XCTAssertEqual(threads.first?.status, .idle)
+    }
+
     func testArchivedThreadIDsReturnsArchivedRows() throws {
         let tempDirectoryURL = FileManager.default.temporaryDirectory
             .appending(path: UUID().uuidString)

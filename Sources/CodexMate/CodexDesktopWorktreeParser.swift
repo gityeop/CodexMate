@@ -45,19 +45,17 @@ struct CodexDesktopWorktreeParser {
         var seenPaths: Set<String> = []
         var roots: [CodexDesktopProjectCatalog.WorkspaceRoot] = []
 
-        for rawPath in state.savedWorkspaceRoots {
-            let normalizedPath = CodexDesktopWorktreePath.normalize(path: rawPath)
-            guard !normalizedPath.isEmpty else { continue }
-            guard seenPaths.insert(normalizedPath).inserted else { continue }
-
-            roots.append(
-                CodexDesktopProjectCatalog.WorkspaceRoot(
-                    path: normalizedPath,
-                    displayName: normalizedLabels[normalizedPath]
-                        ?? CodexDesktopWorktreePath.fallbackDisplayName(for: normalizedPath)
-                )
-            )
-        }
+        appendWorkspaceRoots(
+            state.savedWorkspaceRoots ?? [],
+            labelsByPath: normalizedLabels,
+            seenPaths: &seenPaths,
+            roots: &roots
+        )
+        appendRemoteProjectRoots(
+            state.remoteProjects ?? [],
+            seenPaths: &seenPaths,
+            roots: &roots
+        )
 
         return ParsedState(
             workspaceRoots: roots,
@@ -98,18 +96,74 @@ struct CodexDesktopWorktreeParser {
 
         return normalizedHints
     }
+
+    private func appendWorkspaceRoots(
+        _ rawPaths: [String],
+        labelsByPath: [String: String],
+        seenPaths: inout Set<String>,
+        roots: inout [CodexDesktopProjectCatalog.WorkspaceRoot]
+    ) {
+        for rawPath in rawPaths {
+            let normalizedPath = CodexDesktopWorktreePath.normalize(path: rawPath)
+            guard !normalizedPath.isEmpty else { continue }
+            guard seenPaths.insert(normalizedPath).inserted else { continue }
+
+            roots.append(
+                CodexDesktopProjectCatalog.WorkspaceRoot(
+                    path: normalizedPath,
+                    displayName: labelsByPath[normalizedPath]
+                        ?? CodexDesktopWorktreePath.fallbackDisplayName(for: normalizedPath)
+                )
+            )
+        }
+    }
+
+    private func appendRemoteProjectRoots(
+        _ remoteProjects: [RemoteProject],
+        seenPaths: inout Set<String>,
+        roots: inout [CodexDesktopProjectCatalog.WorkspaceRoot]
+    ) {
+        for remoteProject in remoteProjects {
+            let normalizedPath = CodexDesktopWorktreePath.normalize(path: remoteProject.remotePath)
+            guard !normalizedPath.isEmpty else { continue }
+            guard seenPaths.insert(normalizedPath).inserted else { continue }
+
+            let trimmedLabel = remoteProject.label?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let displayName: String
+            if let trimmedLabel, !trimmedLabel.isEmpty {
+                displayName = trimmedLabel
+            } else {
+                displayName = CodexDesktopWorktreePath.fallbackDisplayName(for: normalizedPath)
+            }
+
+            roots.append(
+                CodexDesktopProjectCatalog.WorkspaceRoot(
+                    path: normalizedPath,
+                    displayName: displayName
+                )
+            )
+        }
+    }
 }
 
 private struct GlobalStateFile: Decodable {
-    let savedWorkspaceRoots: [String]
+    let savedWorkspaceRoots: [String]?
     let workspaceRootLabels: [String: String]?
     let threadWorkspaceRootHints: [String: String]?
     let projectlessThreadIDs: [String]?
+    let remoteProjects: [RemoteProject]?
 
     enum CodingKeys: String, CodingKey {
         case savedWorkspaceRoots = "electron-saved-workspace-roots"
         case workspaceRootLabels = "electron-workspace-root-labels"
         case threadWorkspaceRootHints = "thread-workspace-root-hints"
         case projectlessThreadIDs = "projectless-thread-ids"
+        case remoteProjects = "remote-projects"
     }
+}
+
+private struct RemoteProject: Decodable {
+    let remotePath: String
+    let label: String?
 }

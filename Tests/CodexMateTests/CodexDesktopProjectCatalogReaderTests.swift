@@ -199,6 +199,40 @@ final class CodexDesktopProjectCatalogReaderTests: XCTestCase {
         )
     }
 
+    func testWorktreeParserIncludesRemoteProjectsAsWorkspaceRoots() throws {
+        let parser = CodexDesktopWorktreeParser()
+        let data = try XCTUnwrap(
+            """
+            {
+              "electron-saved-workspace-roots": [
+                "/tmp/worktrees/local-app"
+              ],
+              "remote-projects": [
+                {
+                  "id": "remote-project-1",
+                  "hostId": "remote-ssh-codex-managed:oracle-openclaw",
+                  "remotePath": "/home/ubuntu",
+                  "label": "  ubuntu  "
+                }
+              ]
+            }
+            """.data(using: .utf8)
+        )
+
+        let parsedState = try parser.parse(data)
+        let catalog = CodexDesktopProjectCatalog(workspaceRoots: parsedState.workspaceRoots)
+
+        XCTAssertEqual(
+            parsedState.workspaceRoots,
+            [
+                .init(path: "/tmp/worktrees/local-app", displayName: "local-app"),
+                .init(path: "/home/ubuntu", displayName: "ubuntu")
+            ]
+        )
+        XCTAssertEqual(catalog.project(for: "/home/ubuntu").displayName, "ubuntu")
+        XCTAssertEqual(catalog.project(for: "/home/ubuntu/hermes").displayName, "ubuntu")
+    }
+
     func testWorktreeParserReadsThreadWorkspaceRootHintsAndProjectlessThreadIDs() throws {
         let parser = CodexDesktopWorktreeParser()
         let data = try XCTUnwrap(

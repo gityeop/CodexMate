@@ -458,6 +458,10 @@ struct CodexDesktopStateReader {
             return .active(flags: [])
         }
 
+        if state.latestTaskCompletedAt != nil {
+            return .idle
+        }
+
         return .notLoaded
     }
 
