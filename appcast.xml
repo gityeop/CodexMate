@@ -3,18 +3,19 @@
     <channel>
         <title>CodexMate</title>
         <item>
-            <title>0.0.28</title>
-            <pubDate>Mon, 25 May 2026 21:23:31 +0900</pubDate>
-            <link>https://github.com/gityeop/CodexMate/releases/tag/v0.0.28</link>
-            <sparkle:version>28</sparkle:version>
-            <sparkle:shortVersionString>0.0.28</sparkle:shortVersionString>
+            <title>0.0.29</title>
+            <pubDate>Thu, 28 May 2026 08:20:01 +0900</pubDate>
+            <link>https://github.com/gityeop/CodexMate/releases/tag/v0.0.29</link>
+            <sparkle:version>29</sparkle:version>
+            <sparkle:shortVersionString>0.0.29</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description sparkle:format="markdown"><![CDATA[# CodexMate 0.0.28
+            <description sparkle:format="markdown"><![CDATA[# CodexMate 0.0.29
 
-- Keeps the notch pixel character in the unread state when opening the menu, even when the unread thread is outside the visible menu rows.
+- Shows remote Codex projects with their saved project name instead of grouping them under Unknown Project.
+- Hydrates remote thread titles and completion state from the remote Codex state so finished remote work no longer stays as an ID-only running row.
 ]]></description>
-            <enclosure url="https://github.com/gityeop/CodexMate/releases/latest/download/CodexMate-0.0.28.zip" length="4530705" type="application/octet-stream" sparkle:edSignature="I8YP92rbqitJ+p/Wgnha6BckPYD7b79WVRv9FvNcWO1uQF7e3hMrutwyat2LlIjBm5o8uJwlXwOAE/+w56lJAg=="/>
+            <enclosure url="https://github.com/gityeop/CodexMate/releases/latest/download/CodexMate-0.0.29.zip" length="4589769" type="application/octet-stream" sparkle:edSignature="jYaDa/8JPeWPkZGXLbZp08C6EbjphUDsrZ0BnuiNCGNIQcIVlO1IB9UpYyIf74BlET3OJgSZbk9B84G6WrHOCg=="/>
         </item>
     </channel>
 </rss>
