@@ -109,6 +109,60 @@ final class MenubarControllerIntegrationTests: XCTestCase {
         XCTAssertEqual(snapshot.projectSections.first?.threads.map(\.id), ["thread-b"])
     }
 
+    func testRefreshThreadsHydratesPendingThreadMissingFromRecentWindowByID() async throws {
+        let listedThread = thread(
+            id: "thread-a",
+            updatedAt: 100,
+            cwd: "/tmp/A/work",
+            path: "/tmp/A/thread-a.jsonl",
+            source: "vscode"
+        )
+        let pendingRunningThread = thread(
+            id: "thread-b",
+            updatedAt: 150,
+            cwd: "/tmp/B/work",
+            status: .active(flags: []),
+            path: "/tmp/B/thread-b.jsonl",
+            source: "vscode"
+        )
+        let pendingIdleThread = thread(
+            id: "thread-b",
+            updatedAt: 200,
+            cwd: "/tmp/B/work",
+            status: .idle,
+            path: "/tmp/B/thread-b.jsonl",
+            source: "vscode"
+        )
+        let controller = makeController(
+            recentThreadResponses: [
+                [listedThread],
+                [listedThread]
+            ],
+            metadataResponses: [
+                .success([pendingIdleThread])
+            ],
+            projectCatalog: .success(
+                CodexDesktopProjectCatalog(workspaceRoots: [
+                    .init(path: "/tmp/A", displayName: "A"),
+                    .init(path: "/tmp/B", displayName: "B")
+                ])
+            )
+        )
+
+        try await controller.loadInitialThreads()
+        controller.apply(notification: .threadStarted(
+            ThreadStartedNotification(thread: pendingRunningThread)
+        ))
+
+        let effects = try await controller.refreshThreads()
+        let snapshot = controller.prepareSnapshot().snapshot
+
+        XCTAssertEqual(snapshot.projectSections.map(\.section.displayName), ["B", "A"])
+        XCTAssertEqual(snapshot.projectSections.first?.threads.map(\.id), ["thread-b"])
+        XCTAssertEqual(snapshot.projectSections.first?.threads.first?.thread.displayStatus, .idle)
+        XCTAssertTrue(effects.diagnostics.first?.contains("resolved=[thread-b]") ?? false)
+    }
+
     func testRefreshDesktopActivityReloadsProjectCatalogForThreadWorkspaceRootHints() async throws {
         let controller = makeController(
             desktopUpdates: [

@@ -1097,6 +1097,25 @@ final class AppStateStoreTests: XCTestCase {
         XCTAssertNil(store.recentThreads.first?.activeTurnID)
     }
 
+    func testDesktopTurnStartDoesNotReviveThreadAfterNewerAuthoritativeIdleUpdate() {
+        var store = AppStateStore()
+        store.replaceRecentThreads(with: [thread(id: "thread-1", updatedAt: 100, status: .idle)])
+
+        store.apply(desktopTurnStarts: [
+            "thread-1": Date(timeIntervalSince1970: 200)
+        ])
+        store.replaceRecentThreads(with: [
+            thread(id: "thread-1", updatedAt: 260, status: .idle)
+        ])
+        store.apply(desktopTurnStarts: [
+            "thread-1": Date(timeIntervalSince1970: 200)
+        ])
+
+        XCTAssertEqual(store.overallStatus, .idle)
+        XCTAssertEqual(store.recentThreads.first?.displayStatus, .idle)
+        XCTAssertNil(store.recentThreads.first?.activeTurnID)
+    }
+
     func testConnectedDesktopSnapshotKeepsWatchedActiveTurnRunningWithoutSnapshotEvidence() {
         var store = AppStateStore()
         store.replaceRecentThreads(with: [thread(id: "thread-1", updatedAt: 100, status: .idle)])

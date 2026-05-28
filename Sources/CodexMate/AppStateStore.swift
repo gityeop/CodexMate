@@ -1193,6 +1193,11 @@ struct AppStateStore {
             return false
         }
 
+        if isTerminalAuthoritativeStatus(row.listedStatus),
+           row.updatedAt >= startedAt {
+            return false
+        }
+
         if let lastTerminalActivityAt = row.lastTerminalActivityAt,
            lastTerminalActivityAt >= startedAt {
             return false
@@ -1227,6 +1232,15 @@ struct AppStateStore {
         case .waitingForInput, .needsApproval, .running:
             return true
         case .notLoaded, .idle, .failed:
+            return false
+        }
+    }
+
+    private static func isTerminalAuthoritativeStatus(_ status: ThreadStatus) -> Bool {
+        switch status {
+        case .idle, .failed:
+            return true
+        case .notLoaded, .waitingForInput, .running, .needsApproval:
             return false
         }
     }

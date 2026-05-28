@@ -1102,8 +1102,13 @@ final class MenubarController {
     }
 
     private func hydratedRecentThreads(limit: Int) async throws -> [CodexThread] {
-        let threads = try await loadRecentThreads(limit)
-        return try await hydrateThreads(threads)
+        let recentThreads = try await loadRecentThreads(limit)
+        let recentThreadIDs = Set(recentThreads.map(\.id))
+        let trackedPendingThreadIDs = Set(state.recentThreads.map(\.id))
+            .intersection(pendingDiscoveredThreads.pendingThreadIDs)
+        let pendingThreadIDs = trackedPendingThreadIDs.subtracting(recentThreadIDs)
+        let pendingThreads = pendingThreadIDs.isEmpty ? [] : try await loadThreadsByID(pendingThreadIDs)
+        return try await hydrateThreads(recentThreads + pendingThreads)
     }
 
     private func hydrateThreads(_ threads: [CodexThread]) async throws -> [CodexThread] {
