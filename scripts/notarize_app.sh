@@ -15,8 +15,18 @@ if [[ -z "${APPLE_NOTARY_PROFILE:-}" ]]; then
   exit 1
 fi
 
+notarytool_args=(
+  "submit" "$ZIP_PATH"
+  "--keychain-profile" "$APPLE_NOTARY_PROFILE"
+  "--wait"
+)
+
+if [[ -n "${APPLE_KEYCHAIN_PATH:-}" ]]; then
+  notarytool_args+=("--keychain" "$APPLE_KEYCHAIN_PATH")
+fi
+
 ditto -c -k --keepParent "$APP_PATH" "$ZIP_PATH"
-xcrun notarytool submit "$ZIP_PATH" --keychain-profile "$APPLE_NOTARY_PROFILE" --wait
+xcrun notarytool "${notarytool_args[@]}"
 xcrun stapler staple "$APP_PATH"
 
 echo "Notarized app: $APP_PATH"
