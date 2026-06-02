@@ -3,19 +3,19 @@
     <channel>
         <title>CodexMate</title>
         <item>
-            <title>0.0.30</title>
-            <pubDate>Thu, 28 May 2026 13:49:26 +0900</pubDate>
-            <link>https://github.com/gityeop/CodexMate/releases/tag/v0.0.30</link>
-            <sparkle:version>30</sparkle:version>
-            <sparkle:shortVersionString>0.0.30</sparkle:shortVersionString>
+            <title>0.0.31</title>
+            <pubDate>Wed, 03 Jun 2026 05:21:44 +0900</pubDate>
+            <link>https://github.com/gityeop/CodexMate/releases/tag/v0.0.31</link>
+            <sparkle:version>31</sparkle:version>
+            <sparkle:shortVersionString>0.0.31</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description sparkle:format="markdown"><![CDATA[# CodexMate 0.0.30
+            <description sparkle:format="markdown"><![CDATA[# CodexMate 0.0.31
 
-- Keeps tracked remote threads stable even when they fall outside the recent thread list window.
-- Prevents stale local desktop turn-start hints from reviving a remote thread after newer remote metadata already marked it idle.
+- Hides unhydrated running thread placeholders from the notch menu until their project and title metadata is available.
+- Keeps running-state discovery active while avoiding temporary `Unknown Project` entries that only show a thread ID.
 ]]></description>
-            <enclosure url="https://github.com/gityeop/CodexMate/releases/latest/download/CodexMate-0.0.30.zip" length="4591288" type="application/octet-stream" sparkle:edSignature="N/xTLeA6/Luj0J6V1Yh+k+bQjpnr5YLroNa6bcCK25zkkVP3tho0xwnD6lMlIaejcgODvfu2m6UOQe5WmBpmCw=="/>
+            <enclosure url="https://github.com/gityeop/CodexMate/releases/latest/download/CodexMate-0.0.31.zip" length="4591530" type="application/octet-stream" sparkle:edSignature="dRO+klufF1GRywEOWz2S7W6TRbhaLj39fOmBo2yF2nvdDyEKGdafCh4QgaYJJqqQJZvrOdX95YR4ekWOCtRgBg=="/>
         </item>
     </channel>
 </rss>
