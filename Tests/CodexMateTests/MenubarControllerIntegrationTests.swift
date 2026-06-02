@@ -70,7 +70,8 @@ final class MenubarControllerIntegrationTests: XCTestCase {
         _ = try await controller.refreshThreads()
         let snapshot = controller.prepareSnapshot().snapshot
 
-        XCTAssertTrue(snapshot.projectSections.flatMap(\.allThreads).contains { $0.id == "thread-b" })
+        XCTAssertTrue(controller.recentThreads.contains { $0.id == "thread-b" })
+        XCTAssertFalse(snapshot.projectSections.flatMap(\.allThreads).contains { $0.id == "thread-b" })
     }
 
     func testRefreshDesktopActivityDiscoversAndSeedsUnknownProject() async throws {
