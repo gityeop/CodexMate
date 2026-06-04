@@ -60,7 +60,7 @@ enum MenubarSnapshotSelector {
         let threadsByID = Dictionary(uniqueKeysWithValues: allThreads.map { ($0.id, $0) })
 
         for thread in allThreads {
-            guard !isUnhydratedRuntimePlaceholder(thread, projectCatalog: projectCatalog) else {
+            guard !thread.hasUnhydratedPlaceholderMetadata else {
                 continue
             }
 
@@ -315,24 +315,6 @@ enum MenubarSnapshotSelector {
     ) -> Bool {
         thread.authoritativeListPresence == .pendingInclusion
             || now.timeIntervalSince(thread.activityUpdatedAt) <= unmatchedProjectGraceInterval
-    }
-
-    private static func isUnhydratedRuntimePlaceholder(
-        _ thread: AppStateStore.ThreadRow,
-        projectCatalog: CodexDesktopProjectCatalog
-    ) -> Bool {
-        guard thread.presentationStatus == .running,
-              thread.authoritativeListPresence == .pendingInclusion,
-              thread.listedStatus == .notLoaded,
-              thread.sessionPath == nil,
-              !projectCatalog.projectlessThreadIDs.contains(thread.id)
-        else {
-            return false
-        }
-
-        return thread.cwd.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            && thread.displayTitle == thread.id
-            && thread.preview == thread.id
     }
 
     private static func isKnownProject(

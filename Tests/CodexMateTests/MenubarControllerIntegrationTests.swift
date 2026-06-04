@@ -1734,6 +1734,72 @@ final class MenubarControllerIntegrationTests: XCTestCase {
         )
     }
 
+    func testCurrentStatusSnapshotIgnoresUnhydratedCompletedPlaceholderUntilMetadataArrives() async throws {
+        let controller = makeController(
+            recentThreadResponses: [
+                [
+                    thread(
+                        id: "known-thread",
+                        updatedAt: 100,
+                        cwd: "/tmp/A/work",
+                        path: "/tmp/A/known-thread.jsonl",
+                        source: "vscode"
+                    )
+                ]
+            ],
+            metadataResponses: [
+                .success([
+                    thread(
+                        id: "unhydrated-thread",
+                        updatedAt: 200,
+                        cwd: "/tmp/B/work",
+                        path: "/tmp/B/unhydrated-thread.jsonl",
+                        source: "vscode"
+                    )
+                ])
+            ],
+            initialThreadReadMarkers: [
+                "unhydrated-thread": 0
+            ],
+            projectCatalog: .success(
+                CodexDesktopProjectCatalog(workspaceRoots: [
+                    .init(path: "/tmp/A", displayName: "A"),
+                    .init(path: "/tmp/B", displayName: "B")
+                ])
+            )
+        )
+
+        try await controller.loadInitialThreads()
+        controller.apply(notification: .turnCompleted(
+            TurnCompletedNotification(
+                threadId: "unhydrated-thread",
+                turn: CodexTurn(id: "turn-1", status: .completed, error: nil)
+            )
+        ))
+
+        let placeholderMenuSnapshot = controller.prepareSnapshot().snapshot
+        let placeholderStatusSnapshot = controller.currentStatusSnapshot
+
+        XCTAssertTrue(controller.recentThreads.contains { $0.id == "unhydrated-thread" })
+        XCTAssertEqual(placeholderMenuSnapshot.projectSections.map(\.section.displayName), ["A"])
+        XCTAssertFalse(
+            placeholderMenuSnapshot.projectSections.flatMap(\.allThreads).contains { $0.id == "unhydrated-thread" }
+        )
+        XCTAssertFalse(placeholderStatusSnapshot.hasUnreadThreads)
+
+        let effects = await controller.refreshThreadMetadata(threadIDs: ["unhydrated-thread"])
+        let hydratedMenuSnapshot = controller.prepareSnapshot().snapshot
+        let hydratedStatusSnapshot = controller.currentStatusSnapshot
+        let hydratedThread = hydratedMenuSnapshot.projectSections
+            .flatMap(\.threads)
+            .first { $0.id == "unhydrated-thread" }
+
+        XCTAssertTrue(effects.shouldRequestDesktopActivityRefresh)
+        XCTAssertEqual(hydratedMenuSnapshot.projectSections.map(\.section.displayName), ["B", "A"])
+        XCTAssertTrue(hydratedThread?.hasUnreadContent ?? false)
+        XCTAssertTrue(hydratedStatusSnapshot.hasUnreadThreads)
+    }
+
     func testLoadInitialThreadsExpandsBootstrapWindowUntilConfiguredProjectCountIsAvailable() async throws {
         let recentThreadListing = RecordingRecentThreadListing(threads: [
             thread(id: "thread-a-1", updatedAt: 500, cwd: "/tmp/A/work"),

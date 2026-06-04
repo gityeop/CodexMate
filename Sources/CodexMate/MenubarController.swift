@@ -475,7 +475,11 @@ final class MenubarController {
 
     var hasUnreadThreads: Bool {
         state.recentThreads.contains { thread in
-            threadReadMarkers.hasUnreadContent(
+            guard !thread.hasUnhydratedPlaceholderMetadata else {
+                return false
+            }
+
+            return threadReadMarkers.hasUnreadContent(
                 threadID: thread.id,
                 lastTerminalActivityAt: thread.lastTerminalActivityAt
             )

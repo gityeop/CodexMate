@@ -177,6 +177,15 @@ struct AppStateStore {
             activeTurnID != nil
         }
 
+        var hasUnhydratedPlaceholderMetadata: Bool {
+            authoritativeListPresence == .pendingInclusion
+                && listedStatus == .notLoaded
+                && sessionPath == nil
+                && cwd.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                && displayTitle == id
+                && preview == id
+        }
+
         var activityUpdatedAt: Date {
             let terminalActivityAt = max(updatedAt, lastTerminalActivityAt ?? .distantPast)
 

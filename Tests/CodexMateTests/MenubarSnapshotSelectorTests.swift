@@ -190,6 +190,38 @@ final class MenubarSnapshotSelectorTests: XCTestCase {
         XCTAssertFalse(snapshot.projectSections.flatMap(\.allThreads).contains { $0.id == "unhydrated-thread" })
     }
 
+    func testSnapshotHidesUnhydratedCompletedPlaceholderUntilMetadataArrives() {
+        var state = AppStateStore()
+        state.replaceRecentThreads(
+            with: [
+                codexThread(id: "known-thread", updatedAt: 100, cwd: "/tmp/A/work")
+            ]
+        )
+        state.apply(
+            notification: .turnCompleted(
+                TurnCompletedNotification(
+                    threadId: "unhydrated-thread",
+                    turn: CodexTurn(id: "turn-1", status: .completed, error: nil)
+                )
+            )
+        )
+
+        let snapshot = MenubarSnapshotSelector.makeSnapshot(
+            state: state,
+            projectCatalog: projectCatalog,
+            threadReadMarkers: ThreadReadMarkerStore(lastReadTerminalAtByThreadID: [
+                "unhydrated-thread": 0
+            ]),
+            projectLimit: 3,
+            visibleThreadLimit: 3
+        )
+
+        XCTAssertTrue(state.recentThreads.contains { $0.id == "unhydrated-thread" })
+        XCTAssertEqual(snapshot.projectSections.map(\.section.displayName), ["A"])
+        XCTAssertFalse(snapshot.projectSections.flatMap(\.allThreads).contains { $0.id == "unhydrated-thread" })
+        XCTAssertFalse(snapshot.hasUnreadThreads)
+    }
+
     func testSnapshotBucketsSubagentWithProjectlessParentInsteadOfScratchProject() {
         var state = AppStateStore()
         state.replaceRecentThreads(
