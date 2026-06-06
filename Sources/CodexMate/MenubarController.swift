@@ -623,6 +623,7 @@ final class MenubarController {
                     ThreadSessionContext(
                         path: row.sessionPath,
                         authoritativeUpdatedAt: row.updatedAt,
+                        authoritativeTerminalActivityAt: row.lastTerminalActivityAt,
                         authoritativeStatusIsPending: row.listedStatus.isPending,
                         authoritativeStatusIsActive: row.presentationStatus == .running || row.activeTurnID != nil
                     )

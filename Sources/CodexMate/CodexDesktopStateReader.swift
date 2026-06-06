@@ -1437,12 +1437,15 @@ struct CodexDesktopStateReader {
         guard !context.authoritativeStatusIsPending,
               !context.authoritativeStatusIsActive,
               let sessionModifiedAt,
-              let authoritativeUpdatedAt = context.authoritativeUpdatedAt
+              let authoritativeActivityAt = Self.latestDate(
+                context.authoritativeUpdatedAt,
+                context.authoritativeTerminalActivityAt
+              )
         else {
             return false
         }
 
-        return authoritativeUpdatedAt.timeIntervalSince(sessionModifiedAt) > Self.staleSessionPendingTolerance
+        return authoritativeActivityAt.timeIntervalSince(sessionModifiedAt) > Self.staleSessionPendingTolerance
     }
 
     private func isStaleSessionPendingState(

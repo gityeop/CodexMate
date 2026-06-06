@@ -96,6 +96,37 @@ final class CodexDesktopConversationActivityReaderTests: XCTestCase {
         XCTAssertEqual(snapshot.latestTurnCompletedAtByThreadID["thread-2"], date("2026-03-11T12:20:30.000Z"))
     }
 
+    func testActivitySnapshotTreatsMaybeResumeInterruptedAsCompletionHint() throws {
+        let tempDirectoryURL = FileManager.default.temporaryDirectory
+            .appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: tempDirectoryURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDirectoryURL) }
+
+        let logDirectoryURL = tempDirectoryURL
+            .appending(path: "2026")
+            .appending(path: "03")
+            .appending(path: "11")
+        try FileManager.default.createDirectory(at: logDirectoryURL, withIntermediateDirectories: true)
+
+        let logURL = logDirectoryURL.appending(path: "resume-interrupted.log")
+        try """
+        2026-03-11T12:17:11.346Z info [ElectronAppServerConnection] response_routed broadcastFallback=false conversationId=thread-1 durationMs=157 errorCode=null hadInternalHandler=false hadPending=true method=thread/resume originWebcontentsId=1 requestId=a targetDestroyed=false
+        2026-03-11T12:17:11.351Z info [electron-message-handler] maybe_resume_success conversationId=thread-1 latestTurnId=turn-1 latestTurnStatus=interrupted markedStreaming=true turnCount=1
+        """.write(to: logURL, atomically: true, encoding: .utf8)
+
+        let reader = CodexDesktopConversationActivityReader(
+            logsDirectoryURL: tempDirectoryURL,
+            lookbackDays: 2
+        )
+
+        let snapshot = reader.activitySnapshot(
+            now: Date(timeIntervalSince1970: 1_773_195_200)
+        )
+
+        XCTAssertEqual(snapshot.latestViewedAtByThreadID["thread-1"], date("2026-03-11T12:17:11.346Z"))
+        XCTAssertEqual(snapshot.latestTurnCompletedAtByThreadID["thread-1"], date("2026-03-11T12:17:11.351Z"))
+    }
+
     func testActivitySnapshotParsesAppServerTurnCompletedLogs() throws {
         let tempDirectoryURL = FileManager.default.temporaryDirectory
             .appending(path: UUID().uuidString)

@@ -441,10 +441,11 @@ final class CodexDesktopConversationActivityReader {
                     }
                 }
 
-                // `maybe_resume_success` is emitted when reopening an already-completed thread,
-                // so only the explicit completion notification should advance terminal activity.
+                // Completed resume lines are emitted when reopening an already-completed thread.
+                // Interrupted resume lines mark a terminal turn when the session JSONL missed `turn_aborted`.
                 if line.contains("[desktop-notifications] show turn-complete")
-                    || line.contains("app-server event: turn/completed") {
+                    || line.contains("app-server event: turn/completed")
+                    || isInterruptedResumeLine(line) {
                     let currentLatestCompleted = latestTurnCompletedAtByThreadID[threadID] ?? .distantPast
                     if timestamp > currentLatestCompleted {
                         latestTurnCompletedAtByThreadID[threadID] = timestamp
@@ -523,6 +524,11 @@ final class CodexDesktopConversationActivityReader {
         }
 
         return false
+    }
+
+    private func isInterruptedResumeLine(_ line: String) -> Bool {
+        line.contains("maybe_resume_success")
+            && tokenValue(for: "latestTurnStatus=", in: line) == "interrupted"
     }
 
     private func tokenValue(for prefix: String, in line: String) -> String? {
