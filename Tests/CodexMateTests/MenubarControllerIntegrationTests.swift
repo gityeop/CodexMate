@@ -1696,7 +1696,7 @@ final class MenubarControllerIntegrationTests: XCTestCase {
         XCTAssertEqual(snapshot.projectSections.dropFirst().first?.threads.map(\.id), ["thread-b-1"])
     }
 
-    func testCurrentStatusSnapshotKeepsUnreadOutsideVisibleMenuLimit() async throws {
+    func testCurrentStatusSnapshotIgnoresUnreadOutsideVisibleMenuLimit() async throws {
         let controller = makeController(
             recentThreadResponses: [
                 [
@@ -1708,6 +1708,16 @@ final class MenubarControllerIntegrationTests: XCTestCase {
                 CodexDesktopProjectCatalog(workspaceRoots: [
                     .init(path: "/tmp/A", displayName: "A")
                 ])
+            ),
+            configuration: MenubarControllerConfiguration(
+                initialFetchLimit: 32,
+                maxTrackedThreads: 256,
+                projectLimit: 5,
+                visibleThreadLimit: 1,
+                authoritativeListOmissionGraceCount: 2,
+                maxPendingDiscoveredThreads: 64,
+                pendingDiscoveredThreadTTL: 120,
+                threadReadMarkerRetentionSeconds: 30 * 24 * 60 * 60
             )
         )
 
@@ -1719,18 +1729,18 @@ final class MenubarControllerIntegrationTests: XCTestCase {
             )
         ))
 
-        let menuSnapshot = controller.prepareSnapshot(visibleThreadLimit: 1).snapshot
+        let menuSnapshot = controller.prepareSnapshot().snapshot
         let statusSnapshot = controller.currentStatusSnapshot
 
         XCTAssertEqual(menuSnapshot.projectSections.first?.threads.map(\.id), ["visible-thread"])
         XCTAssertFalse(menuSnapshot.hasUnreadThreads)
-        XCTAssertTrue(statusSnapshot.hasUnreadThreads)
+        XCTAssertFalse(statusSnapshot.hasUnreadThreads)
         XCTAssertEqual(
             MenubarStatusPresentation.statusItemSprite(
                 overallStatus: statusSnapshot.overallStatus,
                 hasUnreadThreads: statusSnapshot.hasUnreadThreads
             ),
-            .unread
+            .idle
         )
     }
 
@@ -1914,6 +1924,7 @@ final class MenubarControllerIntegrationTests: XCTestCase {
         initialThreadReadMarkers: [String: TimeInterval] = [:],
         projectCatalog: Result<CodexDesktopProjectCatalog, Error> = .success(.empty),
         projectCatalogResponses: [Result<CodexDesktopProjectCatalog, Error>] = [],
+        configuration: MenubarControllerConfiguration? = nil,
         now: @escaping () -> Date = Date.init
     ) -> MenubarController {
         MenubarController(
@@ -1928,7 +1939,7 @@ final class MenubarControllerIntegrationTests: XCTestCase {
                 results: projectCatalogResponses.isEmpty ? [projectCatalog] : projectCatalogResponses
             ),
             initialThreadReadMarkers: initialThreadReadMarkers,
-            configuration: MenubarControllerConfiguration(
+            configuration: configuration ?? MenubarControllerConfiguration(
                 initialFetchLimit: 32,
                 maxTrackedThreads: 256,
                 projectLimit: 5,

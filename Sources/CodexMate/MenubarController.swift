@@ -474,23 +474,11 @@ final class MenubarController {
     }
 
     var hasUnreadThreads: Bool {
-        state.recentThreads.contains { thread in
-            guard !thread.hasUnhydratedPlaceholderMetadata else {
-                return false
-            }
-
-            return threadReadMarkers.hasUnreadContent(
-                threadID: thread.id,
-                lastTerminalActivityAt: thread.lastTerminalActivityAt
-            )
-        }
+        prepareStatusSnapshot().hasUnreadThreads
     }
 
     var currentStatusSnapshot: MenubarStatusSnapshot {
-        MenubarStatusSnapshot(
-            overallStatus: overallStatus,
-            hasUnreadThreads: hasUnreadThreads
-        )
+        prepareStatusSnapshot()
     }
 
     func prepareStatusSnapshot(

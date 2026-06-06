@@ -314,7 +314,23 @@ enum MenubarSnapshotSelector {
         now: Date
     ) -> Bool {
         thread.authoritativeListPresence == .pendingInclusion
+            || shouldKeepListedUnmatchedThread(thread)
             || now.timeIntervalSince(thread.activityUpdatedAt) <= unmatchedProjectGraceInterval
+    }
+
+    private static func shouldKeepListedUnmatchedThread(_ thread: AppStateStore.ThreadRow) -> Bool {
+        guard thread.authoritativeListPresence == .listed else {
+            return false
+        }
+
+        let normalizedCWD = CodexDesktopWorktreePath.normalize(path: thread.cwd)
+        guard !normalizedCWD.isEmpty else {
+            return false
+        }
+
+        var isDirectory: ObjCBool = false
+        return FileManager.default.fileExists(atPath: normalizedCWD, isDirectory: &isDirectory)
+            && isDirectory.boolValue
     }
 
     private static func isKnownProject(

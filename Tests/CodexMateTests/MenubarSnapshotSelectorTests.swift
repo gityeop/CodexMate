@@ -81,11 +81,18 @@ final class MenubarSnapshotSelectorTests: XCTestCase {
         )
     }
 
-    func testSnapshotHidesStaleListedThreadForRemovedProjectRoot() {
+    func testSnapshotKeepsListedThreadWithoutProjectCatalogRoot() throws {
         var state = AppStateStore()
+        let directoryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("CodexMateUnmatchedProject-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+        addTeardownBlock {
+            try FileManager.default.removeItem(at: directoryURL)
+        }
+
         state.replaceRecentThreads(
             with: [
-                codexThread(id: "removed-thread", updatedAt: 100, cwd: "/tmp/Removed Project"),
+                codexThread(id: "unmatched-thread", updatedAt: 100, cwd: directoryURL.path),
                 codexThread(id: "survivor-thread", updatedAt: 90, cwd: "/tmp/A/work")
             ]
         )
@@ -103,8 +110,8 @@ final class MenubarSnapshotSelectorTests: XCTestCase {
             now: Date(timeIntervalSince1970: 1_000)
         )
 
-        XCTAssertEqual(snapshot.projectSections.map(\.section.displayName), ["A"])
-        XCTAssertEqual(snapshot.projectSections.first?.threads.map(\.id), ["survivor-thread"])
+        XCTAssertEqual(snapshot.projectSections.map(\.section.displayName), [directoryURL.lastPathComponent, "A"])
+        XCTAssertEqual(snapshot.projectSections.first?.threads.map(\.id), ["unmatched-thread"])
         XCTAssertTrue(snapshot.hasRecentThreads)
         XCTAssertTrue(snapshot.isWatchLatestThreadEnabled)
     }
@@ -258,9 +265,12 @@ final class MenubarSnapshotSelectorTests: XCTestCase {
 
     func testSnapshotReportsNoVisibleRecentThreadsWhenOnlyRemovedProjectThreadsRemain() {
         var state = AppStateStore()
+        let removedProjectPath = FileManager.default.temporaryDirectory
+            .appendingPathComponent("CodexMateRemovedProject-\(UUID().uuidString)", isDirectory: true)
+            .path
         state.replaceRecentThreads(
             with: [
-                codexThread(id: "removed-thread", updatedAt: 100, cwd: "/tmp/Removed Project")
+                codexThread(id: "removed-thread", updatedAt: 100, cwd: removedProjectPath)
             ]
         )
 
