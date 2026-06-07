@@ -56,7 +56,7 @@ actor RemoteDesktopStateThreadReader: ThreadMetadataReading, RecentThreadListing
             return []
         }
 
-        return await remoteThreads(query: .threads(threadIDs), limit: threadIDs.count)
+        return try await remoteThreads(query: .threads(threadIDs), limit: threadIDs.count)
     }
 
     func recentThreads(limit: Int) async throws -> [CodexThread] {
@@ -64,7 +64,7 @@ actor RemoteDesktopStateThreadReader: ThreadMetadataReading, RecentThreadListing
             return []
         }
 
-        return await remoteThreads(query: .recent(limit: limit), limit: limit)
+        return try await remoteThreads(query: .recent(limit: limit), limit: limit)
     }
 
     func presentThreadIDs(threadIDs: Set<String>) async throws -> Set<String> {
@@ -72,7 +72,7 @@ actor RemoteDesktopStateThreadReader: ThreadMetadataReading, RecentThreadListing
             return []
         }
 
-        let responses = await remoteResponses(query: .present(threadIDs))
+        let responses = try await remoteResponses(query: .present(threadIDs))
         return Set(responses.flatMap { $0.threadIDs ?? [] })
     }
 
@@ -81,12 +81,12 @@ actor RemoteDesktopStateThreadReader: ThreadMetadataReading, RecentThreadListing
             return []
         }
 
-        let responses = await remoteResponses(query: .archived(threadIDs))
+        let responses = try await remoteResponses(query: .archived(threadIDs))
         return Set(responses.flatMap { $0.threadIDs ?? [] })
     }
 
-    private func remoteThreads(query: RemoteCodexStateQuery, limit: Int) async -> [CodexThread] {
-        let responses = await remoteResponses(query: query)
+    private func remoteThreads(query: RemoteCodexStateQuery, limit: Int) async throws -> [CodexThread] {
+        let responses = try await remoteResponses(query: query)
         var threadsByID: [String: CodexThread] = [:]
 
         for thread in responses.flatMap({ $0.threads ?? [] }) {
@@ -108,27 +108,23 @@ actor RemoteDesktopStateThreadReader: ThreadMetadataReading, RecentThreadListing
         )
     }
 
-    private func remoteResponses(query: RemoteCodexStateQuery) async -> [RemoteCodexStateQueryResponse] {
-        let connections = (try? configurationReader.loadConnections()) ?? []
+    private func remoteResponses(query: RemoteCodexStateQuery) async throws -> [RemoteCodexStateQueryResponse] {
+        let connections = try configurationReader.loadConnections()
         guard !connections.isEmpty else {
             return []
         }
 
         let runner = runner
-        return await withTaskGroup(of: RemoteCodexStateQueryResponse?.self) { group in
+        return try await withThrowingTaskGroup(of: RemoteCodexStateQueryResponse.self) { group in
             for connection in connections {
                 group.addTask {
-                    guard let data = try? await runner.run(query: query, connection: connection) else {
-                        return nil
-                    }
-
-                    return try? JSONDecoder().decode(RemoteCodexStateQueryResponse.self, from: data)
+                    let data = try await runner.run(query: query, connection: connection)
+                    return try JSONDecoder().decode(RemoteCodexStateQueryResponse.self, from: data)
                 }
             }
 
             var responses: [RemoteCodexStateQueryResponse] = []
-            for await response in group {
-                guard let response else { continue }
+            for try await response in group {
                 responses.append(response)
             }
             return responses
@@ -250,7 +246,7 @@ struct SSHRemoteCodexStateQueryRunner: RemoteCodexStateQueryRunning {
         if let scriptData = script.data(using: .utf8) {
             stdinPipe.fileHandleForWriting.write(scriptData)
         }
-        try? stdinPipe.fileHandleForWriting.close()
+        try stdinPipe.fileHandleForWriting.close()
 
         let deadline = Date().addingTimeInterval(Defaults.timeout)
         while process.isRunning {
@@ -259,7 +255,7 @@ struct SSHRemoteCodexStateQueryRunner: RemoteCodexStateQueryRunning {
                 throw RemoteCodexStateQueryRunnerError.timedOut(connection.hostname)
             }
 
-            try? await Task.sleep(nanoseconds: 50_000_000)
+            try await Task.sleep(nanoseconds: 50_000_000)
         }
 
         let outputData = stdoutPipe.fileHandleForReading.readDataToEndOfFile()

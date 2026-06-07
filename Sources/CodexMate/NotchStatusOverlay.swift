@@ -1920,11 +1920,11 @@ final class NotchStatusOverlayView: NSView {
     }
 
     private var collapsedNotchBaseFrame: CGRect {
-        geometry?.collapsedNotchFrame ?? fallbackGeometry.collapsedNotchFrame
+        geometry?.collapsedNotchFrame ?? syntheticGeometry.collapsedNotchFrame
     }
 
     private var hardwareNotchFrame: CGRect {
-        geometry?.hardwareNotchFrame ?? fallbackGeometry.hardwareNotchFrame
+        geometry?.hardwareNotchFrame ?? syntheticGeometry.hardwareNotchFrame
     }
 
     private var collapsedSurfaceBaseFrame: CGRect {
@@ -2054,7 +2054,7 @@ final class NotchStatusOverlayView: NSView {
         )
     }
 
-    private var fallbackGeometry: NotchStatusOverlayGeometry {
+    private var syntheticGeometry: NotchStatusOverlayGeometry {
         let notchSize = CGSize(width: 185, height: 32)
         let collapsedNotchWidth = notchSize.width + NotchStatusOverlayController.Metrics.virtualNotchWidthExpansion
         let panelWidth = max(

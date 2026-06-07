@@ -127,7 +127,7 @@ final class CodexProtocolTests: XCTestCase {
         XCTAssertEqual(thread.displayTitle, "알림 승인 또는 입력 필요")
     }
 
-    func testDisplayTitleFallsBackToNormalizedPreviewWhenNameIsMissing() {
+    func testDisplayTitleUsesNormalizedPreviewWhenNameIsMissing() {
         let thread = CodexThread(
             id: "thread-1",
             preview: "첫 줄\n두 번째 줄",

@@ -13,7 +13,7 @@ enum CodexDesktopWorktreePath {
         return String(standardizedPath.dropLast())
     }
 
-    static func fallbackDisplayName(for path: String) -> String {
+    static func inferredDisplayName(for path: String) -> String {
         let normalizedPath = normalize(path: path)
         guard !normalizedPath.isEmpty else {
             return CodexDesktopProjectCatalog.unknownProjectDisplayName
@@ -112,7 +112,7 @@ struct CodexDesktopWorktreeParser {
                 CodexDesktopProjectCatalog.WorkspaceRoot(
                     path: normalizedPath,
                     displayName: labelsByPath[normalizedPath]
-                        ?? CodexDesktopWorktreePath.fallbackDisplayName(for: normalizedPath)
+                        ?? CodexDesktopWorktreePath.inferredDisplayName(for: normalizedPath)
                 )
             )
         }
@@ -134,7 +134,7 @@ struct CodexDesktopWorktreeParser {
             if let trimmedLabel, !trimmedLabel.isEmpty {
                 displayName = trimmedLabel
             } else {
-                displayName = CodexDesktopWorktreePath.fallbackDisplayName(for: normalizedPath)
+                displayName = CodexDesktopWorktreePath.inferredDisplayName(for: normalizedPath)
             }
 
             roots.append(

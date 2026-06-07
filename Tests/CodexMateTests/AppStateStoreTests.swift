@@ -84,7 +84,7 @@ final class AppStateStoreTests: XCTestCase {
         XCTAssertEqual(sections.first?.threads.map(\.id), ["thread-b"])
     }
 
-    func testProjectSectionsFallBackToFolderNameForUnmatchedCWD() {
+    func testProjectSectionsUseFolderNameForUnmatchedCWD() {
         var store = AppStateStore()
         store.replaceRecentThreads(with: [
             thread(id: "thread-1", updatedAt: 100, status: .idle, cwd: "/tmp/scratch-area")
@@ -1697,7 +1697,7 @@ final class AppStateStoreTests: XCTestCase {
         XCTAssertTrue(store.recentThreads.first?.isWatched ?? false)
     }
 
-    func testClearLiveRuntimeStateFallsBackToAuthoritativeCompletionTime() {
+    func testClearLiveRuntimeStateKeepsAuthoritativeCompletionTime() {
         var store = AppStateStore()
         store.replaceRecentThreads(with: [thread(id: "thread-1", updatedAt: 120, status: .idle)])
 

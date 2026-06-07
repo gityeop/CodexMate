@@ -1143,99 +1143,6 @@ final class CodexDesktopStateReaderTests: XCTestCase {
         XCTAssertTrue(pendingThreadIDs.isEmpty)
     }
 
-    func testSessionFallbackUsesDesktopCommandExecutionApproval() throws {
-        let tempDirectoryURL = FileManager.default.temporaryDirectory
-            .appending(path: UUID().uuidString)
-        try FileManager.default.createDirectory(at: tempDirectoryURL, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: tempDirectoryURL) }
-
-        let sessionURL = tempDirectoryURL.appending(path: "thread-1.jsonl")
-        try """
-        {"timestamp":"2026-03-31T09:14:08.377Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-1"}}
-        """.write(to: sessionURL, atomically: true, encoding: .utf8)
-
-        let desktopLogsURL = try createDesktopLogDirectory(
-            in: tempDirectoryURL,
-            year: 2026,
-            month: 3,
-            day: 31
-        )
-        let desktopLogURL = desktopLogsURL.appending(path: "codex-desktop.log")
-        try """
-        2026-03-31T09:14:13.578Z info [electron-message-handler] [desktop-notifications] show approval conversationId=thread-1 kind=commandExecution requestId=14
-        """.write(to: desktopLogURL, atomically: true, encoding: .utf8)
-
-        let reader = CodexDesktopStateReader(
-            now: { Date(timeIntervalSince1970: 1_774_948_853) },
-            desktopLogsDirectoryURLOverride: tempDirectoryURL.appending(path: "desktop-logs", directoryHint: .isDirectory)
-        )
-
-        let snapshot = reader.sessionFallbackSnapshot(
-            candidateSessionPaths: ["thread-1": sessionURL.path],
-            databaseError: "missing db"
-        )
-
-        XCTAssertEqual(snapshot?.approvalThreadIDs, ["thread-1"])
-        XCTAssertEqual(snapshot?.runningThreadIDs, [])
-    }
-
-    func testSessionFallbackKeepsEscalatedExecCommandRunningWithoutDesktopLog() throws {
-        let tempDirectoryURL = FileManager.default.temporaryDirectory
-            .appending(path: UUID().uuidString)
-        try FileManager.default.createDirectory(at: tempDirectoryURL, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: tempDirectoryURL) }
-
-        let sessionURL = tempDirectoryURL.appending(path: "thread-1.jsonl")
-        try """
-        {"timestamp":"2026-03-31T09:40:28.324Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-1"}}
-        {"timestamp":"2026-03-31T09:40:29.324Z","type":"response_item","payload":{"type":"function_call","name":"exec_command","arguments":"{\\"cmd\\":\\"ALLOW_ADHOC_SIGNING=1 ./scripts/package_app.sh\\",\\"justification\\":\\"package app\\",\\"sandbox_permissions\\":\\"require_escalated\\"}","call_id":"call_exec_approval"}}
-        """.write(to: sessionURL, atomically: true, encoding: .utf8)
-
-        let reader = CodexDesktopStateReader(now: { Date(timeIntervalSince1970: 1_774_950_000) })
-
-        let snapshot = reader.sessionFallbackSnapshot(
-            candidateSessionPaths: ["thread-1": sessionURL.path],
-            databaseError: "missing db"
-        )
-
-        XCTAssertEqual(snapshot?.approvalThreadIDs, [])
-        XCTAssertEqual(snapshot?.runningThreadIDs, ["thread-1"])
-    }
-
-    func testSessionFallbackIgnoresStaleCompletedPlanWaitWhenAuthoritativeThreadIsNewer() throws {
-        let tempDirectoryURL = FileManager.default.temporaryDirectory
-            .appending(path: UUID().uuidString)
-        try FileManager.default.createDirectory(at: tempDirectoryURL, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: tempDirectoryURL) }
-
-        let sessionURL = tempDirectoryURL.appending(path: "thread-1.jsonl")
-        try """
-        {"timestamp":"2026-04-11T13:37:39.449Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-1","collaboration_mode_kind":"plan"}}
-        {"timestamp":"2026-04-11T13:40:09.000Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-1"}}
-        """.write(to: sessionURL, atomically: true, encoding: .utf8)
-        try FileManager.default.setAttributes(
-            [.modificationDate: Date(timeIntervalSince1970: 100)],
-            ofItemAtPath: sessionURL.path
-        )
-
-        let reader = CodexDesktopStateReader()
-
-        let snapshot = reader.sessionFallbackSnapshot(
-            candidateSessionContexts: [
-                "thread-1": ThreadSessionContext(
-                    path: sessionURL.path,
-                    authoritativeUpdatedAt: Date(timeIntervalSince1970: 200),
-                    authoritativeStatusIsPending: false
-                )
-            ],
-            databaseError: "missing db"
-        )
-
-        XCTAssertEqual(snapshot?.waitingForInputThreadIDs, [])
-        XCTAssertEqual(snapshot?.approvalThreadIDs, [])
-        XCTAssertEqual(snapshot?.runningThreadIDs, [])
-    }
-
     func testThreadsLoadSubagentMetadata() throws {
         let tempDirectoryURL = FileManager.default.temporaryDirectory
             .appending(path: UUID().uuidString)
@@ -1395,7 +1302,7 @@ final class CodexDesktopStateReaderTests: XCTestCase {
         XCTAssertEqual(threads.first?.displayTitle, "Preview only title")
     }
 
-    func testThreadsFallsBackToSessionMetadataWhenStateRowIsMissing() throws {
+    func testThreadsDoesNotUseSessionMetadataWhenStateRowIsMissing() throws {
         let tempDirectoryURL = FileManager.default.temporaryDirectory
             .appending(path: UUID().uuidString)
         try FileManager.default.createDirectory(at: tempDirectoryURL, withIntermediateDirectories: true)
@@ -1448,15 +1355,7 @@ final class CodexDesktopStateReaderTests: XCTestCase {
         )
         let threads = try reader.threads(threadIDs: ["thread-missing"])
 
-        XCTAssertEqual(threads.map(\.id), ["thread-missing"])
-        XCTAssertEqual(threads.first?.cwd, "/tmp/recovered")
-        XCTAssertEqual(threads.first?.name, "Recovered Thread")
-        XCTAssertEqual(threads.first?.preview, "Recovered Thread")
-        XCTAssertEqual(
-            threads.first?.path.map { URL(fileURLWithPath: $0).standardizedFileURL.path },
-            sessionURL.standardizedFileURL.path
-        )
-        XCTAssertEqual(threads.first?.status, .notLoaded)
+        XCTAssertTrue(threads.isEmpty)
     }
 
     func testThreadsReflectsActiveTaskFromSessionFile() throws {
@@ -1673,7 +1572,7 @@ final class CodexDesktopStateReaderTests: XCTestCase {
                 "thread-session",
                 "thread-missing"
             ]),
-            ["thread-live", "thread-session"]
+            ["thread-live"]
         )
     }
 
@@ -1806,7 +1705,7 @@ final class CodexDesktopStateReaderTests: XCTestCase {
         XCTAssertEqual(snapshot.waitingForInputThreadIDs, ["thread-1"])
     }
 
-    func testSnapshotFallsBackToOlderStateDatabaseWhenNewestCandidateCannotBeOpened() throws {
+    func testSnapshotThrowsWhenNewestStateDatabaseCannotBeOpened() throws {
         let tempDirectoryURL = FileManager.default.temporaryDirectory
             .appending(path: UUID().uuidString)
         try FileManager.default.createDirectory(at: tempDirectoryURL, withIntermediateDirectories: true)
@@ -1859,24 +1758,13 @@ final class CodexDesktopStateReaderTests: XCTestCase {
             codexDirectoryURLOverride: tempDirectoryURL
         )
 
-        let snapshot = try reader.snapshot(candidateSessionPaths: [:])
-
-        XCTAssertEqual(snapshot.recentActivityThreadIDs, ["thread-1"])
-        XCTAssertTrue(snapshot.runningThreadIDs.isEmpty)
-    }
-
-    func testReaderErrorTreatsLockedDatabaseFailuresAsRetriable() {
-        let locked = CodexDesktopStateReader.ReaderError.queryFailed(
-            message: "Error: in prepare, database is locked (5)",
-            databasePath: "/tmp/state.sqlite"
-        )
-        let openFailure = CodexDesktopStateReader.ReaderError.queryFailed(
-            message: "Error: in prepare, unable to open database file (14)",
-            databasePath: "/tmp/state.sqlite"
-        )
-
-        XCTAssertTrue(locked.isRetriableDatabaseOpenFailure)
-        XCTAssertTrue(openFailure.isRetriableDatabaseOpenFailure)
+        XCTAssertThrowsError(try reader.snapshot(candidateSessionPaths: [:])) { error in
+            XCTAssertTrue(
+                String(describing: error).contains("queryFailed")
+                    || error.localizedDescription.contains("SQLite query failed"),
+                "Expected SQLite query failure, got \(error)"
+            )
+        }
     }
 
     func testCodexDirectoryOverrideTakesPrecedenceOverProvider() throws {

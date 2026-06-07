@@ -287,7 +287,7 @@ final class DesktopActivityServiceTests: XCTestCase {
         )
     }
 
-    func testDatabaseFailureFallsBackToSessionPendingApprovalSnapshot() async throws {
+    func testDatabaseFailureReportsErrorWithoutSessionSnapshot() async throws {
         let tempDirectoryURL = FileManager.default.temporaryDirectory
             .appending(path: UUID().uuidString, directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: tempDirectoryURL, withIntermediateDirectories: true)
@@ -309,19 +309,16 @@ final class DesktopActivityServiceTests: XCTestCase {
             now: Date(timeIntervalSince1970: 100)
         )
 
-        XCTAssertNil(update.runtimeErrorMessage)
-        XCTAssertEqual(update.runtimeSnapshot?.approvalThreadIDs, ["thread-1"])
-        XCTAssertTrue(update.runtimeSnapshot?.waitingForInputThreadIDs.isEmpty ?? false)
-        XCTAssertEqual(update.runtimeSnapshot?.runningThreadIDs, [])
+        XCTAssertNotNil(update.runtimeErrorMessage)
+        XCTAssertNil(update.runtimeSnapshot)
     }
 
-    func testDatabaseFailureFallbackPassesSessionCompletionHints() async throws {
+    func testDatabaseFailureDoesNotUseSessionCompletionHints() async throws {
         let tempDirectoryURL = FileManager.default.temporaryDirectory
             .appending(path: UUID().uuidString, directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: tempDirectoryURL, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: tempDirectoryURL) }
 
-        let completedAt = Date(timeIntervalSince1970: 1_777_732_551)
         let missingDatabaseURL = tempDirectoryURL.appending(path: "missing-state.sqlite")
         let sessionURL = tempDirectoryURL.appending(path: "thread-1.jsonl")
         try """
@@ -338,16 +335,12 @@ final class DesktopActivityServiceTests: XCTestCase {
             now: Date(timeIntervalSince1970: 1_777_732_560)
         )
 
-        XCTAssertNil(update.runtimeErrorMessage)
-        XCTAssertEqual(update.latestTurnCompletedAtByThreadID["thread-1"], completedAt)
-        XCTAssertEqual(
-            update.runtimeSnapshot?.latestTurnCompletedAtByThreadID["thread-1"],
-            completedAt
-        )
-        XCTAssertEqual(update.runtimeSnapshot?.runningThreadIDs, [])
+        XCTAssertNotNil(update.runtimeErrorMessage)
+        XCTAssertNil(update.latestTurnCompletedAtByThreadID["thread-1"])
+        XCTAssertNil(update.runtimeSnapshot)
     }
 
-    func testRepeatedDatabaseOpenFailuresAreThrottled() async {
+    func testRepeatedDatabaseOpenFailuresReportEachError() async {
         let missingDatabaseURL = FileManager.default.temporaryDirectory
             .appending(path: UUID().uuidString, directoryHint: .isDirectory)
             .appending(path: "state.sqlite")
@@ -370,11 +363,11 @@ final class DesktopActivityServiceTests: XCTestCase {
         )
 
         XCTAssertNotNil(first.runtimeErrorMessage)
-        XCTAssertNil(second.runtimeErrorMessage)
+        XCTAssertNotNil(second.runtimeErrorMessage)
         XCTAssertNotNil(third.runtimeErrorMessage)
     }
 
-    func testFallbackSnapshotCacheInvalidatesWhenSessionFileChanges() async throws {
+    func testDatabaseFailureDoesNotCacheSessionSnapshot() async throws {
         let tempDirectoryURL = FileManager.default.temporaryDirectory
             .appending(path: UUID().uuidString, directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: tempDirectoryURL, withIntermediateDirectories: true)
@@ -396,7 +389,8 @@ final class DesktopActivityServiceTests: XCTestCase {
             candidateSessionPaths: ["thread-1": sessionURL.path],
             now: Date(timeIntervalSince1970: 100)
         )
-        XCTAssertEqual(first.runtimeSnapshot?.approvalThreadIDs, ["thread-1"])
+        XCTAssertNotNil(first.runtimeErrorMessage)
+        XCTAssertNil(first.runtimeSnapshot)
 
         try """
         {"timestamp":"2026-03-29T08:44:27.014Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-1"}}
@@ -408,17 +402,8 @@ final class DesktopActivityServiceTests: XCTestCase {
             now: Date(timeIntervalSince1970: 101)
         )
 
-        XCTAssertEqual(second.runtimeSnapshot?.approvalThreadIDs, [])
-        XCTAssertEqual(second.runtimeSnapshot?.waitingForInputThreadIDs, ["thread-1"])
-    }
-
-    func testLockedDatabaseErrorsAreRetriable() {
-        let error = CodexDesktopStateReader.ReaderError.queryFailed(
-            message: "Error: in prepare, database is locked (5)",
-            databasePath: "/tmp/state.sqlite"
-        )
-
-        XCTAssertTrue(error.isRetriableDatabaseOpenFailure)
+        XCTAssertNotNil(second.runtimeErrorMessage)
+        XCTAssertNil(second.runtimeSnapshot)
     }
 
     private func createStateDatabase(at databaseURL: URL, sql: String) throws {

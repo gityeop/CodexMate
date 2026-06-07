@@ -183,6 +183,6 @@ final class SettingsViewModel: ObservableObject {
             return nil
         }
 
-        return text("settings.displayMode.notchFallbackHelp")
+        return text("settings.displayMode.notchOverlayHelp")
     }
 }

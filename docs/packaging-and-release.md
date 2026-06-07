@@ -25,7 +25,7 @@ APPLE_KEYCHAIN_PASSWORD='your-login-keychain-password' \
 ./scripts/package_app.sh
 ```
 
-If `SPARKLE_FEED_URL` is omitted, `package_app.sh` tries to derive `https://github.com/<owner>/<repo>/releases/latest/download/appcast.xml` from `origin` when the repository remote is GitHub. If `origin` is not a GitHub remote, it falls back to `https://example.com/appcast.xml`, so set `SPARKLE_FEED_URL` explicitly for non-GitHub or real distributable builds. If `SPARKLE_PUBLIC_KEY` is omitted, `package_app.sh` tries to resolve it from the Sparkle keychain account named by `SPARKLE_KEYCHAIN_ACCOUNT`. If it still cannot resolve the key, the app is packaged but automatic updates stay unavailable in Settings until the bundle is rebuilt with Sparkle metadata.
+If `SPARKLE_FEED_URL` is omitted, `package_app.sh` derives `https://github.com/<owner>/<repo>/releases/latest/download/appcast.xml` from `origin` when the repository remote is GitHub. Non-GitHub remotes must set `SPARKLE_FEED_URL` explicitly or packaging exits with an error. If `SPARKLE_PUBLIC_KEY` is omitted, `package_app.sh` resolves it from the Sparkle keychain account named by `SPARKLE_KEYCHAIN_ACCOUNT`; unresolved Sparkle key material also exits with an error.
 
 If `APPLE_KEYCHAIN_PASSWORD` is set, the packaging script unlocks the keychain and configures codesign access up front so macOS does not repeatedly prompt for the signing key during the nested Sparkle and framework signing steps. Set `APPLE_KEYCHAIN_PATH` as well if you do not use the default login keychain.
 
@@ -54,6 +54,7 @@ APPLE_SIGN_IDENTITY="Developer ID Application: ..." \
 APPLE_KEYCHAIN_PASSWORD='your-login-keychain-password' \
 APPLE_NOTARY_PROFILE=your-notarytool-profile \
 SPARKLE_APPCAST_URL=https://github.com/your-org/your-repo/releases/latest/download/appcast.xml \
+SPARKLE_DOWNLOAD_URL_PREFIX=https://github.com/your-org/your-repo/releases/latest/download \
 SPARKLE_PUBLIC_KEY=... \
 RELEASE_NOTES_FILE=/absolute/path/to/release-notes/0.4.2.html \
 ./scripts/release_app.sh
@@ -65,10 +66,9 @@ Prerequisite: `release_app.sh` expects the Sparkle CLI tools to already exist at
 
 For the appcast step itself, `SPARKLE_PUBLIC_KEY` is not enough on its own. The release flow must also be able to read Sparkle private-key material through `SPARKLE_PRIVATE_KEY_FILE`, `SPARKLE_PRIVATE_KEY_SECRET`, or a readable `SPARKLE_KEYCHAIN_ACCOUNT`; otherwise `generate_appcast` will fail late in the script when it tries to sign the release metadata.
 
-Optional environment variables:
+Additional environment variables:
 
 ```bash
-SPARKLE_DOWNLOAD_URL_PREFIX=https://github.com/your-org/your-repo/releases/latest/download \
 SPARKLE_KEYCHAIN_ACCOUNT=ed25519 \
 SPARKLE_PRIVATE_KEY_FILE=/absolute/path/to/sparkle-private-key \
 SPARKLE_PRIVATE_KEY_SECRET=... \
@@ -87,11 +87,12 @@ APP_SHORT_VERSION=0.4.2 \
 ALLOW_ADHOC_SIGNING=1 \
 SKIP_NOTARIZATION=1 \
 SPARKLE_APPCAST_URL=https://github.com/your-org/your-repo/releases/latest/download/appcast.xml \
+SPARKLE_DOWNLOAD_URL_PREFIX=https://github.com/your-org/your-repo/releases/latest/download \
 RELEASE_NOTES_FILE=/absolute/path/to/release-notes/0.4.2.html \
 ./scripts/release_app.sh
 ```
 
-This still requires `SPARKLE_APPCAST_URL`, `RELEASE_NOTES_FILE`, and Sparkle key material or keychain access. If `SPARKLE_PUBLIC_KEY` is omitted, `release_app.sh` looks it up from the Sparkle keychain account named by `SPARKLE_KEYCHAIN_ACCOUNT`. To avoid Sparkle-related keychain prompts in unattended runs, set `SPARKLE_PUBLIC_KEY` and either `SPARKLE_PRIVATE_KEY_FILE` or `SPARKLE_PRIVATE_KEY_SECRET`, or make sure the configured keychain account can be read non-interactively.
+This still requires `SPARKLE_APPCAST_URL`, `SPARKLE_DOWNLOAD_URL_PREFIX`, `RELEASE_NOTES_FILE`, and Sparkle key material or keychain access. If `SPARKLE_PUBLIC_KEY` is omitted, `release_app.sh` looks it up from the Sparkle keychain account named by `SPARKLE_KEYCHAIN_ACCOUNT`. To avoid Sparkle-related keychain prompts in unattended runs, set `SPARKLE_PUBLIC_KEY` and either `SPARKLE_PRIVATE_KEY_FILE` or `SPARKLE_PRIVATE_KEY_SECRET`, or make sure the configured keychain account can be read non-interactively.
 
 Expected release outputs:
 

@@ -278,7 +278,7 @@ enum MenubarSnapshotSelector {
 
         return CodexDesktopProjectCatalog.ProjectReference(
             id: normalizedCWD,
-            displayName: CodexDesktopWorktreePath.fallbackDisplayName(for: normalizedCWD)
+            displayName: CodexDesktopWorktreePath.inferredDisplayName(for: normalizedCWD)
         )
     }
 

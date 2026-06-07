@@ -29,7 +29,7 @@
     "settings.displayModeLabel": "Display Mode",
     "settings.displayMode.menuBar": "Menu Bar",
     "settings.displayMode.notch": "Notch",
-    "settings.displayMode.notchFallbackHelp": "Notch mode stays active on Macs without a hardware notch by using a centered overlay.",
+    "settings.displayMode.notchOverlayHelp": "Notch mode stays active on Macs without a hardware notch by using a centered overlay.",
     "settings.notchStatusContent": "Show notch status dot/text",
     "settings.projectLimitLabel": "Projects Shown in Menu: %lld",
     "settings.projectLimitHelp": "Limits how many projects appear in the menu at once.",
@@ -52,13 +52,13 @@
     "settings.notifications.failed": "Turn failed",
     "settings.notifications.help": "Choose which desktop alerts you want from the menu bar app.",
     "notification.turnCompleted.title": "CodexMate turn completed",
-    "notification.turnCompleted.bodyFallback": "Completed",
+    "notification.turnCompleted.body": "Completed",
     "notification.error.title": "CodexMate error",
-    "notification.error.bodyFallback": "A watched thread failed.",
+    "notification.error.body": "A watched thread failed.",
     "notification.needsInput.title": "CodexMate needs input",
-    "notification.needsInput.bodyFallback": "A watched thread is waiting for user input.",
+    "notification.needsInput.body": "A watched thread is waiting for user input.",
     "notification.approval.title": "CodexMate approval required",
-    "notification.approval.bodyFallback": "A watched thread is waiting for approval."
+    "notification.approval.body": "A watched thread is waiting for approval."
   },
   "ko": {
     "menu.noRecentThreads": "최근 스레드가 없습니다",
@@ -90,7 +90,7 @@
     "settings.displayModeLabel": "표시 모드",
     "settings.displayMode.menuBar": "메뉴바",
     "settings.displayMode.notch": "노치",
-    "settings.displayMode.notchFallbackHelp": "하드웨어 노치가 없는 Mac에서도 중앙 오버레이로 노치 모드가 유지됩니다.",
+    "settings.displayMode.notchOverlayHelp": "하드웨어 노치가 없는 Mac에서도 중앙 오버레이로 노치 모드가 유지됩니다.",
     "settings.notchStatusContent": "노치 상태 dot/텍스트 표시",
     "settings.projectLimitLabel": "메뉴에 표시할 프로젝트 수: %lld",
     "settings.projectLimitHelp": "메뉴에 동시에 표시할 프로젝트 수를 제한합니다.",
@@ -113,13 +113,12 @@
     "settings.notifications.failed": "작업 실패",
     "settings.notifications.help": "메뉴바 앱에서 어떤 데스크톱 알림을 받을지 선택하세요.",
     "notification.turnCompleted.title": "CodexMate 작업이 완료되었습니다",
-    "notification.turnCompleted.bodyFallback": "완료됨",
+    "notification.turnCompleted.body": "완료됨",
     "notification.error.title": "CodexMate 오류",
-    "notification.error.bodyFallback": "감시 중인 스레드에서 오류가 발생했습니다.",
+    "notification.error.body": "감시 중인 스레드에서 오류가 발생했습니다.",
     "notification.needsInput.title": "CodexMate 입력 필요",
-    "notification.needsInput.bodyFallback": "감시 중인 스레드가 사용자 입력을 기다리고 있습니다.",
+    "notification.needsInput.body": "감시 중인 스레드가 사용자 입력을 기다리고 있습니다.",
     "notification.approval.title": "CodexMate 승인 필요",
-    "notification.approval.bodyFallback": "감시 중인 스레드가 승인을 기다리고 있습니다.",
-    "notification.approval.bodyFallback": "감시 중인 스레드가 승인을 기다리고 있습니다."
+    "notification.approval.body": "감시 중인 스레드가 승인을 기다리고 있습니다."
   }
 }

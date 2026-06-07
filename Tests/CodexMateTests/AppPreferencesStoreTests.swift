@@ -33,15 +33,6 @@ final class AppPreferencesStoreTests: XCTestCase {
         XCTAssertEqual(store.threadsPerProjectLimit, AppPreferencesStore.defaultThreadsPerProjectLimit)
     }
 
-    func testInvalidStoredLanguageFallsBackToSystem() {
-        let defaults = makeDefaults()
-        defaults.set("unknown-language", forKey: "appLanguage")
-
-        let store = AppPreferencesStore(defaults: defaults)
-
-        XCTAssertEqual(store.language, .system)
-    }
-
     func testPreferenceChangesPersistToUserDefaults() {
         let defaults = makeDefaults()
         let store = AppPreferencesStore(defaults: defaults)
@@ -83,15 +74,6 @@ final class AppPreferencesStoreTests: XCTestCase {
         store.language = .korean
 
         XCTAssertEqual(observer.notificationCount, 1)
-    }
-
-    func testInvalidStoredDisplayModeFallsBackToNotch() {
-        let defaults = makeDefaults()
-        defaults.set("invalid-mode", forKey: "displayMode")
-
-        let store = AppPreferencesStore(defaults: defaults)
-
-        XCTAssertEqual(store.displayMode, .notch)
     }
 
     func testThreadsPerProjectLimitClampsOutOfRangeValues() {

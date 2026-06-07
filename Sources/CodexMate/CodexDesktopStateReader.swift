@@ -69,19 +69,6 @@ struct CodexDesktopStateReader {
         }
     }
 
-    private struct SessionIndexEntry {
-        let threadName: String?
-        let updatedAt: Date?
-    }
-
-    private struct SessionFallbackMetadata {
-        let cwd: String
-        let source: String?
-        let preview: String?
-        let createdAt: Date?
-        let updatedAt: Date?
-    }
-
     private struct PendingLogRow {
         let threadID: String
         let message: String
@@ -268,62 +255,6 @@ struct CodexDesktopStateReader {
         )
     }
 
-    func sessionFallbackSnapshot(
-        candidateSessionPaths: [String: String?],
-        databaseError: String? = nil
-    ) -> CodexDesktopRuntimeSnapshot? {
-        sessionFallbackSnapshot(
-            candidateSessionContexts: candidateSessionPaths.mapValues { ThreadSessionContext(path: $0) },
-            databaseError: databaseError
-        )
-    }
-
-    func sessionFallbackSnapshot(
-        candidateSessionContexts: [String: ThreadSessionContext],
-        databaseError: String? = nil
-    ) -> CodexDesktopRuntimeSnapshot? {
-        guard candidateSessionContexts.values.contains(where: { $0.path != nil }) else {
-            return nil
-        }
-
-        let sessionStates = querySessionPendingThreadStates(candidateSessionContexts: candidateSessionContexts)
-        let desktopApprovalStates = queryDesktopPendingApprovalThreadStates(
-            candidateThreadIDs: Set(candidateSessionContexts.keys)
-        )
-        let desktopApprovals = activeDesktopApprovalThreadIDs(
-            desktopApprovalStates.approvalThreadIDs,
-            sessionApprovalThreadIDs: sessionStates.approvalThreadIDs,
-            activeTaskThreadIDs: sessionStates.activeTaskThreadIDs,
-            latestTaskCompletedAtByThreadID: sessionStates.latestTaskCompletedAtByThreadID
-        )
-        let approvalThreadIDs = sessionStates.approvalThreadIDs.union(desktopApprovals.threadIDs)
-        let runningThreadIDs = sessionStates.activeTaskThreadIDs
-            .subtracting(sessionStates.waitingForInputThreadIDs)
-            .subtracting(approvalThreadIDs)
-        let debugSummary = [
-            "source=session-fallback",
-            "candidates=\(candidateSessionContexts.count)",
-            "running=\(runningThreadIDs.count)",
-            "waiting=\(sessionStates.waitingForInputThreadIDs.count)",
-            "approval=\(approvalThreadIDs.count)",
-            "rows=\(sessionStates.debugRows.count + desktopApprovals.debugRows.count)",
-            "sample=\(desktopApprovalDebugSample(sessionDebugRows: sessionStates.debugRows, desktopDebugRows: desktopApprovals.debugRows))",
-            "databaseError=\(databaseError ?? "-")",
-        ].joined(separator: " ")
-
-        return CodexDesktopRuntimeSnapshot(
-            activeTurnCount: sessionStates.activeTaskThreadIDs.isEmpty ? 0 : 1,
-            runningThreadIDs: runningThreadIDs,
-            sessionBackedRunningThreadIDs: runningThreadIDs,
-            recentActivityThreadIDs: [],
-            waitingForInputThreadIDs: sessionStates.waitingForInputThreadIDs,
-            approvalThreadIDs: approvalThreadIDs,
-            failedThreads: [:],
-            latestTurnCompletedAtByThreadID: sessionStates.latestTaskCompletedAtByThreadID,
-            debugSummary: debugSummary
-        )
-    }
-
     func threads(threadIDs: Set<String>) throws -> [CodexThread] {
         try threads(threadIDs: threadIDs, includeSessionStatus: true)
     }
@@ -350,11 +281,7 @@ struct CodexDesktopStateReader {
                 databaseURL: databaseURL
             )
         }
-        let databaseThreadIDs = Set(parseSQLiteLines(output.split(separator: "\n").map(String.init)))
-        let missingThreadIDs = threadIDs.subtracting(databaseThreadIDs)
-        let sessionBackedThreadIDs = Set(sessionBackedThreads(threadIDs: missingThreadIDs).map(\.id))
-
-        return databaseThreadIDs.union(sessionBackedThreadIDs)
+        return Set(parseSQLiteLines(output.split(separator: "\n").map(String.init)))
     }
 
     private func threads(
@@ -423,11 +350,6 @@ struct CodexDesktopStateReader {
                     agentNickname: object["agentNickname"] as? String
                 )
             )
-        }
-
-        let missingThreadIDs = threadIDs.subtracting(Set(threads.map(\.id)))
-        if !missingThreadIDs.isEmpty {
-            threads.append(contentsOf: sessionBackedThreads(threadIDs: missingThreadIDs))
         }
 
         return threads.sorted { lhs, rhs in
@@ -530,7 +452,6 @@ struct CodexDesktopStateReader {
 
         let referenceNow = now()
         let codexDirectoryURL = resolvedCodexDirectoryURL()
-        var lastRetriableError: ReaderError?
 
         if let cachedURL = stateDatabaseURLCache.value(
             now: referenceNow,
@@ -538,44 +459,21 @@ struct CodexDesktopStateReader {
             fileManager: fileManager,
             cacheLifetime: databaseLocationCacheLifetime
         ) {
-            do {
-                return try operation(cachedURL)
-            } catch let error as ReaderError where error.isRetriableDatabaseOpenFailure {
-                lastRetriableError = error
-                stateDatabaseURLCache.clear()
-            }
+            return try operation(cachedURL)
         }
 
-        var candidateURLs: [URL] = []
-        for url in try locateStateDatabaseCandidates() where !candidateURLs.contains(url) {
-            candidateURLs.append(url)
-        }
-
-        guard !candidateURLs.isEmpty else {
-            throw ReaderError.databaseNotFound
-        }
-
-        for candidateURL in candidateURLs {
-            do {
-                let result = try operation(candidateURL)
-                stateDatabaseURLCache.store(candidateURL, codexDirectoryURL: codexDirectoryURL, checkedAt: referenceNow)
-                return result
-            } catch let error as ReaderError where error.isRetriableDatabaseOpenFailure {
-                lastRetriableError = error
-                stateDatabaseURLCache.clear()
-                continue
-            }
-        }
-
-        if let lastRetriableError {
-            throw lastRetriableError
-        }
-
-        throw ReaderError.databaseNotFound
+        let databaseURL = try locateStateDatabase()
+        let result = try operation(databaseURL)
+        stateDatabaseURLCache.store(databaseURL, codexDirectoryURL: codexDirectoryURL, checkedAt: referenceNow)
+        return result
     }
 
     private func locateStateDatabase() throws -> URL {
-        try withStateDatabase { $0 }
+        guard let databaseURL = try locateStateDatabaseCandidates().first else {
+            throw ReaderError.databaseNotFound
+        }
+
+        return databaseURL
     }
 
     private func locateStateDatabaseCandidates() throws -> [URL] {
@@ -1760,195 +1658,6 @@ struct CodexDesktopStateReader {
         return (lineRanges, prefix, isSkippingOversizedPrefix)
     }
 
-    private func sessionBackedThreads(threadIDs: Set<String>) -> [CodexThread] {
-        guard !threadIDs.isEmpty else {
-            return []
-        }
-
-        let indexEntriesByThreadID = loadSessionIndexEntries(threadIDs: threadIDs)
-        let sessionFileURLsByThreadID = locateSessionFileURLs(threadIDs: threadIDs)
-
-        return threadIDs.compactMap { threadID in
-            guard let sessionFileURL = sessionFileURLsByThreadID[threadID],
-                  let metadata = sessionFallbackMetadata(forSessionFileAt: sessionFileURL)
-            else {
-                return nil
-            }
-
-            let indexedTitle = Self.sanitizedSessionText(indexEntriesByThreadID[threadID]?.threadName)
-            let sessionPreview = Self.sanitizedSessionText(metadata.preview)
-            guard let preview = indexedTitle ?? sessionPreview else {
-                return nil
-            }
-            let updatedAtDate = indexEntriesByThreadID[threadID]?.updatedAt
-                ?? metadata.updatedAt
-                ?? metadata.createdAt
-                ?? now()
-            let createdAtDate = metadata.createdAt ?? updatedAtDate
-
-            return CodexThread(
-                id: threadID,
-                preview: preview,
-                createdAt: Int(createdAtDate.timeIntervalSince1970),
-                updatedAt: Int(updatedAtDate.timeIntervalSince1970),
-                status: .notLoaded,
-                cwd: metadata.cwd,
-                name: indexedTitle ?? sessionPreview,
-                path: sessionFileURL.path,
-                source: metadata.source
-            )
-        }
-    }
-
-    private func loadSessionIndexEntries(threadIDs: Set<String>) -> [String: SessionIndexEntry] {
-        guard !threadIDs.isEmpty else {
-            return [:]
-        }
-
-        let sessionIndexURL = resolvedCodexDirectoryURL().appendingPathComponent("session_index.jsonl", isDirectory: false)
-        guard let contents = try? String(contentsOf: sessionIndexURL, encoding: .utf8) else {
-            return [:]
-        }
-
-        var entriesByThreadID: [String: SessionIndexEntry] = [:]
-
-        for line in contents.split(whereSeparator: \.isNewline) {
-            guard let data = String(line).data(using: .utf8),
-                  let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let threadID = object["id"] as? String,
-                  threadIDs.contains(threadID) else {
-                continue
-            }
-
-            entriesByThreadID[threadID] = SessionIndexEntry(
-                threadName: object["thread_name"] as? String,
-                updatedAt: Self.parseISO8601Timestamp(object["updated_at"] as? String)
-            )
-        }
-
-        return entriesByThreadID
-    }
-
-    private func locateSessionFileURLs(threadIDs: Set<String>) -> [String: URL] {
-        guard !threadIDs.isEmpty else {
-            return [:]
-        }
-
-        let sessionsRootURL = resolvedCodexDirectoryURL().appendingPathComponent("sessions", isDirectory: true)
-        guard fileManager.fileExists(atPath: sessionsRootURL.path),
-              let enumerator = fileManager.enumerator(
-                  at: sessionsRootURL,
-                  includingPropertiesForKeys: [.isRegularFileKey],
-                  options: [.skipsHiddenFiles]
-              ) else {
-            return [:]
-        }
-
-        var urlsByThreadID: [String: URL] = [:]
-        var remainingThreadIDs = threadIDs
-
-        for case let fileURL as URL in enumerator {
-            guard !remainingThreadIDs.isEmpty else {
-                break
-            }
-
-            guard fileURL.pathExtension == "jsonl" else {
-                continue
-            }
-
-            let filename = fileURL.lastPathComponent
-            guard let threadID = remainingThreadIDs.first(where: { filename.contains($0) }) else {
-                continue
-            }
-
-            urlsByThreadID[threadID] = fileURL
-            remainingThreadIDs.remove(threadID)
-        }
-
-        return urlsByThreadID
-    }
-
-    private func sessionFallbackMetadata(forSessionFileAt sessionURL: URL) -> SessionFallbackMetadata? {
-        guard let contents = try? String(contentsOf: sessionURL, encoding: .utf8) else {
-            return nil
-        }
-
-        let resourceValues = (try? sessionURL.resourceValues(forKeys: [.contentModificationDateKey])) ?? URLResourceValues()
-        var cwd: String?
-        var source: String?
-        var preview: String?
-        var createdAt: Date?
-
-        for line in contents.split(whereSeparator: \.isNewline) {
-            guard let data = String(line).data(using: .utf8),
-                  let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let type = object["type"] as? String,
-                  let payload = object["payload"] as? [String: Any]
-            else {
-                continue
-            }
-
-            if type == "session_meta" {
-                cwd = payload["cwd"] as? String
-                source = payload["source"] as? String
-                createdAt = Self.parseISO8601Timestamp(payload["timestamp"] as? String)
-                continue
-            }
-
-            if type == "response_item",
-               payload["type"] as? String == "message",
-               payload["role"] as? String == "user",
-               preview == nil {
-                preview = Self.messageText(from: payload["content"])
-            }
-        }
-
-        guard let cwd else {
-            return nil
-        }
-
-        return SessionFallbackMetadata(
-            cwd: cwd,
-            source: source,
-            preview: preview,
-            createdAt: createdAt,
-            updatedAt: resourceValues.contentModificationDate
-        )
-    }
-
-    private static func messageText(from content: Any?) -> String? {
-        guard let items = content as? [[String: Any]] else {
-            return nil
-        }
-
-        for item in items {
-            if let text = item["text"] as? String,
-               let sanitized = sanitizedSessionText(text) {
-                return sanitized
-            }
-        }
-
-        return nil
-    }
-
-    private static func sanitizedSessionText(_ value: String?) -> String? {
-        guard let value else {
-            return nil
-        }
-
-        let firstLine = value
-            .split(whereSeparator: \.isNewline)
-            .first
-            .map(String.init)?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-
-        guard let firstLine, !firstLine.isEmpty else {
-            return nil
-        }
-
-        return firstLine
-    }
-
     private static func parseISO8601Timestamp(_ value: String?) -> Date? {
         guard let value else {
             return nil
@@ -1960,9 +1669,9 @@ struct CodexDesktopStateReader {
             return parsed
         }
 
-        let fallbackFormatter = ISO8601DateFormatter()
-        fallbackFormatter.formatOptions = [.withInternetDateTime]
-        return fallbackFormatter.date(from: value)
+        let internetDateTimeFormatter = ISO8601DateFormatter()
+        internetDateTimeFormatter.formatOptions = [.withInternetDateTime]
+        return internetDateTimeFormatter.date(from: value)
     }
 
     private static func sessionEvent<S: StringProtocol>(for line: S) -> SessionEvent? {
@@ -2342,19 +2051,6 @@ extension CodexDesktopStateReader {
                 return "Could not find a Codex state database in the configured Codex home."
             case let .queryFailed(message, _):
                 return message
-            }
-        }
-
-        var isRetriableDatabaseOpenFailure: Bool {
-            switch self {
-            case .databaseNotFound:
-                return false
-            case let .queryFailed(message, _):
-                let lowercaseMessage = message.lowercased()
-                return lowercaseMessage.contains("unable to open database file")
-                    || lowercaseMessage.contains("database is locked")
-                    || lowercaseMessage.contains("database table is locked")
-                    || lowercaseMessage.contains("database schema is locked")
             }
         }
 

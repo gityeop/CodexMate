@@ -197,7 +197,7 @@ final class ThreadDropdownMenuRowViewTests: XCTestCase {
         XCTAssertTrue(imageView.isHidden)
     }
 
-    func testIndicatorImageTakesPrecedenceOverTextFallback() throws {
+    func testIndicatorImageTakesPrecedenceOverIndicatorText() throws {
         let view = ThreadDropdownMenuRowView(frame: NSRect(x: 0, y: 0, width: 280, height: 22))
         let indicatorImage = NSImage(size: NSSize(width: 8, height: 8))
         view.configure(

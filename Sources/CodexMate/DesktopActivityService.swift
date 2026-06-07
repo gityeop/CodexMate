@@ -51,26 +51,10 @@ struct DesktopActivityUpdate {
 }
 
 actor DesktopActivityService {
-    private enum RuntimeErrorPolicy {
-        static let retryableOpenFailureAttempts = 2
-        static let diagnosticThrottleInterval: TimeInterval = 30
-        static let fallbackSnapshotReuseInterval: TimeInterval = 3
-    }
-
-    private struct FallbackSnapshotCacheEntry {
-        let key: String
-        let errorFingerprint: String
-        let snapshot: CodexDesktopRuntimeSnapshot
-        let cachedAt: Date
-    }
-
     private let stateReader: CodexDesktopStateReader
     private let conversationActivityReader: CodexDesktopConversationActivityReader
     private let completionHintInterval: TimeInterval
     private let runningHintInterval: TimeInterval
-    private var lastRuntimeErrorFingerprint: String?
-    private var lastRuntimeErrorAt: Date?
-    private var fallbackSnapshotCacheEntry: FallbackSnapshotCacheEntry?
 
     init(
         stateReader: CodexDesktopStateReader? = nil,
@@ -146,63 +130,13 @@ actor DesktopActivityService {
                 runtimeErrorMessage: nil
             )
         } catch {
-            let runtimeErrorMessage = throttledRuntimeErrorMessage(for: error, now: now)
-            let errorFingerprint = runtimeErrorFingerprint(for: error)
-            if let fallbackSnapshot = cachedFallbackSnapshot(
-                for: candidateSessionContexts,
-                errorFingerprint: errorFingerprint,
-                now: now
-            ) {
-                let latestTurnCompletedAtByThreadID = mergeLatestDates(
-                    activityLatestTurnCompletedAtByThreadID,
-                    fallbackSnapshot.latestTurnCompletedAtByThreadID
-                )
-                let combinedFallbackSnapshot = snapshot(
-                    fallbackSnapshot,
-                    replacingLatestTurnCompletedAtByThreadID: latestTurnCompletedAtByThreadID
-                )
-                return DesktopActivityUpdate(
-                    runtimeSnapshot: combinedFallbackSnapshot,
-                    latestViewedAtByThreadID: activitySnapshot.latestViewedAtByThreadID,
-                    latestTurnStartedAtByThreadID: activitySnapshot.latestTurnStartedAtByThreadID,
-                    latestTurnCompletedAtByThreadID: latestTurnCompletedAtByThreadID,
-                    latestArchiveRequestedAtByThreadID: activitySnapshot.latestArchiveRequestedAtByThreadID,
-                    latestUnarchiveRequestedAtByThreadID: activitySnapshot.latestUnarchiveRequestedAtByThreadID,
-                    runtimeErrorMessage: nil
+            if let readerError = error as? CodexDesktopStateReader.ReaderError,
+               let databasePath = readerError.databasePath {
+                DebugTraceLogger.log(
+                    "desktop activity state-db error path=\(databasePath) message=\(readerError.localizedDescription)"
                 )
             }
 
-            if let fallbackSnapshot = stateReader.sessionFallbackSnapshot(
-                candidateSessionContexts: candidateSessionContexts,
-                databaseError: error.localizedDescription
-            ) {
-                storeFallbackSnapshot(
-                    fallbackSnapshot,
-                    for: candidateSessionContexts,
-                    errorFingerprint: errorFingerprint,
-                    now: now
-                )
-                DebugTraceLogger.log(
-                    "desktop activity using session fallback candidates=\(candidateSessionContexts.count) message=\(error.localizedDescription)"
-                )
-                let latestTurnCompletedAtByThreadID = mergeLatestDates(
-                    activityLatestTurnCompletedAtByThreadID,
-                    fallbackSnapshot.latestTurnCompletedAtByThreadID
-                )
-                let combinedFallbackSnapshot = snapshot(
-                    fallbackSnapshot,
-                    replacingLatestTurnCompletedAtByThreadID: latestTurnCompletedAtByThreadID
-                )
-                return DesktopActivityUpdate(
-                    runtimeSnapshot: combinedFallbackSnapshot,
-                    latestViewedAtByThreadID: activitySnapshot.latestViewedAtByThreadID,
-                    latestTurnStartedAtByThreadID: activitySnapshot.latestTurnStartedAtByThreadID,
-                    latestTurnCompletedAtByThreadID: latestTurnCompletedAtByThreadID,
-                    latestArchiveRequestedAtByThreadID: activitySnapshot.latestArchiveRequestedAtByThreadID,
-                    latestUnarchiveRequestedAtByThreadID: activitySnapshot.latestUnarchiveRequestedAtByThreadID,
-                    runtimeErrorMessage: nil
-                )
-            }
             return DesktopActivityUpdate(
                 runtimeSnapshot: nil,
                 latestViewedAtByThreadID: activitySnapshot.latestViewedAtByThreadID,
@@ -210,7 +144,7 @@ actor DesktopActivityService {
                 latestTurnCompletedAtByThreadID: activityLatestTurnCompletedAtByThreadID,
                 latestArchiveRequestedAtByThreadID: activitySnapshot.latestArchiveRequestedAtByThreadID,
                 latestUnarchiveRequestedAtByThreadID: activitySnapshot.latestUnarchiveRequestedAtByThreadID,
-                runtimeErrorMessage: runtimeErrorMessage
+                runtimeErrorMessage: error.localizedDescription
             )
         }
     }
@@ -225,23 +159,6 @@ actor DesktopActivityService {
             let completedAt = latestTurnCompletedAtByThreadID[threadID] ?? .distantPast
             return startedAt > completedAt
         })
-    }
-
-    private func snapshot(
-        _ snapshot: CodexDesktopRuntimeSnapshot,
-        replacingLatestTurnCompletedAtByThreadID latestTurnCompletedAtByThreadID: [String: Date]
-    ) -> CodexDesktopRuntimeSnapshot {
-        CodexDesktopRuntimeSnapshot(
-            activeTurnCount: snapshot.activeTurnCount,
-            runningThreadIDs: snapshot.runningThreadIDs,
-            sessionBackedRunningThreadIDs: snapshot.sessionBackedRunningThreadIDs,
-            recentActivityThreadIDs: snapshot.recentActivityThreadIDs,
-            waitingForInputThreadIDs: snapshot.waitingForInputThreadIDs,
-            approvalThreadIDs: snapshot.approvalThreadIDs,
-            failedThreads: snapshot.failedThreads,
-            latestTurnCompletedAtByThreadID: latestTurnCompletedAtByThreadID,
-            debugSummary: snapshot.debugSummary
-        )
     }
 
     func load(candidateSessionPaths: [String: String?], now: Date = Date()) -> DesktopActivityUpdate {
@@ -263,111 +180,6 @@ actor DesktopActivityService {
     }
 
     private func loadRuntimeSnapshot(candidateSessionContexts: [String: ThreadSessionContext]) throws -> CodexDesktopRuntimeSnapshot {
-        var attempt = 0
-
-        while true {
-            do {
-                let snapshot = try stateReader.snapshot(candidateSessionContexts: candidateSessionContexts)
-                lastRuntimeErrorFingerprint = nil
-                lastRuntimeErrorAt = nil
-                fallbackSnapshotCacheEntry = nil
-                return snapshot
-            } catch let error as CodexDesktopStateReader.ReaderError
-                where error.isRetriableDatabaseOpenFailure && attempt + 1 < RuntimeErrorPolicy.retryableOpenFailureAttempts {
-                attempt += 1
-                continue
-            } catch {
-                throw error
-            }
-        }
-    }
-
-    private func throttledRuntimeErrorMessage(for error: Error, now: Date) -> String? {
-        let fingerprint = runtimeErrorFingerprint(for: error)
-        if let lastRuntimeErrorFingerprint,
-           lastRuntimeErrorFingerprint == fingerprint,
-           let lastRuntimeErrorAt,
-           now.timeIntervalSince(lastRuntimeErrorAt) < RuntimeErrorPolicy.diagnosticThrottleInterval {
-            return nil
-        }
-
-        lastRuntimeErrorFingerprint = fingerprint
-        lastRuntimeErrorAt = now
-
-        if let readerError = error as? CodexDesktopStateReader.ReaderError,
-           let databasePath = readerError.databasePath {
-            DebugTraceLogger.log(
-                "desktop activity state-db error path=\(databasePath) message=\(readerError.localizedDescription)"
-            )
-        }
-
-        return error.localizedDescription
-    }
-
-    private func runtimeErrorFingerprint(for error: Error) -> String {
-        if let readerError = error as? CodexDesktopStateReader.ReaderError {
-            return [readerError.localizedDescription, readerError.databasePath ?? ""].joined(separator: "|")
-        }
-
-        return error.localizedDescription
-    }
-
-    private func cachedFallbackSnapshot(
-        for candidateSessionContexts: [String: ThreadSessionContext],
-        errorFingerprint: String,
-        now: Date
-    ) -> CodexDesktopRuntimeSnapshot? {
-        guard let fallbackSnapshotCacheEntry,
-              fallbackSnapshotCacheEntry.errorFingerprint == errorFingerprint,
-              now.timeIntervalSince(fallbackSnapshotCacheEntry.cachedAt) < RuntimeErrorPolicy.fallbackSnapshotReuseInterval,
-              fallbackSnapshotCacheEntry.key == fallbackSnapshotCacheKey(for: candidateSessionContexts)
-        else {
-            return nil
-        }
-
-        return fallbackSnapshotCacheEntry.snapshot
-    }
-
-    private func storeFallbackSnapshot(
-        _ snapshot: CodexDesktopRuntimeSnapshot,
-        for candidateSessionContexts: [String: ThreadSessionContext],
-        errorFingerprint: String,
-        now: Date
-    ) {
-        fallbackSnapshotCacheEntry = FallbackSnapshotCacheEntry(
-            key: fallbackSnapshotCacheKey(for: candidateSessionContexts),
-            errorFingerprint: errorFingerprint,
-            snapshot: snapshot,
-            cachedAt: now
-        )
-    }
-
-    private func fallbackSnapshotCacheKey(for candidateSessionContexts: [String: ThreadSessionContext]) -> String {
-        candidateSessionContexts
-            .sorted(by: { $0.key < $1.key })
-            .map { threadID, context in
-                let authoritativeUpdatedAt = context.authoritativeUpdatedAt?.timeIntervalSince1970 ?? -1
-                guard let rawPath = context.path else {
-                    return "\(threadID)|path=nil|pending=\(context.authoritativeStatusIsPending)|active=\(context.authoritativeStatusIsActive)|updated=\(authoritativeUpdatedAt)"
-                }
-
-                let sessionURL = URL(fileURLWithPath: rawPath)
-                let values = (try? sessionURL.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])) ?? URLResourceValues()
-                let modificationDate = values.contentModificationDate?.timeIntervalSince1970 ?? -1
-                let fileSize = values.fileSize ?? -1
-                let exists = FileManager.default.fileExists(atPath: rawPath)
-
-                return [
-                    threadID,
-                    rawPath,
-                    "exists=\(exists)",
-                    "mod=\(modificationDate)",
-                    "size=\(fileSize)",
-                    "pending=\(context.authoritativeStatusIsPending)",
-                    "active=\(context.authoritativeStatusIsActive)",
-                    "updated=\(authoritativeUpdatedAt)"
-                ].joined(separator: "|")
-            }
-            .joined(separator: "||")
+        try stateReader.snapshot(candidateSessionContexts: candidateSessionContexts)
     }
 }

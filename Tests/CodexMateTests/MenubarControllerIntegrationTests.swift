@@ -852,7 +852,7 @@ final class MenubarControllerIntegrationTests: XCTestCase {
         XCTAssertEqual(controller.persistedThreadReadMarkers["thread-a"], 100)
     }
 
-    func testRefreshThreadsFallsBackToFolderNameWhenProjectCatalogLoadFails() async throws {
+    func testLoadInitialThreadsThrowsWhenProjectCatalogLoadFails() async throws {
         let controller = makeController(
             recentThreadResponses: [
                 [thread(id: "thread-a", updatedAt: 100, cwd: "/tmp/scratch-area")]
@@ -860,10 +860,12 @@ final class MenubarControllerIntegrationTests: XCTestCase {
             projectCatalog: .failure(TestError(message: "catalog unavailable"))
         )
 
-        try await controller.loadInitialThreads()
-        let snapshot = controller.prepareSnapshot().snapshot
-
-        XCTAssertEqual(snapshot.projectSections.map(\.section.displayName), ["scratch-area"])
+        do {
+            try await controller.loadInitialThreads()
+            XCTFail("Expected project catalog load failure.")
+        } catch {
+            XCTAssertEqual(error.localizedDescription, "catalog unavailable")
+        }
     }
 
     func testDiscoveredThreadKeepsUnreadMarkersConsistentAcrossCompletionAndRead() async throws {

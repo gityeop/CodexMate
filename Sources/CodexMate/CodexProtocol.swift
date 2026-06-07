@@ -112,8 +112,8 @@ struct CodexThread: Decodable, Equatable {
 
         id = try container.decode(String.self, forKey: .id)
         preview = try container.decode(String.self, forKey: .preview)
+        createdAt = try container.decode(Int.self, forKey: .createdAt)
         updatedAt = try container.decode(Int.self, forKey: .updatedAt)
-        createdAt = try container.decodeIfPresent(Int.self, forKey: .createdAt) ?? updatedAt
         status = try container.decode(CodexThreadStatus.self, forKey: .status)
         cwd = try container.decode(String.self, forKey: .cwd)
         name = try container.decodeIfPresent(String.self, forKey: .name)

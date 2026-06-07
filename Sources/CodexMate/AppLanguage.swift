@@ -30,8 +30,12 @@ enum AppLanguage: String, CaseIterable, Codable, Identifiable {
     }
 
     static func fromStoredValue(_ rawValue: String?) -> AppLanguage {
-        guard let rawValue, let language = AppLanguage(rawValue: rawValue) else {
+        guard let rawValue else {
             return .system
+        }
+
+        guard let language = AppLanguage(rawValue: rawValue) else {
+            preconditionFailure("Invalid stored app language: \(rawValue)")
         }
 
         return language

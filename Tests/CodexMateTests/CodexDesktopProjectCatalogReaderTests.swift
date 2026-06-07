@@ -174,7 +174,7 @@ final class CodexDesktopProjectCatalogReaderTests: XCTestCase {
         )
     }
 
-    func testWorktreeParserFallsBackToFolderNameWhenLabelIsBlank() throws {
+    func testWorktreeParserUsesFolderNameWhenLabelIsBlank() throws {
         let parser = CodexDesktopWorktreeParser()
         let data = try XCTUnwrap(
             """

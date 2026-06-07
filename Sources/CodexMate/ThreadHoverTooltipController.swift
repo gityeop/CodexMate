@@ -72,12 +72,12 @@ final class ThreadHoverTooltipController {
         let originX: CGFloat
         if let menuFrame, !menuFrame.isEmpty {
             let preferredLeftOriginX = menuFrame.minX - size.width - horizontalGap
-            let fallbackRightOriginX = menuFrame.maxX + horizontalGap
+            let alternateRightOriginX = menuFrame.maxX + horizontalGap
 
             if preferredLeftOriginX >= visibleFrame.minX + margin {
                 originX = preferredLeftOriginX
-            } else if fallbackRightOriginX + size.width <= visibleFrame.maxX - margin {
-                originX = fallbackRightOriginX
+            } else if alternateRightOriginX + size.width <= visibleFrame.maxX - margin {
+                originX = alternateRightOriginX
             } else {
                 originX = max(
                     visibleFrame.minX + margin,

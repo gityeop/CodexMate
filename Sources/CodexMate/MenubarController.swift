@@ -109,158 +109,6 @@ actor DesktopStateRecentThreadListing: RecentThreadListing {
     }
 }
 
-actor CompositeThreadMetadataReader: ThreadMetadataReading {
-    private let primary: any ThreadMetadataReading
-    private let fallbacks: [any ThreadMetadataReading]
-
-    init(primary: any ThreadMetadataReading, fallbacks: [any ThreadMetadataReading]) {
-        self.primary = primary
-        self.fallbacks = fallbacks
-    }
-
-    func threads(threadIDs: Set<String>) async throws -> [CodexThread] {
-        guard !threadIDs.isEmpty else {
-            return []
-        }
-
-        var primaryError: Error?
-        var threadsByID: [String: CodexThread] = [:]
-
-        do {
-            for thread in try await primary.threads(threadIDs: threadIDs) {
-                threadsByID[thread.id] = thread
-            }
-        } catch {
-            primaryError = error
-        }
-
-        var missingThreadIDs = threadIDs.subtracting(threadsByID.keys)
-        for fallback in fallbacks where !missingThreadIDs.isEmpty {
-            do {
-                for thread in try await fallback.threads(threadIDs: missingThreadIDs) {
-                    threadsByID[thread.id] = thread
-                }
-                missingThreadIDs = threadIDs.subtracting(threadsByID.keys)
-            } catch {
-                continue
-            }
-        }
-
-        if threadsByID.isEmpty, let primaryError {
-            throw primaryError
-        }
-
-        return threadsByID.values.sorted { lhs, rhs in
-            if lhs.updatedAt == rhs.updatedAt {
-                return lhs.id < rhs.id
-            }
-
-            return lhs.updatedAt > rhs.updatedAt
-        }
-    }
-
-    func presentThreadIDs(threadIDs: Set<String>) async throws -> Set<String> {
-        try await combinedThreadIDs(threadIDs: threadIDs) { reader, threadIDs in
-            try await reader.presentThreadIDs(threadIDs: threadIDs)
-        }
-    }
-
-    func archivedThreadIDs(threadIDs: Set<String>) async throws -> Set<String> {
-        try await combinedThreadIDs(threadIDs: threadIDs) { reader, threadIDs in
-            try await reader.archivedThreadIDs(threadIDs: threadIDs)
-        }
-    }
-
-    private func combinedThreadIDs(
-        threadIDs: Set<String>,
-        load: (any ThreadMetadataReading, Set<String>) async throws -> Set<String>
-    ) async throws -> Set<String> {
-        guard !threadIDs.isEmpty else {
-            return []
-        }
-
-        var primaryError: Error?
-        var resolvedThreadIDs: Set<String> = []
-
-        do {
-            resolvedThreadIDs.formUnion(try await load(primary, threadIDs))
-        } catch {
-            primaryError = error
-        }
-
-        var unresolvedThreadIDs = threadIDs.subtracting(resolvedThreadIDs)
-        for fallback in fallbacks where !unresolvedThreadIDs.isEmpty {
-            do {
-                resolvedThreadIDs.formUnion(try await load(fallback, unresolvedThreadIDs))
-                unresolvedThreadIDs = threadIDs.subtracting(resolvedThreadIDs)
-            } catch {
-                continue
-            }
-        }
-
-        if resolvedThreadIDs.isEmpty, let primaryError {
-            throw primaryError
-        }
-
-        return resolvedThreadIDs
-    }
-}
-
-actor CompositeRecentThreadListing: RecentThreadListing {
-    private let primary: any RecentThreadListing
-    private let fallbacks: [any RecentThreadListing]
-
-    init(primary: any RecentThreadListing, fallbacks: [any RecentThreadListing]) {
-        self.primary = primary
-        self.fallbacks = fallbacks
-    }
-
-    func recentThreads(limit: Int) async throws -> [CodexThread] {
-        guard limit > 0 else {
-            return []
-        }
-
-        var primaryError: Error?
-        var threadsByID: [String: CodexThread] = [:]
-
-        do {
-            for thread in try await primary.recentThreads(limit: limit) {
-                threadsByID[thread.id] = thread
-            }
-        } catch {
-            primaryError = error
-        }
-
-        for fallback in fallbacks {
-            do {
-                for thread in try await fallback.recentThreads(limit: limit) {
-                    if let existing = threadsByID[thread.id], existing.updatedAt >= thread.updatedAt {
-                        continue
-                    }
-                    threadsByID[thread.id] = thread
-                }
-            } catch {
-                continue
-            }
-        }
-
-        if threadsByID.isEmpty, let primaryError {
-            throw primaryError
-        }
-
-        return Array(
-            threadsByID.values.sorted { lhs, rhs in
-                if lhs.updatedAt == rhs.updatedAt {
-                    return lhs.id < rhs.id
-                }
-
-                return lhs.updatedAt > rhs.updatedAt
-            }
-            .prefix(limit)
-        )
-    }
-}
-
 actor DesktopProjectCatalogLoader: ProjectCatalogLoading {
     private let reader: CodexDesktopProjectCatalogReader
 
@@ -520,7 +368,7 @@ final class MenubarController {
     ) async throws {
         let effectiveProjectLimit = max(1, projectLimit ?? configuration.projectLimit)
         let effectiveVisibleThreadLimit = max(1, visibleThreadLimit ?? configuration.visibleThreadLimit)
-        projectCatalog = (try? await loadProjectCatalog()) ?? .empty
+        projectCatalog = try await loadProjectCatalog()
 
         let threads = try await bootstrapRecentThreads(
             projectLimit: effectiveProjectLimit,
@@ -533,7 +381,7 @@ final class MenubarController {
     func refreshThreads() async throws -> MenubarControllerEffects {
         let threads = try await hydratedRecentThreads(limit: configuration.maxTrackedThreads)
         let effects = recordDiscoveredThreadRefreshResult(threads: threads)
-        projectCatalog = (try? await loadProjectCatalog()) ?? .empty
+        projectCatalog = try await loadProjectCatalog()
         state.replaceRecentThreads(
             with: threads,
             omissionGraceCount: configuration.authoritativeListOmissionGraceCount
@@ -589,8 +437,12 @@ final class MenubarController {
     }
 
     func refreshDesktopActivity() async -> MenubarControllerEffects {
-        if let reloadedProjectCatalog = try? await loadProjectCatalog() {
-            projectCatalog = reloadedProjectCatalog
+        do {
+            projectCatalog = try await loadProjectCatalog()
+        } catch {
+            let diagnostic = "Project catalog load failed: \(error.localizedDescription)"
+            state.recordDiagnostic(diagnostic)
+            return MenubarControllerEffects(diagnostics: [diagnostic])
         }
 
         let trackedThreads = state.recentThreads
@@ -886,8 +738,8 @@ final class MenubarController {
         )
     }
 
-    func notificationBody(forThreadID threadID: String, fallback: String) -> String {
-        state.notificationBody(forThreadID: threadID, fallback: fallback)
+    func notificationBody(forThreadID threadID: String, body: String) -> String {
+        state.notificationBody(forThreadID: threadID, body: body)
     }
 
     func markThreadRead(_ threadID: String) -> Bool {
@@ -1119,7 +971,7 @@ final class MenubarController {
         }
 
         let metadataByID = Dictionary(
-            uniqueKeysWithValues: (try? await loadThreadsByID(threadIDsNeedingMetadata))?.map { ($0.id, $0) } ?? []
+            uniqueKeysWithValues: try await loadThreadsByID(threadIDsNeedingMetadata).map { ($0.id, $0) }
         )
 
         return threads.map { thread in

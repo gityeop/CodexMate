@@ -4,7 +4,6 @@ final class CodexDesktopConversationActivityReader {
     private enum RecentLogFilePolicy {
         static let recentWindow: TimeInterval = 18 * 60 * 60
         static let maxRecentFiles = 12
-        static let maxFallbackFiles = 4
     }
 
     private struct LogFileMetadata {
@@ -224,12 +223,7 @@ final class CodexDesktopConversationActivityReader {
         }
         let recentCutoff = now.addingTimeInterval(-RecentLogFilePolicy.recentWindow)
         let recentLogFiles = sortedLogFiles.filter { $0.modificationDate >= recentCutoff }
-        let selectedLogFiles: [LogFileMetadata]
-        if !recentLogFiles.isEmpty {
-            selectedLogFiles = Array(recentLogFiles.prefix(RecentLogFilePolicy.maxRecentFiles))
-        } else {
-            selectedLogFiles = Array(sortedLogFiles.prefix(RecentLogFilePolicy.maxFallbackFiles))
-        }
+        let selectedLogFiles = Array(recentLogFiles.prefix(RecentLogFilePolicy.maxRecentFiles))
 
         let candidateLogFiles = selectedLogFiles
             .map(\.url)

@@ -9,8 +9,12 @@ enum AppDisplayMode: String, CaseIterable, Identifiable {
     }
 
     static func fromStoredValue(_ rawValue: String?) -> AppDisplayMode {
-        guard let rawValue, let mode = AppDisplayMode(rawValue: rawValue) else {
+        guard let rawValue else {
             return .notch
+        }
+
+        guard let mode = AppDisplayMode(rawValue: rawValue) else {
+            preconditionFailure("Invalid stored display mode: \(rawValue)")
         }
 
         return mode

@@ -133,19 +133,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             codexHomeStore.currentDirectoryURL
         }
     )
-    private lazy var remoteDesktopStateThreadReader = RemoteDesktopStateThreadReader(
-        codexDirectoryURLProvider: { [codexHomeStore] in
-            codexHomeStore.currentDirectoryURL
-        }
-    )
-    private lazy var desktopRecentThreadListing = CompositeRecentThreadListing(
-        primary: localDesktopRecentThreadListing,
-        fallbacks: [remoteDesktopStateThreadReader]
-    )
-    private lazy var desktopThreadMetadataReader = CompositeThreadMetadataReader(
-        primary: localDesktopThreadMetadataReader,
-        fallbacks: [remoteDesktopStateThreadReader]
-    )
     private lazy var asyncProjectCatalogLoader = DesktopProjectCatalogLoader(
         codexDirectoryURLProvider: { [codexHomeStore] in
             codexHomeStore.currentDirectoryURL
@@ -153,8 +140,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     )
     private lazy var controller = MenubarController(
         desktopActivityLoader: desktopActivityService,
-        recentThreadListing: desktopRecentThreadListing,
-        threadMetadataReader: desktopThreadMetadataReader,
+        recentThreadListing: localDesktopRecentThreadListing,
+        threadMetadataReader: localDesktopThreadMetadataReader,
         projectCatalogLoader: asyncProjectCatalogLoader,
         initialThreadReadMarkers: AppDelegate.loadThreadReadMarkers(),
         configuration: MenubarControllerConfiguration(
@@ -177,7 +164,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         overallStatus: .connecting,
         hasUnreadThreads: false
     )
-    private var currentStatusFallbackIcon = AppStateStore.OverallStatus.connecting.icon
+    private var currentStatusTextIcon = AppStateStore.OverallStatus.connecting.icon
     private var currentEffectiveDisplayMode: AppDisplayMode?
     private var isMenuOpen = false
     private var isSettingsWindowVisible = false
@@ -743,7 +730,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         title: strings.text("notification.turnCompleted.title", language: preferences.language),
                         body: controller.notificationBody(
                             forThreadID: notification.threadId,
-                            fallback: strings.text("notification.turnCompleted.bodyFallback", language: preferences.language)
+                            body: strings.text("notification.turnCompleted.body", language: preferences.language)
                         )
                     )
                 }
@@ -760,8 +747,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         title: strings.text("notification.error.title", language: preferences.language),
                         body: controller.notificationBody(
                             forThreadID: notification.threadId,
-                            fallback: notification.error.message.isEmpty
-                                ? strings.text("notification.error.bodyFallback", language: preferences.language)
+                            body: notification.error.message.isEmpty
+                                ? strings.text("notification.error.body", language: preferences.language)
                                 : notification.error.message
                         )
                     )
@@ -824,7 +811,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     title: strings.text("notification.needsInput.title", language: preferences.language),
                     body: controller.notificationBody(
                         forThreadID: request.threadId,
-                        fallback: strings.text("notification.needsInput.bodyFallback", language: preferences.language)
+                        body: strings.text("notification.needsInput.body", language: preferences.language)
                     )
                 )
             }
@@ -847,7 +834,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     title: strings.text("notification.approval.title", language: preferences.language),
                     body: controller.notificationBody(
                         forThreadID: request.threadId,
-                        fallback: strings.text("notification.approval.bodyFallback", language: preferences.language)
+                        body: strings.text("notification.approval.body", language: preferences.language)
                     )
                 )
             }
@@ -1054,7 +1041,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             strings: strings,
             language: preferences.language
         )
-        currentStatusFallbackIcon = MenubarStatusPresentation.statusItemIcon(
+        currentStatusTextIcon = MenubarStatusPresentation.statusItemIcon(
             overallStatus: overallStatus,
             hasUnreadThreads: hasUnreadThreads
         )
@@ -1080,7 +1067,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         button.image = nil
-        button.title = currentStatusFallbackIcon
+        button.title = currentStatusTextIcon
         button.imagePosition = .noImage
         button.toolTip = currentStatusDisplayName
     }
@@ -1299,7 +1286,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self.debugLog("overlay entry quit")
                 self.quit()
             default:
-                self.debugLog("overlay entry fallback action=\(NSStringFromSelector(action))")
+                self.debugLog("overlay entry dispatch action=\(NSStringFromSelector(action))")
                 self.closeMenu()
                 _ = NSApp.sendAction(action, to: target, from: nil)
             }
@@ -2169,8 +2156,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         guard let appURL = CodexApplicationLocator.locate() else {
             debugLog("openThread missingAppURL thread=\(threadID)")
-            copyThreadID(threadID)
-            controller.recordDiagnostic("Unable to open Codex deeplink. Copied thread id instead.")
+            controller.recordDiagnostic("Unable to open Codex deeplink for thread \(threadID).")
             renderMenu()
             return
         }
@@ -2186,8 +2172,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             renderMenu()
         } catch {
             debugLog("openThread openCommandFailed thread=\(threadID) error=\(error.localizedDescription)")
-            copyThreadID(threadID)
-            controller.recordDiagnostic("Failed to open Codex thread. Copied thread id instead: \(error.localizedDescription)")
+            controller.recordDiagnostic("Failed to open Codex thread \(threadID): \(error.localizedDescription)")
             renderMenu()
         }
     }

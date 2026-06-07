@@ -105,7 +105,7 @@ final class CodexAppServerClientTests: XCTestCase {
         )
     }
 
-    func testThreadListResponseFallsBackCreatedAtToUpdatedAtWhenMissing() throws {
+    func testThreadListResponseRequiresCreatedAt() throws {
         let data = Data(
             """
             {
@@ -124,11 +124,14 @@ final class CodexAppServerClientTests: XCTestCase {
             """.utf8
         )
 
-        let response = try JSONDecoder().decode(ThreadListResponse.self, from: data)
+        XCTAssertThrowsError(try JSONDecoder().decode(ThreadListResponse.self, from: data)) { error in
+            guard case DecodingError.keyNotFound(let key, _) = error else {
+                XCTFail("Expected missing createdAt error, got \(error)")
+                return
+            }
 
-        XCTAssertEqual(response.data.count, 1)
-        XCTAssertEqual(response.data[0].createdAt, 123)
-        XCTAssertEqual(response.data[0].updatedAt, 123)
+            XCTAssertEqual(key.stringValue, "createdAt")
+        }
     }
 
     func testThreadListParamsEncodeCursorAndUpdatedAtSortKey() throws {

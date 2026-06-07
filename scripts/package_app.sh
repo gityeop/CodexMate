@@ -42,7 +42,7 @@ configure_codesign_keychain_args() {
   fi
 
   if [[ -z "$resolved_keychain_path" ]]; then
-    resolved_keychain_path="$(security login-keychain 2>/dev/null | tr -d '"' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+    resolved_keychain_path="$(security login-keychain | tr -d '"' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
   fi
 
   APPLE_KEYCHAIN_PATH="$resolved_keychain_path"
@@ -129,7 +129,7 @@ resource_bundle_path() {
 default_sparkle_feed_url() {
   local remote_url
 
-  remote_url="$(git -C "$ROOT_DIR" config --get remote.origin.url 2>/dev/null || true)"
+  remote_url="$(git -C "$ROOT_DIR" config --get remote.origin.url)"
   remote_url="${remote_url%.git}"
 
   case "$remote_url" in
@@ -140,7 +140,8 @@ default_sparkle_feed_url() {
       echo "https://github.com/${remote_url#git@github.com:}/releases/latest/download/appcast.xml"
       ;;
     *)
-      echo "https://example.com/appcast.xml"
+      echo "Unsupported remote.origin.url for SPARKLE_FEED_URL: $remote_url" >&2
+      exit 1
       ;;
   esac
 }
@@ -166,7 +167,7 @@ prepare_signing_keychain() {
   fi
 
   security unlock-keychain -p "$APPLE_KEYCHAIN_PASSWORD" "$APPLE_KEYCHAIN_PATH"
-  security set-keychain-settings -lut "$APPLE_KEYCHAIN_UNLOCK_TIMEOUT" "$APPLE_KEYCHAIN_PATH" >/dev/null 2>&1 || true
+  security set-keychain-settings -lut "$APPLE_KEYCHAIN_UNLOCK_TIMEOUT" "$APPLE_KEYCHAIN_PATH"
   security set-key-partition-list \
     -S apple-tool:,apple:,codesign: \
     -s \
@@ -206,12 +207,14 @@ create_app_icon() {
 
 SPARKLE_FEED_URL="${SPARKLE_FEED_URL:-$(default_sparkle_feed_url)}"
 
-if [[ -z "$SPARKLE_PUBLIC_KEY" ]] && ensure_executable "$GENERATE_KEYS_BIN"; then
-  SPARKLE_PUBLIC_KEY="$("$GENERATE_KEYS_BIN" --account "$SPARKLE_KEYCHAIN_ACCOUNT" -p 2>/dev/null || true)"
+if [[ -z "$SPARKLE_PUBLIC_KEY" ]]; then
+  ensure_executable "$GENERATE_KEYS_BIN"
+  SPARKLE_PUBLIC_KEY="$("$GENERATE_KEYS_BIN" --account "$SPARKLE_KEYCHAIN_ACCOUNT" -p)"
 fi
 
 if [[ -z "$SPARKLE_PUBLIC_KEY" ]]; then
-  echo "Packaging without SUPublicEDKey. Automatic updates will stay unavailable until SPARKLE_PUBLIC_KEY is configured." >&2
+  echo "Unable to resolve SPARKLE_PUBLIC_KEY from the Sparkle keychain account." >&2
+  exit 1
 fi
 
 if [[ -z "${APPLE_SIGN_IDENTITY:-}" && "$ALLOW_ADHOC_SIGNING" != "1" ]]; then
@@ -235,7 +238,7 @@ mkdir -p "$MACOS_DIR" "$RESOURCES_DIR" "$FRAMEWORKS_DIR"
 
 cp "$EXECUTABLE_PATH" "$MACOS_DIR/$APP_NAME"
 
-install_name_tool -add_rpath "@executable_path/../Frameworks" "$MACOS_DIR/$APP_NAME" 2>/dev/null || true
+install_name_tool -add_rpath "@executable_path/../Frameworks" "$MACOS_DIR/$APP_NAME"
 
 APPLE_PRODUCTS_DIR="$ROOT_DIR/.build/apple/Products/${(C)CONFIGURATION}"
 
@@ -266,7 +269,7 @@ done
 
 create_app_icon "$APP_ICON_SOURCE" "$APP_ICON_FILE"
 
-SPARKLE_FRAMEWORK_PATH="$(find "$ROOT_DIR/.build" -path '*Sparkle.framework' -type d -print -quit || true)"
+SPARKLE_FRAMEWORK_PATH="$(find "$ROOT_DIR/.build" -path '*Sparkle.framework' -type d -print -quit)"
 if [[ -n "$SPARKLE_FRAMEWORK_PATH" ]]; then
   cp -R "$SPARKLE_FRAMEWORK_PATH" "$FRAMEWORKS_DIR/"
 fi

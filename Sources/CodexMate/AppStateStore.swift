@@ -1441,9 +1441,9 @@ struct AppStateStore {
         }
     }
 
-    func notificationBody(forThreadID threadID: String, fallback: String) -> String {
-        guard let thread = threadsByID[threadID] else { return fallback }
-        return "\(thread.displayTitle): \(fallback)"
+    func notificationBody(forThreadID threadID: String, body: String) -> String {
+        guard let thread = threadsByID[threadID] else { return body }
+        return "\(thread.displayTitle): \(body)"
     }
 
     private mutating func recordPendingResolution(threadID: String, previous: ThreadStatus, current: ThreadStatus, source: String) {

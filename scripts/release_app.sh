@@ -41,6 +41,7 @@ SKIP_NOTARIZATION="${SKIP_NOTARIZATION:-0}"
 require_env APP_VERSION
 require_env APP_SHORT_VERSION
 require_env SPARKLE_APPCAST_URL
+require_env SPARKLE_DOWNLOAD_URL_PREFIX
 require_env RELEASE_NOTES_FILE
 
 if [[ ! -f "$RELEASE_NOTES_FILE" ]]; then
@@ -83,10 +84,6 @@ fi
 if [[ -n "$SPARKLE_PRIVATE_KEY_FILE" && ! -f "$SPARKLE_PRIVATE_KEY_FILE" ]]; then
   echo "Sparkle private key file not found at $SPARKLE_PRIVATE_KEY_FILE." >&2
   exit 1
-fi
-
-if [[ -z "$SPARKLE_DOWNLOAD_URL_PREFIX" ]]; then
-  SPARKLE_DOWNLOAD_URL_PREFIX="${SPARKLE_APPCAST_URL%/*}"
 fi
 
 if [[ "$SPARKLE_DOWNLOAD_URL_PREFIX" != */ ]]; then

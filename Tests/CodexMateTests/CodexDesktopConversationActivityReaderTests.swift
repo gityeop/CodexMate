@@ -333,7 +333,7 @@ final class CodexDesktopConversationActivityReaderTests: XCTestCase {
         XCTAssertNil(snapshot.latestViewedAtByThreadID["thread-stale"])
     }
 
-    func testActivitySnapshotFallsBackToOlderLogsWhenNoRecentFilesExist() throws {
+    func testActivitySnapshotIgnoresOlderLogsWhenNoRecentFilesExist() throws {
         let tempDirectoryURL = FileManager.default.temporaryDirectory
             .appending(path: UUID().uuidString)
         try FileManager.default.createDirectory(at: tempDirectoryURL, withIntermediateDirectories: true)
@@ -363,7 +363,7 @@ final class CodexDesktopConversationActivityReaderTests: XCTestCase {
             now: Date(timeIntervalSince1970: 1_773_195_200)
         )
 
-        XCTAssertEqual(snapshot.latestViewedAtByThreadID["thread-older"], date("2026-03-09T08:15:00.000Z"))
+        XCTAssertNil(snapshot.latestViewedAtByThreadID["thread-older"])
     }
 
     func testActivitySnapshotUsesUTCLogDirectoryDate() throws {

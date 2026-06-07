@@ -11,28 +11,27 @@ struct AppStrings: Sendable {
     private let catalog: Catalog
 
     init(bundle: Bundle? = CodexMateResourceLocator.bundle) {
-        guard let bundle,
-              let url = bundle.url(forResource: "strings", withExtension: "json"),
-              let data = try? Data(contentsOf: url),
-              let catalog = try? JSONDecoder().decode(Catalog.self, from: data) else {
-            self.catalog = Catalog(en: [:], ko: [:])
-            return
+        guard let bundle else {
+            preconditionFailure("Missing CodexMate resource bundle.")
+        }
+        guard let url = bundle.url(forResource: "strings", withExtension: "json") else {
+            preconditionFailure("Missing strings.json in CodexMate resource bundle.")
         }
 
-        self.catalog = catalog
+        do {
+            let data = try Data(contentsOf: url)
+            self.catalog = try JSONDecoder().decode(Catalog.self, from: data)
+        } catch {
+            preconditionFailure("Failed to load strings.json: \(error.localizedDescription)")
+        }
     }
 
     func text(_ key: String, language: AppLanguage) -> String {
-        let localized = strings(for: language)[key]
-        if let localized {
-            return localized
+        guard let localized = strings(for: language)[key] else {
+            preconditionFailure("Missing localized string for key '\(key)' and language '\(language.resourceCode)'.")
         }
 
-        if let fallback = catalog.en[key] {
-            return fallback
-        }
-
-        return key
+        return localized
     }
 
     func format(_ key: String, language: AppLanguage, _ arguments: CVarArg...) -> String {
