@@ -3,20 +3,20 @@
     <channel>
         <title>CodexMate</title>
         <item>
-            <title>0.0.34</title>
-            <pubDate>Sun, 07 Jun 2026 03:54:57 +0900</pubDate>
-            <link>https://github.com/gityeop/CodexMate/releases/tag/v0.0.34</link>
-            <sparkle:version>34</sparkle:version>
-            <sparkle:shortVersionString>0.0.34</sparkle:shortVersionString>
+            <title>0.0.35</title>
+            <pubDate>Sun, 07 Jun 2026 21:43:19 +0900</pubDate>
+            <link>https://github.com/gityeop/CodexMate/releases/tag/v0.0.35</link>
+            <sparkle:version>35</sparkle:version>
+            <sparkle:shortVersionString>0.0.35</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description sparkle:format="markdown"><![CDATA[# CodexMate 0.0.34
+            <description sparkle:format="markdown"><![CDATA[# CodexMate 0.0.35
 
-- Keeps the menu bar unread indicator aligned with the threads that are actually visible in the menu.
-- Restores visible menu entries for listed Codex sessions whose workspace folder still exists even when the project catalog has not recorded that root.
-- Keeps removed or missing workspace folders hidden so stale project roots do not reappear.
+- Removes recovery paths that hid runtime, project catalog, and remote state read failures behind cached, session-derived, or empty results.
+- Surfaces invalid localized strings, stored settings, and app-server thread payloads as direct failures instead of substituting alternate values.
+- Tightens release packaging so signing, Sparkle metadata, appcast URLs, and install-name updates fail visibly when required inputs are missing.
 ]]></description>
-            <enclosure url="https://github.com/gityeop/CodexMate/releases/latest/download/CodexMate-0.0.34.zip" length="4593266" type="application/octet-stream" sparkle:edSignature="agyS4X94Scjzipgh9meButrFfMdrwU4Z7arWpXwKjt350ZayOw/IWNqC+HfwdS3hi5K8E6LPoUZb6GfoCfwCCA=="/>
+            <enclosure url="https://github.com/gityeop/CodexMate/releases/latest/download/CodexMate-0.0.35.zip" length="4552332" type="application/octet-stream" sparkle:edSignature="k/dO4T2tzNzdRu+lJPdGB3bN6rsdlHNWWR+sfGGtwcI8Z0AkjehVTLFr4DfB7QtxQw0qOen5n86IyLuTNFMmBQ=="/>
         </item>
     </channel>
 </rss>
