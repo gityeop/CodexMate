@@ -470,7 +470,10 @@ def make_thread(row):
 
 def candidate_databases():
     codex_home = os.environ.get("CODEX_HOME") or os.path.expanduser("~/.codex")
-    paths = glob.glob(os.path.join(codex_home, "state_*.sqlite"))
+    paths = []
+    for directory in (codex_home, os.path.join(codex_home, "sqlite")):
+        if os.path.isdir(directory):
+            paths.extend(glob.glob(os.path.join(directory, "state_*.sqlite")))
     return sorted(paths, key=lambda path: os.path.getmtime(path), reverse=True)
 
 def rows_from_database(database_path):
@@ -505,10 +508,7 @@ threads_by_id = {}
 thread_ids = set()
 
 for database_path in candidate_databases():
-    try:
-        rows = rows_from_database(database_path)
-    except Exception:
-        continue
+    rows = rows_from_database(database_path)
 
     for row in rows:
         thread_id = compact_string(row_value(row, "id"))

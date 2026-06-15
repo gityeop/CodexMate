@@ -481,15 +481,17 @@ struct CodexDesktopStateReader {
             return [stateDatabaseURLOverride]
         }
 
-        let codexDirectory = resolvedCodexDirectoryURL()
-        let candidateURLs = try fileManager.contentsOfDirectory(
-            at: codexDirectory,
-            includingPropertiesForKeys: [.contentModificationDateKey],
-            options: [.skipsHiddenFiles]
-        )
-        .filter { url in
-            url.lastPathComponent.hasPrefix("state_") && url.pathExtension == "sqlite"
-        }
+        let candidateURLs = try stateDatabaseSearchDirectoryURLs()
+            .flatMap { directoryURL in
+                try fileManager.contentsOfDirectory(
+                    at: directoryURL,
+                    includingPropertiesForKeys: [.contentModificationDateKey],
+                    options: [.skipsHiddenFiles]
+                )
+                .filter { url in
+                    url.lastPathComponent.hasPrefix("state_") && url.pathExtension == "sqlite"
+                }
+            }
 
         let sortedCandidateURLs = candidateURLs.sorted { lhs, rhs in
             let lhsDate = (try? lhs.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
@@ -502,6 +504,17 @@ struct CodexDesktopStateReader {
         }
 
         return sortedCandidateURLs
+    }
+
+    private func stateDatabaseSearchDirectoryURLs() -> [URL] {
+        let codexDirectoryURL = resolvedCodexDirectoryURL()
+        let sqliteDirectoryURL = codexDirectoryURL.appendingPathComponent("sqlite", isDirectory: true)
+
+        return [codexDirectoryURL, sqliteDirectoryURL].filter { directoryURL in
+            var isDirectory: ObjCBool = false
+            return fileManager.fileExists(atPath: directoryURL.path, isDirectory: &isDirectory)
+                && isDirectory.boolValue
+        }
     }
 
     private func resolvedCodexDirectoryURL() -> URL {

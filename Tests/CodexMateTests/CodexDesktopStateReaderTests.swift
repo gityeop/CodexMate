@@ -1767,6 +1767,69 @@ final class CodexDesktopStateReaderTests: XCTestCase {
         }
     }
 
+    func testRecentThreadsUsesNewestStateDatabaseFromSqliteStorageDirectory() throws {
+        let tempDirectoryURL = FileManager.default.temporaryDirectory
+            .appending(path: UUID().uuidString)
+        let sqliteDirectoryURL = tempDirectoryURL.appending(path: "sqlite", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: sqliteDirectoryURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDirectoryURL) }
+
+        let rootDatabaseURL = tempDirectoryURL.appending(path: "state_1.sqlite")
+        try createStateDatabase(
+            at: rootDatabaseURL,
+            sql: """
+            CREATE TABLE threads (
+                id TEXT PRIMARY KEY,
+                first_user_message TEXT NOT NULL DEFAULT '',
+                title TEXT NOT NULL DEFAULT '',
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                cwd TEXT NOT NULL,
+                rollout_path TEXT,
+                source TEXT NOT NULL DEFAULT 'vscode',
+                archived INTEGER NOT NULL DEFAULT 0
+            );
+            INSERT INTO threads (id, first_user_message, title, created_at, updated_at, cwd, rollout_path, source, archived)
+            VALUES ('root-thread', 'Root Preview', 'Root Thread', 100, 300, '/tmp/root', NULL, 'vscode', 0);
+            """
+        )
+
+        let sqliteDatabaseURL = sqliteDirectoryURL.appending(path: "state_5.sqlite")
+        try createStateDatabase(
+            at: sqliteDatabaseURL,
+            sql: """
+            CREATE TABLE threads (
+                id TEXT PRIMARY KEY,
+                first_user_message TEXT NOT NULL DEFAULT '',
+                title TEXT NOT NULL DEFAULT '',
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                cwd TEXT NOT NULL,
+                rollout_path TEXT,
+                source TEXT NOT NULL DEFAULT 'vscode',
+                archived INTEGER NOT NULL DEFAULT 0
+            );
+            INSERT INTO threads (id, first_user_message, title, created_at, updated_at, cwd, rollout_path, source, archived)
+            VALUES ('sqlite-thread', 'SQLite Preview', 'SQLite Thread', 100, 200, '/tmp/sqlite', NULL, 'vscode', 0);
+            """
+        )
+
+        try FileManager.default.setAttributes(
+            [.modificationDate: Date(timeIntervalSince1970: 100)],
+            ofItemAtPath: rootDatabaseURL.path
+        )
+        try FileManager.default.setAttributes(
+            [.modificationDate: Date(timeIntervalSince1970: 200)],
+            ofItemAtPath: sqliteDatabaseURL.path
+        )
+
+        let reader = CodexDesktopStateReader(codexDirectoryURLOverride: tempDirectoryURL)
+
+        let threads = try reader.recentThreads(limit: 1)
+
+        XCTAssertEqual(threads.map(\.id), ["sqlite-thread"])
+    }
+
     func testCodexDirectoryOverrideTakesPrecedenceOverProvider() throws {
         let tempDirectoryURL = FileManager.default.temporaryDirectory
             .appending(path: UUID().uuidString)
