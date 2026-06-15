@@ -23,6 +23,44 @@ struct CodexMate {
             return truthyValue(for: "CODEXMATE_OPEN_SETTINGS_ON_LAUNCH", environment: environment)
         }
 
+        static func promoMockupEnabled(
+            environment: [String: String] = ProcessInfo.processInfo.environment
+        ) -> Bool {
+            if arguments.contains("--promo-mockup")
+                || arguments.contains("--promo-mockup-menubar")
+                || arguments.contains("--promo-mockup-notch") {
+                return true
+            }
+            return truthyValue(for: "CODEXMATE_PROMO_MOCKUP", environment: environment)
+        }
+
+        static func promoMockupDisplayMode(
+            environment: [String: String] = ProcessInfo.processInfo.environment
+        ) -> AppDisplayMode? {
+            if arguments.contains("--promo-mockup-notch") {
+                return .notch
+            }
+
+            if arguments.contains("--promo-mockup-menubar") {
+                return .menuBar
+            }
+
+            guard let rawValue = environment["CODEXMATE_PROMO_MOCKUP_DISPLAY_MODE"]?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+                  !rawValue.isEmpty else {
+                return nil
+            }
+
+            switch rawValue.lowercased() {
+            case "menubar", "menu-bar":
+                return .menuBar
+            case "notch":
+                return .notch
+            default:
+                preconditionFailure("Invalid promo mockup display mode: \(rawValue)")
+            }
+        }
+
         private static func truthyValue(
             for key: String,
             environment: [String: String]
@@ -44,12 +82,16 @@ struct CodexMate {
     static func main() {
         let regularAppMode = LaunchEnvironment.regularAppModeEnabled()
         let openSettingsOnLaunch = LaunchEnvironment.openSettingsOnLaunchEnabled()
+        let promoMockupDisplayMode = LaunchEnvironment.promoMockupDisplayMode()
+        let promoMockupEnabled = promoMockupDisplayMode != nil || LaunchEnvironment.promoMockupEnabled()
         DebugTraceLogger.log(
-            "main start regularAppMode=\(regularAppMode) openSettingsOnLaunch=\(openSettingsOnLaunch) os=\(ProcessInfo.processInfo.operatingSystemVersionString)"
+            "main start regularAppMode=\(regularAppMode) openSettingsOnLaunch=\(openSettingsOnLaunch) promoMockup=\(promoMockupEnabled) promoMockupDisplayMode=\((promoMockupDisplayMode ?? .menuBar).rawValue) os=\(ProcessInfo.processInfo.operatingSystemVersionString)"
         )
 
         let appDelegate = AppDelegate(
-            openSettingsOnLaunch: openSettingsOnLaunch
+            openSettingsOnLaunch: openSettingsOnLaunch,
+            promoMockupEnabled: promoMockupEnabled,
+            promoMockupDisplayMode: promoMockupDisplayMode ?? .menuBar
         )
         DebugTraceLogger.log("main createdAppDelegate")
         let application = NSApplication.shared

@@ -38,6 +38,10 @@ private final class CodexHomeStore: @unchecked Sendable {
     }
 }
 
+private enum UserNotificationPayloadKey {
+    static let threadID = "threadID"
+}
+
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     enum ServerRequestKind: Equatable {
@@ -97,6 +101,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private let openSettingsOnLaunch: Bool
+    private let promoMockupEnabled: Bool
+    private let promoMockupDisplayMode: AppDisplayMode
 
     private var statusItem: NSStatusItem?
     private let menu = ThreadMenu()
@@ -180,6 +186,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var threadRefreshTask: Task<Void, Never>?
     private var threadMetadataRefreshTask: Task<Void, Never>?
     private var notificationRenderTask: Task<Void, Never>?
+    private var threadNotificationStatusByThreadID: [String: AppStateStore.ThreadStatus] = [:]
     private var shouldRefreshDesktopActivityAfterNextThreadRefresh = false
     private var hoverTooltipContentsByThreadID: [String: MenubarStatusPresentation.ThreadTooltipContent] = [:]
     private var hoverTooltipWorkItem: DispatchWorkItem?
@@ -231,8 +238,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     )
 
-    init(openSettingsOnLaunch: Bool = false) {
+    init(
+        openSettingsOnLaunch: Bool = false,
+        promoMockupEnabled: Bool = false,
+        promoMockupDisplayMode: AppDisplayMode = .menuBar
+    ) {
         self.openSettingsOnLaunch = openSettingsOnLaunch
+        self.promoMockupEnabled = promoMockupEnabled
+        self.promoMockupDisplayMode = promoMockupDisplayMode
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -251,6 +264,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         configureGlobalShortcut()
         relativeDateFormatter.locale = preferences.locale
         applyPresentationMode(force: true)
+
+        if promoMockupEnabled {
+            isInitialThreadBootstrapInProgress = false
+            renderMenu()
+            DispatchQueue.main.async { [weak self] in
+                self?.openPromoMockupMenu()
+            }
+            return
+        }
 
         configureForegroundRefreshObservers()
         requestNotificationPermission()
@@ -283,6 +305,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return true
     }
 
+    private var requestedDisplayMode: AppDisplayMode {
+        promoMockupEnabled ? promoMockupDisplayMode : preferences.displayMode
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
         debugLog("applicationWillTerminate event=\(debugEventSummary(NSApp.currentEvent))")
         removeForegroundRefreshObservers()
@@ -303,11 +329,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func applyPresentationMode(force: Bool = false) {
-        let nextMode = preferences.displayMode.resolved(hasHardwareNotch: preferredOverlayScreen() != nil)
+        let displayMode = requestedDisplayMode
+        let nextMode = displayMode.resolved(hasHardwareNotch: preferredOverlayScreen() != nil)
         let previousMode = currentEffectiveDisplayMode
 
         debugLog(
-            "applyPresentationMode force=\(force) requested=\(preferences.displayMode.rawValue) previous=\(previousMode?.rawValue ?? "nil") next=\(nextMode.rawValue)"
+            "applyPresentationMode force=\(force) requested=\(displayMode.rawValue) previous=\(previousMode?.rawValue ?? "nil") next=\(nextMode.rawValue)"
         )
 
         if !force, previousMode == nextMode {
@@ -525,7 +552,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .sink { [weak self] _ in
                 guard let self else { return }
                 self.debugLog(
-                    "displayModeChanged requested=\(self.preferences.displayMode.rawValue) effective=\(self.preferences.displayMode.resolved(hasHardwareNotch: self.preferredOverlayScreen() != nil).rawValue)"
+                    "displayModeChanged requested=\(self.requestedDisplayMode.rawValue) effective=\(self.requestedDisplayMode.resolved(hasHardwareNotch: self.preferredOverlayScreen() != nil).rawValue)"
                 )
                 self.applyPresentationMode()
                 self.renderMenu()
@@ -547,7 +574,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
-        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
+        let center = UNUserNotificationCenter.current()
+        center.delegate = self
+        center.requestAuthorization(options: [.alert, .sound]) { [weak self] granted, error in
+            if let error {
+                Task { @MainActor [weak self] in
+                    self?.debugLog("User notification authorization failed: \(error.localizedDescription)")
+                }
+                return
+            }
+
+            guard granted else {
+                Task { @MainActor [weak self] in
+                    self?.debugLog("User notification authorization denied.")
+                }
+                return
+            }
+        }
     }
 
     private func configureForegroundRefreshObservers() {
@@ -617,6 +660,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         shouldRefreshDesktopActivityAfterNextThreadRefresh = false
         applyControllerEffects(effects)
         applyControllerEffects(pruneEffects)
+        sendNotificationsForThreadStatusChanges()
         renderMenu()
         if shouldFollowUpWithDesktopActivity {
             requestDesktopActivityRefresh()
@@ -628,6 +672,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             projectLimit: preferences.projectLimit,
             visibleThreadLimit: preferences.threadsPerProjectLimit
         )
+        syncThreadNotificationStatusBaseline()
         completeInitialThreadBootstrap(requestBackfill: true)
         renderMenu()
     }
@@ -648,6 +693,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         switch message {
         case let .notification(method, payload):
             if handleNotification(method: method, payload: payload) {
+                syncThreadNotificationStatusBaseline()
                 scheduleNotificationRender()
             }
         case let .request(_, method, payload):
@@ -726,11 +772,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 )
                 requestDesktopActivityRefresh()
                 if preferences.completionNotificationsEnabled {
-                    sendNotification(
-                        title: strings.text("notification.turnCompleted.title", language: preferences.language),
-                        body: controller.notificationBody(
-                            forThreadID: notification.threadId,
-                            body: strings.text("notification.turnCompleted.body", language: preferences.language)
+                    sendThreadDesktopNotification(
+                        ThreadDesktopNotification(
+                            threadID: notification.threadId,
+                            kind: .completion
                         )
                     )
                 }
@@ -743,13 +788,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 requestDesktopActivityRefresh()
 
                 if !notification.willRetry && preferences.failureNotificationsEnabled {
-                    sendNotification(
-                        title: strings.text("notification.error.title", language: preferences.language),
-                        body: controller.notificationBody(
-                            forThreadID: notification.threadId,
-                            body: notification.error.message.isEmpty
-                                ? strings.text("notification.error.body", language: preferences.language)
-                                : notification.error.message
+                    sendThreadDesktopNotification(
+                        ThreadDesktopNotification(
+                            threadID: notification.threadId,
+                            kind: .failure(message: notification.error.message)
                         )
                     )
                 }
@@ -807,11 +849,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             )
             controller.recordDiagnostic("user-input request method=\(method) thread=\(request.threadId.prefix(8)) turn=\(request.turnId.prefix(8))")
             if preferences.attentionNotificationsEnabled {
-                sendNotification(
-                    title: strings.text("notification.needsInput.title", language: preferences.language),
-                    body: controller.notificationBody(
-                        forThreadID: request.threadId,
-                        body: strings.text("notification.needsInput.body", language: preferences.language)
+                sendThreadDesktopNotification(
+                    ThreadDesktopNotification(
+                        threadID: request.threadId,
+                        kind: .attention(.waitingForInput)
                     )
                 )
             }
@@ -830,11 +871,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             )
             controller.recordDiagnostic("approval request method=\(method) thread=\(request.threadId.prefix(8)) turn=\(request.turnId.prefix(8))")
             if preferences.attentionNotificationsEnabled {
-                sendNotification(
-                    title: strings.text("notification.approval.title", language: preferences.language),
-                    body: controller.notificationBody(
-                        forThreadID: request.threadId,
-                        body: strings.text("notification.approval.body", language: preferences.language)
+                sendThreadDesktopNotification(
+                    ThreadDesktopNotification(
+                        threadID: request.threadId,
+                        kind: .attention(.needsApproval)
                     )
                 )
             }
@@ -844,6 +884,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
+        syncThreadNotificationStatusBaseline()
         renderMenu()
     }
 
@@ -894,12 +935,97 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         apply(message.params)
     }
 
-    private func sendNotification(title: String, body: String) {
+    private func syncThreadNotificationStatusBaseline() {
+        threadNotificationStatusByThreadID = ThreadNotificationPlanner.statusByThreadID(
+            from: controller.recentThreads
+        )
+    }
+
+    private func sendNotificationsForThreadStatusChanges() {
+        guard !isInitialThreadBootstrapInProgress else {
+            syncThreadNotificationStatusBaseline()
+            return
+        }
+
+        let notifications = ThreadNotificationPlanner.notifications(
+            previousStatusByThreadID: threadNotificationStatusByThreadID,
+            currentRows: controller.recentThreads
+        )
+        syncThreadNotificationStatusBaseline()
+
+        for notification in notifications {
+            sendThreadDesktopNotification(notification)
+        }
+    }
+
+    private func sendThreadDesktopNotification(_ notification: ThreadDesktopNotification) {
+        let body: String
+
+        switch notification.kind {
+        case let .attention(status):
+            guard preferences.attentionNotificationsEnabled else { return }
+            switch status {
+            case .waitingForInput:
+                body = strings.text("notification.needsInput.body", language: preferences.language)
+            case .needsApproval:
+                body = strings.text("notification.approval.body", language: preferences.language)
+            case .notLoaded, .idle, .running, .failed:
+                return
+            }
+        case .completion:
+            guard preferences.completionNotificationsEnabled else { return }
+            body = ""
+        case let .failure(message):
+            guard preferences.failureNotificationsEnabled else { return }
+            if let message, !message.isEmpty {
+                body = message
+            } else {
+                body = strings.text("notification.error.body", language: preferences.language)
+            }
+        }
+
+        guard let metadata = notificationMetadata(forThreadID: notification.threadID) else {
+            debugLog("User notification missing metadata thread=\(notification.threadID) kind=\(String(describing: notification.kind))")
+            return
+        }
+
+        let content = ThreadNotificationContentBuilder.content(
+            body: body,
+            metadata: metadata,
+            kind: notification.kind
+        )
+        sendNotification(
+            title: content.title,
+            subtitle: content.subtitle,
+            body: content.body,
+            threadID: notification.threadID
+        )
+    }
+
+    private func notificationMetadata(forThreadID threadID: String) -> ThreadNotificationMetadata? {
+        guard let thread = controller.recentThreads.first(where: { $0.id == threadID }) else {
+            return nil
+        }
+
+        let project = controller.projectCatalog.project(forThreadID: thread.id, cwd: thread.cwd)
+        return ThreadNotificationMetadata(
+            projectDisplayName: project.displayName,
+            threadTitle: thread.displayTitle,
+            replySnippet: ThreadNotificationContentBuilder.latestAssistantReplySnippet(sessionPath: thread.sessionPath)
+        )
+    }
+
+    private func sendNotification(title: String, subtitle: String, body: String, threadID: String) {
         guard notificationsEnabled else { return }
 
         let content = UNMutableNotificationContent()
         content.title = title
+        content.subtitle = subtitle
         content.body = body
+        content.sound = .default
+        content.userInfo = [
+            UserNotificationPayloadKey.threadID: threadID
+        ]
 
         let request = UNNotificationRequest(
             identifier: UUID().uuidString,
@@ -907,7 +1033,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             trigger: nil
         )
 
-        UNUserNotificationCenter.current().add(request, withCompletionHandler: nil)
+        UNUserNotificationCenter.current().add(request) { [weak self] error in
+            guard let error else { return }
+            Task { @MainActor [weak self] in
+                self?.debugLog("User notification failed thread=\(threadID): \(error.localizedDescription)")
+            }
+        }
     }
 
     private func handleForegroundRefreshNotification(_ name: Notification.Name, now: Date = Date()) {
@@ -927,6 +1058,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func scheduleRefreshTimerIfNeeded() {
+        guard !promoMockupEnabled else {
+            return
+        }
+
         let policy = refreshSchedulingPolicy()
         guard refreshTimer == nil || refreshTimerInterval != policy.timerInterval else {
             return
@@ -1017,6 +1152,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         applyControllerEffects(effects)
         applyControllerEffects(pruneEffects)
+        sendNotificationsForThreadStatusChanges()
         renderMenu()
     }
 
@@ -1129,10 +1265,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
-        let preparedSnapshot = controller.prepareSnapshot(
-            projectLimit: preferences.projectLimit,
-            visibleThreadLimit: preferences.threadsPerProjectLimit
-        )
+        let preparedSnapshot = promoMockupEnabled
+            ? PromoMockupMenu.preparedSnapshot()
+            : controller.prepareSnapshot(
+                projectLimit: preferences.projectLimit,
+                visibleThreadLimit: preferences.threadsPerProjectLimit
+            )
         let snapshot = preparedSnapshot.snapshot
         let menuSections = snapshot.menuSections
         var threadProjectIndexByThreadID: [String: Int] = [:]
@@ -1230,6 +1368,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func renderCurrentStatusItem() {
+        if promoMockupEnabled {
+            let statusSnapshot = PromoMockupMenu.statusSnapshot()
+            renderStatusItem(
+                overallStatus: statusSnapshot.overallStatus,
+                hasUnreadThreads: statusSnapshot.hasUnreadThreads
+            )
+            return
+        }
+
         let statusOverride = debugStatusOverride
         let statusSnapshot = controller.currentStatusSnapshot
         renderStatusItem(
@@ -1669,6 +1816,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func requestThreadRefresh(force: Bool = true, now: Date = Date()) {
+        guard !promoMockupEnabled else {
+            return
+        }
+
         if isInitialThreadBootstrapInProgress {
             pendingThreadRefreshAfterBootstrap = true
             return
@@ -1704,6 +1855,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func requestDesktopActivityRefresh(force: Bool = true, now: Date = Date()) {
+        guard !promoMockupEnabled else {
+            return
+        }
+
         if !force {
             let policy = refreshSchedulingPolicy()
             guard policy.shouldRefreshDesktopActivity(now: now, lastRequestedAt: lastDesktopActivityRefreshRequestAt) else {
@@ -1767,6 +1922,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let effects = await self.controller.refreshThreadMetadata(threadIDs: threadIDs)
             self.applyControllerEffects(effects)
             self.renderMenu()
+        }
+    }
+
+    private func openPromoMockupMenu() {
+        switch currentEffectiveDisplayMode {
+        case .menuBar:
+            openMenuBarMenu(positioningThreadID: nil, requestRefresh: false)
+        case .notch:
+            openMenu()
+        case nil:
+            applyPresentationMode(force: true)
+            openPromoMockupMenu()
         }
     }
 
@@ -2147,13 +2314,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
-        if NSWorkspace.shared.open(deepLinkURL) {
-            debugLog("openThread openedViaWorkspace thread=\(threadID)")
-            markThreadRead(threadID)
-            renderMenu()
-            return
-        }
-
         guard let appURL = CodexApplicationLocator.locate() else {
             debugLog("openThread missingAppURL thread=\(threadID)")
             controller.recordDiagnostic("Unable to open Codex deeplink for thread \(threadID).")
@@ -2167,7 +2327,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         do {
             try task.run()
-            debugLog("openThread launchedViaOpenCommand thread=\(threadID)")
+            task.waitUntilExit()
+            guard task.terminationStatus == 0 else {
+                debugLog("openThread openCommandExited thread=\(threadID) status=\(task.terminationStatus)")
+                controller.recordDiagnostic("Failed to open Codex thread \(threadID): open exited with status \(task.terminationStatus)")
+                renderMenu()
+                return
+            }
+
+            debugLog("openThread launchedCodexApp thread=\(threadID) app=\(appURL.path)")
             markThreadRead(threadID)
             renderMenu()
         } catch {
@@ -2273,5 +2441,42 @@ extension AppDelegate: NSMenuDelegate {
                 self?.openMenuBarMenu(positioningThreadID: pendingMenuBarPositionedThreadID, requestRefresh: false)
             }
         }
+    }
+}
+
+extension AppDelegate: UNUserNotificationCenterDelegate {
+    nonisolated func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        willPresent notification: UNNotification,
+        withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
+    ) {
+        completionHandler([.banner, .sound])
+    }
+
+    nonisolated func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        didReceive response: UNNotificationResponse,
+        withCompletionHandler completionHandler: @escaping () -> Void
+    ) {
+        guard response.actionIdentifier == UNNotificationDefaultActionIdentifier else {
+            completionHandler()
+            return
+        }
+
+        let userInfo = response.notification.request.content.userInfo
+        guard let threadID = userInfo[UserNotificationPayloadKey.threadID] as? String,
+              !threadID.isEmpty else {
+            Task { @MainActor [weak self] in
+                self?.debugLog("User notification response missing thread id.")
+            }
+            completionHandler()
+            return
+        }
+
+        Task { @MainActor [weak self] in
+            self?.debugLog("User notification clicked thread=\(threadID)")
+            self?.openThread(threadID: threadID)
+        }
+        completionHandler()
     }
 }
