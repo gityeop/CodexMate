@@ -31,6 +31,9 @@ final class AppPreferencesStoreTests: XCTestCase {
         XCTAssertTrue(store.notchStatusContentEnabled)
         XCTAssertEqual(store.projectLimit, AppPreferencesStore.defaultProjectLimit)
         XCTAssertEqual(store.threadsPerProjectLimit, AppPreferencesStore.defaultThreadsPerProjectLimit)
+        XCTAssertEqual(store.threadListViewMode, .projects)
+        XCTAssertEqual(store.threadListSectionLimit, AppPreferencesStore.defaultThreadListSectionLimit)
+        XCTAssertTrue(store.pinnedThreadIDs.isEmpty)
     }
 
     func testPreferenceChangesPersistToUserDefaults() {
@@ -45,6 +48,10 @@ final class AppPreferencesStoreTests: XCTestCase {
         store.notchStatusContentEnabled = false
         store.projectLimit = 7
         store.threadsPerProjectLimit = 12
+        store.threadListViewMode = .status
+        store.threadListSectionLimit = 24
+        store.togglePinnedThread(threadID: "thread-a")
+        store.togglePinnedThread(threadID: "thread-b")
 
         let reloaded = AppPreferencesStore(defaults: defaults)
         XCTAssertEqual(reloaded.language, .korean)
@@ -55,6 +62,22 @@ final class AppPreferencesStoreTests: XCTestCase {
         XCTAssertFalse(reloaded.notchStatusContentEnabled)
         XCTAssertEqual(reloaded.projectLimit, 7)
         XCTAssertEqual(reloaded.threadsPerProjectLimit, 12)
+        XCTAssertEqual(reloaded.threadListViewMode, .status)
+        XCTAssertEqual(reloaded.threadListSectionLimit, 24)
+        XCTAssertEqual(reloaded.pinnedThreadIDs, Set(["thread-a", "thread-b"]))
+    }
+
+    func testTogglePinnedThreadPersistsUpdatedPinnedSet() {
+        let defaults = makeDefaults()
+        let store = AppPreferencesStore(defaults: defaults)
+
+        XCTAssertTrue(store.togglePinnedThread(threadID: "thread-a"))
+        XCTAssertTrue(store.isThreadPinned(threadID: "thread-a"))
+        XCTAssertFalse(store.togglePinnedThread(threadID: "thread-a"))
+        XCTAssertFalse(store.isThreadPinned(threadID: "thread-a"))
+
+        let reloaded = AppPreferencesStore(defaults: defaults)
+        XCTAssertFalse(reloaded.isThreadPinned(threadID: "thread-a"))
     }
 
     func testLanguageChangePostsNotificationOnceAfterPersisting() {
@@ -111,6 +134,25 @@ final class AppPreferencesStoreTests: XCTestCase {
         XCTAssertEqual(
             store.projectLimit,
             AppPreferencesStore.projectLimitRange.upperBound
+        )
+    }
+
+    func testThreadListSectionLimitClampsOutOfRangeValues() {
+        let defaults = makeDefaults()
+        defaults.set(0, forKey: "threadListSectionLimit")
+
+        let store = AppPreferencesStore(defaults: defaults)
+
+        XCTAssertEqual(
+            store.threadListSectionLimit,
+            AppPreferencesStore.threadListSectionLimitRange.lowerBound
+        )
+
+        store.threadListSectionLimit = 999
+
+        XCTAssertEqual(
+            store.threadListSectionLimit,
+            AppPreferencesStore.threadListSectionLimitRange.upperBound
         )
     }
 

@@ -381,6 +381,14 @@ final class NotchStatusOverlayController {
         overlayView.flashMenuItem(identifier: identifier)
     }
 
+    func selectedExpandedMenuItemIdentifier() -> String? {
+        guard isMenuExpanded else {
+            return nil
+        }
+
+        return overlayView.selectedMenuItemIdentifier()
+    }
+
     func handleExpandedMenuKeyEvent(_ event: NSEvent) -> Bool {
         guard isMenuExpanded else {
             return false
@@ -1704,6 +1712,15 @@ final class NotchStatusOverlayView: NSView {
         }
 
         return menuRows[selectedMenuRowIndex].selectionKey
+    }
+
+    func selectedMenuItemIdentifier() -> String? {
+        guard let selectedMenuRowIndex,
+              menuRows.indices.contains(selectedMenuRowIndex) else {
+            return nil
+        }
+
+        return menuRows[selectedMenuRowIndex].identifier
     }
 
     private func restoreSelectedMenuRow(selectionKey: String?) {

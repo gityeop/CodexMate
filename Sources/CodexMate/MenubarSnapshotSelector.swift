@@ -7,6 +7,8 @@ enum MenubarSnapshotSelector {
         state: AppStateStore,
         projectCatalog: CodexDesktopProjectCatalog,
         threadReadMarkers: ThreadReadMarkerStore,
+        threadListViewMode: ThreadListViewMode = .projects,
+        pinnedThreadIDs: Set<String> = [],
         projectLimit: Int,
         visibleThreadLimit: Int,
         now: Date = Date()
@@ -19,13 +21,30 @@ enum MenubarSnapshotSelector {
             visibleThreadLimit: visibleThreadLimit,
             now: now
         )
-        let menuSections = ThreadMenuBuilder.build(snapshotSections: projectSections)
-        let hasVisibleSnapshotThreads = projectSections.contains { !$0.allThreads.isEmpty }
+        let allProjectSections = threadListViewMode == .projects && pinnedThreadIDs.isEmpty
+            ? projectSections
+            : projectSectionsWithSubagentThreads(
+                state: state,
+                projectCatalog: projectCatalog,
+                threadReadMarkers: threadReadMarkers,
+                projectLimit: .max,
+                visibleThreadLimit: .max,
+                now: now
+            )
+        let menuSnapshotSections = menuSnapshotSections(
+            projectSections: projectSections,
+            allProjectSections: allProjectSections,
+            viewMode: threadListViewMode,
+            pinnedThreadIDs: pinnedThreadIDs,
+            visibleThreadLimit: visibleThreadLimit
+        )
+        let menuSections = ThreadMenuBuilder.build(snapshotSections: menuSnapshotSections)
+        let hasVisibleSnapshotThreads = menuSnapshotSections.contains { !$0.allThreads.isEmpty }
 
         return MenubarSnapshot(
             overallStatus: displayedOverallStatus(
                 state: state,
-                snapshotSections: projectSections
+                snapshotSections: menuSnapshotSections
             ),
             hasUnreadThreads: menuSections
                 .flatMap(\.threads)
@@ -154,6 +173,319 @@ enum MenubarSnapshotSelector {
             projectLimit: projectLimit,
             visibleThreadLimit: visibleThreadLimit
         )
+    }
+
+    private static func menuSnapshotSections(
+        projectSections: [MenubarProjectSectionSnapshot],
+        allProjectSections: [MenubarProjectSectionSnapshot],
+        viewMode: ThreadListViewMode,
+        pinnedThreadIDs: Set<String>,
+        visibleThreadLimit: Int
+    ) -> [MenubarProjectSectionSnapshot] {
+        let allThreadSnapshots = uniqueThreadSnapshots(allProjectSections.flatMap(\.allThreads))
+        let pinnedSnapshots = allThreadSnapshots
+            .filter { pinnedThreadIDs.contains($0.id) }
+            .sorted(by: isNewerThread)
+        let pinnedRootIDs = Set(pinnedSnapshots.map(\.id))
+        let excludedThreadIDs = pinnedRootIDs.union(
+            descendantIDs(of: pinnedRootIDs, in: allThreadSnapshots)
+        )
+        let pinnedSection = pinnedSnapshotSection(
+            pinnedSnapshots: pinnedSnapshots,
+            allThreadSnapshots: allThreadSnapshots
+        )
+
+        let baseSections: [MenubarProjectSectionSnapshot]
+        switch viewMode {
+        case .projects:
+            baseSections = removingThreadIDs(excludedThreadIDs, from: projectSections)
+        case .recent:
+            baseSections = recentSnapshotSections(
+                allThreadSnapshots: allThreadSnapshots,
+                excludedThreadIDs: excludedThreadIDs,
+                visibleThreadLimit: visibleThreadLimit
+            )
+        case .status:
+            baseSections = statusSnapshotSections(
+                allThreadSnapshots: allThreadSnapshots,
+                excludedThreadIDs: excludedThreadIDs,
+                visibleThreadLimit: visibleThreadLimit
+            )
+        }
+
+        if let pinnedSection {
+            return [pinnedSection] + baseSections
+        }
+
+        return baseSections
+    }
+
+    private static func pinnedSnapshotSection(
+        pinnedSnapshots: [MenubarThreadSnapshot],
+        allThreadSnapshots: [MenubarThreadSnapshot]
+    ) -> MenubarProjectSectionSnapshot? {
+        guard !pinnedSnapshots.isEmpty else {
+            return nil
+        }
+
+        let pinnedThreadIDs = Set(pinnedSnapshots.map(\.id))
+        let includedThreadIDs = pinnedThreadIDs.union(
+            descendantIDs(of: pinnedThreadIDs, in: allThreadSnapshots)
+        )
+        let includedSnapshots = allThreadSnapshots
+            .filter { includedThreadIDs.contains($0.id) }
+            .sorted(by: isNewerThread)
+        let rootSnapshots = visibleRootSnapshots(
+            from: pinnedSnapshots,
+            allThreadSnapshots: includedSnapshots
+        )
+
+        return makeSnapshotSection(
+            id: "__codexmate_pinned__",
+            displayName: "Pinned",
+            threadSnapshots: rootSnapshots,
+            allThreadSnapshots: includedSnapshots
+        )
+    }
+
+    private static func recentSnapshotSections(
+        allThreadSnapshots: [MenubarThreadSnapshot],
+        excludedThreadIDs: Set<String>,
+        visibleThreadLimit: Int
+    ) -> [MenubarProjectSectionSnapshot] {
+        let limit = max(0, visibleThreadLimit)
+        let rootSnapshots = allThreadSnapshots
+            .filter { !excludedThreadIDs.contains($0.id) && !$0.thread.isSubagent }
+            .sorted(by: isNewerThread)
+        let limitedRootSnapshots = Array(rootSnapshots.prefix(limit))
+        let rootThreadIDs = Set(limitedRootSnapshots.map(\.id))
+        let includedThreadIDs = rootThreadIDs
+            .union(descendantIDs(of: rootThreadIDs, in: allThreadSnapshots))
+            .subtracting(excludedThreadIDs)
+        let includedSnapshots = allThreadSnapshots
+            .filter { includedThreadIDs.contains($0.id) }
+            .sorted(by: isNewerThread)
+
+        return makeSnapshotSection(
+            id: "__codexmate_recent__",
+            displayName: "Recent",
+            threadSnapshots: limitedRootSnapshots,
+            allThreadSnapshots: includedSnapshots
+        ).map { [$0] } ?? []
+    }
+
+    private static func statusSnapshotSections(
+        allThreadSnapshots: [MenubarThreadSnapshot],
+        excludedThreadIDs: Set<String>,
+        visibleThreadLimit: Int
+    ) -> [MenubarProjectSectionSnapshot] {
+        let limit = max(0, visibleThreadLimit)
+        let availableSnapshots = allThreadSnapshots.filter { !excludedThreadIDs.contains($0.id) }
+        var assignedThreadIDs: Set<String> = []
+        var sections: [MenubarProjectSectionSnapshot] = []
+
+        func appendSection(
+            id: String,
+            displayName: String,
+            candidates: [MenubarThreadSnapshot]
+        ) {
+            let unassignedCandidates = candidates.filter { !assignedThreadIDs.contains($0.id) }
+            assignedThreadIDs.formUnion(unassignedCandidates.map(\.id))
+            let rootSnapshots = Array(
+                visibleRootSnapshots(
+                    from: unassignedCandidates,
+                    allThreadSnapshots: unassignedCandidates
+                ).prefix(limit)
+            )
+            let rootThreadIDs = Set(rootSnapshots.map(\.id))
+            let includedThreadIDs = rootThreadIDs.union(
+                descendantIDs(of: rootThreadIDs, in: unassignedCandidates)
+            )
+            let includedSnapshots = unassignedCandidates
+                .filter { includedThreadIDs.contains($0.id) }
+                .sorted(by: isNewerThread)
+
+            if let section = makeSnapshotSection(
+                id: id,
+                displayName: displayName,
+                threadSnapshots: rootSnapshots,
+                allThreadSnapshots: includedSnapshots
+            ) {
+                sections.append(section)
+            }
+        }
+
+        appendSection(
+            id: "__codexmate_status_wait__",
+            displayName: "Wait",
+            candidates: availableSnapshots.filter { $0.thread.presentationStatus == .waitingForUser }
+        )
+        appendSection(
+            id: "__codexmate_status_running__",
+            displayName: "Running",
+            candidates: availableSnapshots.filter { $0.thread.presentationStatus == .running }
+        )
+        appendSection(
+            id: "__codexmate_status_unread__",
+            displayName: "Unread",
+            candidates: availableSnapshots.filter { $0.hasUnreadContent }
+        )
+
+        let otherCandidates = availableSnapshots.filter {
+            !assignedThreadIDs.contains($0.id) && !$0.thread.isSubagent
+        }
+        let otherRootSnapshots = Array(otherCandidates.sorted(by: isNewerThread).prefix(limit))
+        let otherRootThreadIDs = Set(otherRootSnapshots.map(\.id))
+        let otherIncludedThreadIDs = otherRootThreadIDs.union(
+            descendantIDs(of: otherRootThreadIDs, in: availableSnapshots)
+        )
+        let otherIncludedSnapshots = availableSnapshots
+            .filter { otherIncludedThreadIDs.contains($0.id) && !assignedThreadIDs.contains($0.id) }
+            .sorted(by: isNewerThread)
+
+        if let otherSection = makeSnapshotSection(
+            id: "__codexmate_status_other__",
+            displayName: "Other",
+            threadSnapshots: otherRootSnapshots,
+            allThreadSnapshots: otherIncludedSnapshots
+        ) {
+            sections.append(otherSection)
+        }
+
+        return sections
+    }
+
+    private static func removingThreadIDs(
+        _ threadIDs: Set<String>,
+        from sections: [MenubarProjectSectionSnapshot]
+    ) -> [MenubarProjectSectionSnapshot] {
+        guard !threadIDs.isEmpty else {
+            return sections
+        }
+
+        return sections.compactMap { section in
+            makeSnapshotSection(
+                id: section.id,
+                displayName: section.section.displayName,
+                threadSnapshots: section.threads.filter { !threadIDs.contains($0.id) },
+                allThreadSnapshots: section.allThreads.filter { !threadIDs.contains($0.id) }
+            )
+        }
+    }
+
+    private static func makeSnapshotSection(
+        id: String,
+        displayName: String,
+        threadSnapshots: [MenubarThreadSnapshot],
+        allThreadSnapshots: [MenubarThreadSnapshot]
+    ) -> MenubarProjectSectionSnapshot? {
+        guard !allThreadSnapshots.isEmpty else {
+            return nil
+        }
+
+        let latestUpdatedAt = allThreadSnapshots
+            .map(\.thread.activityUpdatedAt)
+            .max() ?? .distantPast
+
+        return MenubarProjectSectionSnapshot(
+            section: AppStateStore.ProjectSection(
+                id: id,
+                displayName: displayName,
+                latestUpdatedAt: latestUpdatedAt,
+                threads: threadSnapshots.map(\.thread)
+            ),
+            threads: threadSnapshots,
+            threadGroups: [],
+            allThreads: allThreadSnapshots
+        )
+    }
+
+    private static func visibleRootSnapshots(
+        from snapshots: [MenubarThreadSnapshot],
+        allThreadSnapshots: [MenubarThreadSnapshot]
+    ) -> [MenubarThreadSnapshot] {
+        let candidateThreadIDs = Set(snapshots.map(\.id))
+        let parentIDByThreadID = Dictionary(
+            uniqueKeysWithValues: allThreadSnapshots.compactMap { snapshot in
+                snapshot.thread.parentThreadID.map { (snapshot.id, $0) }
+            }
+        )
+
+        return snapshots.filter { snapshot in
+            !threadHasAncestor(
+                snapshot.id,
+                in: candidateThreadIDs,
+                parentIDByThreadID: parentIDByThreadID
+            )
+        }
+        .sorted(by: isNewerThread)
+    }
+
+    private static func descendantIDs(
+        of rootThreadIDs: Set<String>,
+        in snapshots: [MenubarThreadSnapshot]
+    ) -> Set<String> {
+        guard !rootThreadIDs.isEmpty else {
+            return []
+        }
+
+        var descendants: Set<String> = []
+        var didAddDescendant = true
+
+        while didAddDescendant {
+            didAddDescendant = false
+
+            for snapshot in snapshots {
+                guard !rootThreadIDs.contains(snapshot.id),
+                      !descendants.contains(snapshot.id),
+                      let parentThreadID = snapshot.thread.parentThreadID,
+                      rootThreadIDs.contains(parentThreadID) || descendants.contains(parentThreadID)
+                else {
+                    continue
+                }
+
+                descendants.insert(snapshot.id)
+                didAddDescendant = true
+            }
+        }
+
+        return descendants
+    }
+
+    private static func threadHasAncestor(
+        _ threadID: String,
+        in ancestorIDs: Set<String>,
+        parentIDByThreadID: [String: String]
+    ) -> Bool {
+        var currentThreadID = parentIDByThreadID[threadID]
+        var visited: Set<String> = [threadID]
+
+        while let parentThreadID = currentThreadID {
+            if !visited.insert(parentThreadID).inserted {
+                return false
+            }
+
+            if ancestorIDs.contains(parentThreadID) {
+                return true
+            }
+
+            currentThreadID = parentIDByThreadID[parentThreadID]
+        }
+
+        return false
+    }
+
+    private static func uniqueThreadSnapshots(
+        _ snapshots: [MenubarThreadSnapshot]
+    ) -> [MenubarThreadSnapshot] {
+        var seenThreadIDs: Set<String> = []
+        var uniqueSnapshots: [MenubarThreadSnapshot] = []
+
+        for snapshot in snapshots where seenThreadIDs.insert(snapshot.id).inserted {
+            uniqueSnapshots.append(snapshot)
+        }
+
+        return uniqueSnapshots
     }
 
     private static func limitProjectSections(
@@ -430,5 +762,9 @@ enum MenubarSnapshotSelector {
         }
 
         return lhs.activityUpdatedAt > rhs.activityUpdatedAt
+    }
+
+    private static func isNewerThread(_ lhs: MenubarThreadSnapshot, _ rhs: MenubarThreadSnapshot) -> Bool {
+        isNewerThread(lhs.thread, rhs.thread)
     }
 }

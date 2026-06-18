@@ -319,6 +319,92 @@ final class MenubarSnapshotSelectorTests: XCTestCase {
         XCTAssertEqual(snapshot.projectSections.first?.threads.first?.thread.displayStatus, .idle)
     }
 
+    func testSnapshotAddsPinnedSectionAndRemovesPinnedThreadFromRecentMode() {
+        var state = AppStateStore()
+        state.replaceRecentThreads(
+            with: [
+                codexThread(id: "thread-a", updatedAt: 100, cwd: "/tmp/A/work"),
+                codexThread(id: "thread-b", updatedAt: 300, cwd: "/tmp/B/work"),
+                codexThread(id: "thread-c", updatedAt: 200, cwd: "/tmp/C/work")
+            ]
+        )
+
+        let snapshot = MenubarSnapshotSelector.makeSnapshot(
+            state: state,
+            projectCatalog: projectCatalog,
+            threadReadMarkers: ThreadReadMarkerStore(),
+            threadListViewMode: .recent,
+            pinnedThreadIDs: ["thread-b"],
+            projectLimit: 1,
+            visibleThreadLimit: 2
+        )
+
+        XCTAssertEqual(snapshot.menuSections.map(\.displayName), ["Pinned", "Recent"])
+        XCTAssertEqual(snapshot.menuSections.first?.threads.map(\.thread.id), ["thread-b"])
+        XCTAssertEqual(snapshot.menuSections.dropFirst().first?.threads.map(\.thread.id), ["thread-c", "thread-a"])
+    }
+
+    func testSnapshotHidesMissingPinnedThreadButKeepsNormalMenuSections() {
+        var state = AppStateStore()
+        state.replaceRecentThreads(
+            with: [
+                codexThread(id: "thread-a", updatedAt: 100, cwd: "/tmp/A/work")
+            ]
+        )
+
+        let snapshot = MenubarSnapshotSelector.makeSnapshot(
+            state: state,
+            projectCatalog: projectCatalog,
+            threadReadMarkers: ThreadReadMarkerStore(),
+            pinnedThreadIDs: ["missing-thread"],
+            projectLimit: 3,
+            visibleThreadLimit: 3
+        )
+
+        XCTAssertEqual(snapshot.menuSections.map(\.displayName), ["A"])
+        XCTAssertEqual(snapshot.menuSections.first?.threads.map(\.thread.id), ["thread-a"])
+    }
+
+    func testSnapshotBuildsStatusSectionsWithWaitRunningUnreadAndOtherPriority() {
+        var state = AppStateStore()
+        state.replaceRecentThreads(
+            with: [
+                codexThread(
+                    id: "wait-thread",
+                    updatedAt: 400,
+                    status: .active(flags: [.waitingOnUserInput]),
+                    cwd: "/tmp/A/work"
+                ),
+                codexThread(
+                    id: "running-thread",
+                    updatedAt: 300,
+                    status: .active(flags: []),
+                    cwd: "/tmp/B/work"
+                ),
+                codexThread(id: "unread-thread", updatedAt: 200, cwd: "/tmp/C/work"),
+                codexThread(id: "other-thread", updatedAt: 100, cwd: "/tmp/A/work")
+            ]
+        )
+        state.markWatched(thread: codexThread(id: "unread-thread", updatedAt: 200, cwd: "/tmp/C/work"))
+
+        let snapshot = MenubarSnapshotSelector.makeSnapshot(
+            state: state,
+            projectCatalog: projectCatalog,
+            threadReadMarkers: ThreadReadMarkerStore(lastReadTerminalAtByThreadID: [
+                "unread-thread": 0
+            ]),
+            threadListViewMode: .status,
+            projectLimit: 3,
+            visibleThreadLimit: 5
+        )
+
+        XCTAssertEqual(snapshot.menuSections.map(\.displayName), ["Wait", "Running", "Unread", "Other"])
+        XCTAssertEqual(snapshot.menuSections[0].threads.map(\.thread.id), ["wait-thread"])
+        XCTAssertEqual(snapshot.menuSections[1].threads.map(\.thread.id), ["running-thread"])
+        XCTAssertEqual(snapshot.menuSections[2].threads.map(\.thread.id), ["unread-thread"])
+        XCTAssertEqual(snapshot.menuSections[3].threads.map(\.thread.id), ["other-thread"])
+    }
+
     private let projectCatalog = CodexDesktopProjectCatalog(
         workspaceRoots: [
             .init(path: "/tmp/A", displayName: "A"),

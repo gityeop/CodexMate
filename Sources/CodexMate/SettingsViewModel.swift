@@ -65,6 +65,27 @@ final class SettingsViewModel: ObservableObject {
         AppDisplayMode.allCases
     }
 
+    var threadListViewModeOptions: [ThreadListViewMode] {
+        ThreadListViewMode.allCases
+    }
+
+    var showsNotchStatusContentSetting: Bool {
+        preferences.displayMode == .notch
+    }
+
+    var showsProjectThreadListSettings: Bool {
+        preferences.threadListViewMode == .projects
+    }
+
+    var showsSectionThreadListSettings: Bool {
+        switch preferences.threadListViewMode {
+        case .projects:
+            return false
+        case .recent, .status:
+            return true
+        }
+    }
+
     var shortcutName: KeyboardShortcuts.Name {
         .toggleMenuBarDropdown
     }
@@ -97,6 +118,18 @@ final class SettingsViewModel: ObservableObject {
         )
     }
 
+    var threadListSectionLimitRange: ClosedRange<Int> {
+        AppPreferencesStore.threadListSectionLimitRange
+    }
+
+    var threadListSectionLimitLabel: String {
+        strings.format(
+            "settings.threadListSectionLimitLabel",
+            language: preferences.language,
+            Int64(preferences.threadListSectionLimit)
+        )
+    }
+
     func text(_ key: String) -> String {
         strings.text(key, language: preferences.language)
     }
@@ -121,6 +154,17 @@ final class SettingsViewModel: ObservableObject {
         }
     }
 
+    func label(for threadListViewMode: ThreadListViewMode) -> String {
+        switch threadListViewMode {
+        case .projects:
+            return text("settings.threadListViewMode.projects")
+        case .recent:
+            return text("settings.threadListViewMode.recent")
+        case .status:
+            return text("settings.threadListViewMode.status")
+        }
+    }
+
     func setLanguage(_ language: AppLanguage) {
         preferences.language = language
     }
@@ -129,12 +173,20 @@ final class SettingsViewModel: ObservableObject {
         preferences.displayMode = displayMode
     }
 
+    func setThreadListViewMode(_ threadListViewMode: ThreadListViewMode) {
+        preferences.threadListViewMode = threadListViewMode
+    }
+
     func setProjectLimit(_ limit: Int) {
         preferences.projectLimit = limit
     }
 
     func setThreadsPerProjectLimit(_ limit: Int) {
         preferences.threadsPerProjectLimit = limit
+    }
+
+    func setThreadListSectionLimit(_ limit: Int) {
+        preferences.threadListSectionLimit = limit
     }
 
     func setLaunchAtLoginEnabled(_ isEnabled: Bool) {

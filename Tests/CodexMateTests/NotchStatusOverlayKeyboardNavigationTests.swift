@@ -19,6 +19,20 @@ final class NotchStatusOverlayKeyboardNavigationTests: XCTestCase {
         XCTAssertEqual(try selectedRowTitle(in: view), "Thread 1")
     }
 
+    func testSelectedMenuItemIdentifierFollowsKeyboardSelection() throws {
+        let view = NotchStatusOverlayView(frame: NSRect(x: 0, y: 0, width: 520, height: 220))
+        view.setMenuItems(makeStableIdentifierMenuItems())
+        view.menuExpansionProgress = 1
+        view.prepareForMenuOpen()
+        view.layoutSubtreeIfNeeded()
+
+        XCTAssertEqual(view.selectedMenuItemIdentifier(), "thread-1")
+
+        try sendKeyEvent(to: view, keyCode: 125, characters: "↓")
+
+        XCTAssertEqual(view.selectedMenuItemIdentifier(), "thread-2")
+    }
+
     func testArrowNavigationSkipsHeadersSeparatorsAndDisabledRows() throws {
         let view = NotchStatusOverlayView(frame: NSRect(x: 0, y: 0, width: 520, height: 220))
         view.setMenuItems(makeMenuItems())

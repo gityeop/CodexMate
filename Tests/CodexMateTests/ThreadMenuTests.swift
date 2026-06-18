@@ -53,6 +53,14 @@ final class ThreadMenuTests: XCTestCase {
             ),
             (
                 try makeKeyEvent(
+                    keyCode: 35,
+                    modifierFlags: [.command],
+                    characters: "p"
+                ),
+                .togglePinnedThread
+            ),
+            (
+                try makeKeyEvent(
                     keyCode: 125,
                     modifierFlags: [.option],
                     characters: "↓"
@@ -67,6 +75,22 @@ final class ThreadMenuTests: XCTestCase {
                 ),
                 .movePrimarySelection(-1)
             ),
+            (
+                try makeKeyEvent(
+                    keyCode: 125,
+                    modifierFlags: [.command],
+                    characters: "↓"
+                ),
+                .movePrimarySelection(1)
+            ),
+            (
+                try makeKeyEvent(
+                    keyCode: 126,
+                    modifierFlags: [.command],
+                    characters: "↑"
+                ),
+                .movePrimarySelection(-1)
+            ),
         ]
 
         for (index, testCase) in cases.enumerated() {
@@ -76,6 +100,24 @@ final class ThreadMenuTests: XCTestCase {
                 "case \(index)"
             )
         }
+    }
+
+    func testPerformKeyEquivalentDoesNotConsumePinnedToggleShortcut() throws {
+        let menu = ThreadMenu()
+        var handledActions: [ThreadMenuKeyboardShortcutAction] = []
+        menu.onKeyboardShortcut = { action in
+            handledActions.append(action)
+            return true
+        }
+
+        let event = try makeKeyEvent(
+            keyCode: 35,
+            modifierFlags: [.command],
+            characters: "p"
+        )
+
+        XCTAssertFalse(menu.performKeyEquivalent(with: event))
+        XCTAssertTrue(handledActions.isEmpty)
     }
 
     func testProjectShortcutKeyEquivalentsExpandThroughZero() {

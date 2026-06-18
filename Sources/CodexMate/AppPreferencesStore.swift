@@ -12,6 +12,8 @@ final class AppPreferencesStore: ObservableObject {
     static let projectLimitRange = 1...ProjectMenuShortcut.maxCount
     static let defaultThreadsPerProjectLimit = 8
     static let threadsPerProjectLimitRange = 1...50
+    static let defaultThreadListSectionLimit = 20
+    static let threadListSectionLimitRange = 1...100
 
     private enum DefaultsKey {
         static let language = "appLanguage"
@@ -22,6 +24,9 @@ final class AppPreferencesStore: ObservableObject {
         static let notchStatusContentEnabled = "notchStatusContentEnabled"
         static let projectLimit = "projectLimit"
         static let threadsPerProjectLimit = "threadsPerProjectLimit"
+        static let threadListViewMode = "threadListViewMode"
+        static let threadListSectionLimit = "threadListSectionLimit"
+        static let pinnedThreadIDs = "pinnedThreadIDs"
     }
 
     @Published var language: AppLanguage {
@@ -90,6 +95,30 @@ final class AppPreferencesStore: ObservableObject {
         }
     }
 
+    @Published var threadListViewMode: ThreadListViewMode {
+        didSet {
+            defaults.set(threadListViewMode.rawValue, forKey: DefaultsKey.threadListViewMode)
+        }
+    }
+
+    @Published var threadListSectionLimit: Int {
+        didSet {
+            let clampedLimit = Self.clampedThreadListSectionLimit(threadListSectionLimit)
+            guard threadListSectionLimit == clampedLimit else {
+                threadListSectionLimit = clampedLimit
+                return
+            }
+
+            defaults.set(threadListSectionLimit, forKey: DefaultsKey.threadListSectionLimit)
+        }
+    }
+
+    @Published private(set) var pinnedThreadIDs: Set<String> {
+        didSet {
+            defaults.set(pinnedThreadIDs.sorted(), forKey: DefaultsKey.pinnedThreadIDs)
+        }
+    }
+
     let defaults: UserDefaults
 
     init(defaults: UserDefaults = .standard) {
@@ -128,10 +157,36 @@ final class AppPreferencesStore: ObservableObject {
                 defaults.integer(forKey: DefaultsKey.threadsPerProjectLimit)
             )
         }
+        threadListViewMode = ThreadListViewMode.fromStoredValue(
+            defaults.string(forKey: DefaultsKey.threadListViewMode)
+        )
+        if defaults.object(forKey: DefaultsKey.threadListSectionLimit) == nil {
+            threadListSectionLimit = Self.defaultThreadListSectionLimit
+        } else {
+            threadListSectionLimit = Self.clampedThreadListSectionLimit(
+                defaults.integer(forKey: DefaultsKey.threadListSectionLimit)
+            )
+        }
+        pinnedThreadIDs = Self.loadPinnedThreadIDs(defaults: defaults)
     }
 
     var locale: Locale {
         Locale(identifier: language.localeIdentifier)
+    }
+
+    func isThreadPinned(threadID: String) -> Bool {
+        pinnedThreadIDs.contains(threadID)
+    }
+
+    @discardableResult
+    func togglePinnedThread(threadID: String) -> Bool {
+        if pinnedThreadIDs.contains(threadID) {
+            pinnedThreadIDs.remove(threadID)
+            return false
+        }
+
+        pinnedThreadIDs.insert(threadID)
+        return true
     }
 
     private static func clampedProjectLimit(_ limit: Int) -> Int {
@@ -140,5 +195,21 @@ final class AppPreferencesStore: ObservableObject {
 
     private static func clampedThreadsPerProjectLimit(_ limit: Int) -> Int {
         min(max(limit, threadsPerProjectLimitRange.lowerBound), threadsPerProjectLimitRange.upperBound)
+    }
+
+    private static func clampedThreadListSectionLimit(_ limit: Int) -> Int {
+        min(max(limit, threadListSectionLimitRange.lowerBound), threadListSectionLimitRange.upperBound)
+    }
+
+    private static func loadPinnedThreadIDs(defaults: UserDefaults) -> Set<String> {
+        guard defaults.object(forKey: DefaultsKey.pinnedThreadIDs) != nil else {
+            return []
+        }
+
+        guard let storedThreadIDs = defaults.stringArray(forKey: DefaultsKey.pinnedThreadIDs) else {
+            preconditionFailure("Invalid stored pinned thread IDs.")
+        }
+
+        return Set(storedThreadIDs)
     }
 }

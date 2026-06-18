@@ -4,15 +4,21 @@ enum ThreadMenuKeyboardShortcutAction: Equatable {
     case openHighlightedItem
     case openProjectThread(Int)
     case movePrimarySelection(Int)
+    case togglePinnedThread
 }
 
 final class ThreadMenu: NSMenu {
     var onKeyboardShortcut: ((ThreadMenuKeyboardShortcutAction) -> Bool)?
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
-        if let action = Self.shortcutAction(for: event),
-           onKeyboardShortcut?(action) == true {
-            return true
+        if let action = Self.shortcutAction(for: event) {
+            if action == .togglePinnedThread {
+                return super.performKeyEquivalent(with: event)
+            }
+
+            if onKeyboardShortcut?(action) == true {
+                return true
+            }
         }
 
         return super.performKeyEquivalent(with: event)
@@ -31,20 +37,24 @@ final class ThreadMenu: NSMenu {
             return .openHighlightedItem
         }
 
-        if modifierFlags == .option {
+        if modifierFlags == .option || modifierFlags == .command {
             switch event.keyCode {
             case 125:
                 return .movePrimarySelection(1)
             case 126:
                 return .movePrimarySelection(-1)
             default:
-                return nil
+                break
             }
         }
 
         guard modifierFlags == NSEvent.ModifierFlags.command,
               let characters = event.charactersIgnoringModifiers else {
             return nil
+        }
+
+        if characters.lowercased() == "p" {
+            return .togglePinnedThread
         }
 
         guard let projectIndex = ProjectMenuShortcut.index(for: characters) else {

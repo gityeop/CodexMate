@@ -105,26 +105,46 @@ private struct SettingsView: View {
                     helpText(message)
                 }
 
-                Toggle(
-                    viewModel.text("settings.notchStatusContent"),
-                    isOn: notchStatusContentBinding
-                )
-
-                Stepper(
-                    value: projectLimitBinding,
-                    in: viewModel.projectLimitRange
-                ) {
-                    Text(viewModel.projectLimitLabel)
+                if viewModel.showsNotchStatusContentSetting {
+                    Toggle(
+                        viewModel.text("settings.notchStatusContent"),
+                        isOn: notchStatusContentBinding
+                    )
                 }
-                helpText(viewModel.text("settings.projectLimitHelp"))
 
-                Stepper(
-                    value: threadsPerProjectBinding,
-                    in: viewModel.threadsPerProjectLimitRange
-                ) {
-                    Text(viewModel.threadsPerProjectLimitLabel)
+                Picker(viewModel.text("settings.threadListViewModeLabel"), selection: threadListViewModeBinding) {
+                    ForEach(viewModel.threadListViewModeOptions) { threadListViewMode in
+                        Text(viewModel.label(for: threadListViewMode)).tag(threadListViewMode)
+                    }
                 }
-                helpText(viewModel.text("settings.threadsPerProjectHelp"))
+
+                if viewModel.showsProjectThreadListSettings {
+                    Stepper(
+                        value: projectLimitBinding,
+                        in: viewModel.projectLimitRange
+                    ) {
+                        Text(viewModel.projectLimitLabel)
+                    }
+                    helpText(viewModel.text("settings.projectLimitHelp"))
+
+                    Stepper(
+                        value: threadsPerProjectBinding,
+                        in: viewModel.threadsPerProjectLimitRange
+                    ) {
+                        Text(viewModel.threadsPerProjectLimitLabel)
+                    }
+                    helpText(viewModel.text("settings.threadsPerProjectHelp"))
+                }
+
+                if viewModel.showsSectionThreadListSettings {
+                    Stepper(
+                        value: threadListSectionLimitBinding,
+                        in: viewModel.threadListSectionLimitRange
+                    ) {
+                        Text(viewModel.threadListSectionLimitLabel)
+                    }
+                    helpText(viewModel.text("settings.threadListSectionLimitHelp"))
+                }
 
                 Toggle(
                     viewModel.text("settings.launchAtLogin"),
@@ -218,6 +238,13 @@ private struct SettingsView: View {
         )
     }
 
+    private var threadListViewModeBinding: Binding<ThreadListViewMode> {
+        Binding(
+            get: { viewModel.preferences.threadListViewMode },
+            set: { viewModel.setThreadListViewMode($0) }
+        )
+    }
+
     private var notchStatusContentBinding: Binding<Bool> {
         Binding(
             get: { viewModel.preferences.notchStatusContentEnabled },
@@ -236,6 +263,13 @@ private struct SettingsView: View {
         Binding(
             get: { viewModel.preferences.projectLimit },
             set: { viewModel.setProjectLimit($0) }
+        )
+    }
+
+    private var threadListSectionLimitBinding: Binding<Int> {
+        Binding(
+            get: { viewModel.preferences.threadListSectionLimit },
+            set: { viewModel.setThreadListSectionLimit($0) }
         )
     }
 

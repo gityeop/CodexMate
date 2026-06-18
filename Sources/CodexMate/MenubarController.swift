@@ -331,7 +331,9 @@ final class MenubarController {
 
     func prepareStatusSnapshot(
         projectLimit: Int? = nil,
-        visibleThreadLimit: Int? = nil
+        visibleThreadLimit: Int? = nil,
+        threadListViewMode: ThreadListViewMode = .projects,
+        pinnedThreadIDs: Set<String> = []
     ) -> MenubarStatusSnapshot {
         let effectiveProjectLimit = projectLimit ?? configuration.projectLimit
         let effectiveVisibleThreadLimit = visibleThreadLimit ?? configuration.visibleThreadLimit
@@ -339,6 +341,8 @@ final class MenubarController {
             state: state,
             projectCatalog: projectCatalog,
             threadReadMarkers: threadReadMarkers,
+            threadListViewMode: threadListViewMode,
+            pinnedThreadIDs: pinnedThreadIDs,
             projectLimit: effectiveProjectLimit,
             visibleThreadLimit: effectiveVisibleThreadLimit,
             now: now()
@@ -693,7 +697,9 @@ final class MenubarController {
     func prepareSnapshot(
         additionalTrackedThreadIDs: Set<String> = [],
         projectLimit: Int? = nil,
-        visibleThreadLimit: Int? = nil
+        visibleThreadLimit: Int? = nil,
+        threadListViewMode: ThreadListViewMode = .projects,
+        pinnedThreadIDs: Set<String> = []
     ) -> MenubarPreparedSnapshot {
         let effectiveProjectLimit = projectLimit ?? configuration.projectLimit
         let effectiveVisibleThreadLimit = visibleThreadLimit ?? configuration.visibleThreadLimit
@@ -701,6 +707,8 @@ final class MenubarController {
             state: state,
             projectCatalog: projectCatalog,
             threadReadMarkers: threadReadMarkers,
+            threadListViewMode: threadListViewMode,
+            pinnedThreadIDs: pinnedThreadIDs,
             projectLimit: effectiveProjectLimit,
             visibleThreadLimit: effectiveVisibleThreadLimit,
             now: now()
@@ -718,6 +726,8 @@ final class MenubarController {
                 state: state,
                 projectCatalog: projectCatalog,
                 threadReadMarkers: threadReadMarkers,
+                threadListViewMode: threadListViewMode,
+                pinnedThreadIDs: pinnedThreadIDs,
                 projectLimit: effectiveProjectLimit,
                 visibleThreadLimit: effectiveVisibleThreadLimit,
                 now: now()
