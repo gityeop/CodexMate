@@ -3,21 +3,21 @@
     <channel>
         <title>CodexMate</title>
         <item>
-            <title>0.0.37</title>
-            <pubDate>Tue, 16 Jun 2026 06:02:41 +0900</pubDate>
-            <link>https://github.com/gityeop/CodexMate/releases/tag/v0.0.37</link>
-            <sparkle:version>37</sparkle:version>
-            <sparkle:shortVersionString>0.0.37</sparkle:shortVersionString>
+            <title>0.0.38</title>
+            <pubDate>Thu, 18 Jun 2026 19:13:43 +0900</pubDate>
+            <link>https://github.com/gityeop/CodexMate/releases/tag/v0.0.38</link>
+            <sparkle:version>38</sparkle:version>
+            <sparkle:shortVersionString>0.0.38</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description sparkle:format="markdown"><![CDATA[# CodexMate 0.0.37
+            <description sparkle:format="markdown"><![CDATA[# CodexMate 0.0.38
 
-- Adds desktop notifications for completed, failed, input-needed, and approval-needed Codex threads.
-- Opens the matching Codex thread when a notification is clicked, while keeping failures visible in the debug log.
-- Shows the project name, thread title, and concise assistant reply preview in completion notifications without redundant status labels.
-- Adds a promo mockup launch mode for generating menu bar and notch menu screenshots with stable sample data.
+- Adds thread list view modes for project grouping, recently used threads, and thread status groups.
+- Adds pinned thread support so favorite threads stay available at the top of the menu and notch lists.
+- Adds mode-specific settings for project counts, per-project thread limits, and recent/status section limits.
+- Keeps menu bar pin and unpin actions live while the expanded menu remains open.
 ]]></description>
-            <enclosure url="https://github.com/gityeop/CodexMate/releases/latest/download/CodexMate-0.0.37.zip" length="4577187" type="application/octet-stream" sparkle:edSignature="qjdBRvKWB6RvRaTElrV8PyT4Rof3mSjO50e4215/O5mCuAGCqDZasamMnE6eFkCfhcHJD1aU21jr3Ybwxzp8Bw=="/>
+            <enclosure url="https://github.com/gityeop/CodexMate/releases/latest/download/CodexMate-0.0.38.zip" length="4605951" type="application/octet-stream" sparkle:edSignature="xsY32UKkKVhCF3n6CcbkeA0oZUu2qh26U2/KjhTr0DSWcG15/x3Ac5aF6lOSDMThHyNrVB4EvQvwHMk7pffWAw=="/>
         </item>
     </channel>
 </rss>
