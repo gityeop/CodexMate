@@ -1280,6 +1280,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
+        let focusedThreadIDBeforeRender = selectedMenuBarThreadID()
         let preparedSnapshot = promoMockupEnabled
             ? PromoMockupMenu.preparedSnapshot()
             : controller.prepareSnapshot(
@@ -1308,6 +1309,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         self.hoverTooltipContentsByThreadID = hoverTooltipContentsByThreadID
+        let restoredFocusedThreadID = focusedThreadIDBeforeRender.flatMap { threadID in
+            hoverTooltipContentsByThreadID[threadID] == nil ? nil : threadID
+        }
+        menuBarFocusedThreadID = restoredFocusedThreadID
+        highlightedThreadID = restoredFocusedThreadID
         if let highlightedThreadID,
            let tooltipContent = hoverTooltipContentsByThreadID[highlightedThreadID],
            hoverTooltipController.isVisible {
@@ -1336,10 +1342,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             )
         )
         addHiddenMenuNavigationShortcutItems()
+        addHiddenMenuActivationShortcutItems()
         if currentEffectiveDisplayMode == .notch, isMenuOpen {
             notchStatusOverlay.setMenuItems(overlayMenuEntries(from: menu.items))
         }
         scheduleRefreshTimerIfNeeded()
+    }
+
+    private func addHiddenMenuActivationShortcutItems() {
+        for keyEquivalent in ["\r", "\u{3}"] {
+            menu.addItem(
+                makeHiddenShortcutItem(
+                    action: #selector(activateHighlightedMenuItemAction),
+                    keyEquivalent: keyEquivalent,
+                    modifierMask: []
+                )
+            )
+        }
     }
 
     private func addHiddenMenuNavigationShortcutItems() {
@@ -2327,6 +2346,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    @objc
+    private func activateHighlightedMenuItemAction() {
+        _ = activateHighlightedMenuItem()
+    }
+
     private func highlightedMenuItem() -> NSMenuItem? {
         if let highlightedItem = menu.highlightedItem,
            highlightedItem.isEnabled,
@@ -2528,7 +2552,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func openThread(threadID: String) {
         debugLog("openThread thread=\(threadID) event=\(debugEventSummary(NSApp.currentEvent))")
-        if NSApp.currentEvent?.modifierFlags.contains(.option) == true {
+        if Self.shouldCopyThreadIDForOpenEvent(NSApp.currentEvent) {
             debugLog("openThread copyingThreadID thread=\(threadID)")
             copyThreadID(threadID)
             return
@@ -2571,6 +2595,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             debugLog("openThread openCommandFailed thread=\(threadID) error=\(error.localizedDescription)")
             controller.recordDiagnostic("Failed to open Codex thread \(threadID): \(error.localizedDescription)")
             renderMenu()
+        }
+    }
+
+    static func shouldCopyThreadIDForOpenEvent(_ event: NSEvent?) -> Bool {
+        guard let event,
+              event.modifierFlags.contains(.option) else {
+            return false
+        }
+
+        switch event.type {
+        case .leftMouseDown, .leftMouseUp:
+            return true
+        default:
+            return false
         }
     }
 

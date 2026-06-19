@@ -156,6 +156,43 @@ final class ThreadMenuTests: XCTestCase {
         XCTAssertTrue(handledActions.isEmpty)
     }
 
+    func testPerformKeyEquivalentDispatchesReturnActivationShortcut() throws {
+        let menu = ThreadMenu()
+        var handledActions: [ThreadMenuKeyboardShortcutAction] = []
+        menu.onKeyboardShortcut = { action in
+            handledActions.append(action)
+            return true
+        }
+
+        let event = try makeKeyEvent(
+            keyCode: 36,
+            characters: "\r"
+        )
+
+        XCTAssertTrue(menu.performKeyEquivalent(with: event))
+        XCTAssertEqual(handledActions, [.openHighlightedItem])
+    }
+
+    func testThreadIDCopyShortcutOnlyUsesOptionMouseActivation() throws {
+        let optionReturn = try makeKeyEvent(
+            keyCode: 36,
+            modifierFlags: [.option],
+            characters: "\r"
+        )
+        let optionClick = try makeMouseEvent(
+            type: .leftMouseDown,
+            modifierFlags: [.option]
+        )
+        let normalClick = try makeMouseEvent(
+            type: .leftMouseDown,
+            modifierFlags: []
+        )
+
+        XCTAssertFalse(AppDelegate.shouldCopyThreadIDForOpenEvent(optionReturn))
+        XCTAssertTrue(AppDelegate.shouldCopyThreadIDForOpenEvent(optionClick))
+        XCTAssertFalse(AppDelegate.shouldCopyThreadIDForOpenEvent(normalClick))
+    }
+
     func testProjectShortcutKeyEquivalentsExpandThroughZero() {
         XCTAssertEqual(ProjectMenuShortcut.maxCount, 10)
         XCTAssertEqual(ProjectMenuShortcut.keyEquivalent(for: 0), "1")
@@ -182,6 +219,25 @@ final class ThreadMenuTests: XCTestCase {
                 charactersIgnoringModifiers: charactersIgnoringModifiers ?? characters,
                 isARepeat: false,
                 keyCode: keyCode
+            )
+        )
+    }
+
+    private func makeMouseEvent(
+        type: NSEvent.EventType,
+        modifierFlags: NSEvent.ModifierFlags
+    ) throws -> NSEvent {
+        try XCTUnwrap(
+            NSEvent.mouseEvent(
+                with: type,
+                location: .zero,
+                modifierFlags: modifierFlags,
+                timestamp: 0,
+                windowNumber: 0,
+                context: nil,
+                eventNumber: 0,
+                clickCount: 1,
+                pressure: 1
             )
         )
     }
