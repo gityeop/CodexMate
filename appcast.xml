@@ -3,21 +3,19 @@
     <channel>
         <title>CodexMate</title>
         <item>
-            <title>0.0.38</title>
-            <pubDate>Thu, 18 Jun 2026 19:13:43 +0900</pubDate>
-            <link>https://github.com/gityeop/CodexMate/releases/tag/v0.0.38</link>
-            <sparkle:version>38</sparkle:version>
-            <sparkle:shortVersionString>0.0.38</sparkle:shortVersionString>
+            <title>0.0.39</title>
+            <pubDate>Fri, 19 Jun 2026 09:14:26 +0900</pubDate>
+            <link>https://github.com/gityeop/CodexMate/releases/tag/v0.0.39</link>
+            <sparkle:version>39</sparkle:version>
+            <sparkle:shortVersionString>0.0.39</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description sparkle:format="markdown"><![CDATA[# CodexMate 0.0.38
+            <description sparkle:format="markdown"><![CDATA[# CodexMate 0.0.39
 
-- Adds thread list view modes for project grouping, recently used threads, and thread status groups.
-- Adds pinned thread support so favorite threads stay available at the top of the menu and notch lists.
-- Adds mode-specific settings for project counts, per-project thread limits, and recent/status section limits.
-- Keeps menu bar pin and unpin actions live while the expanded menu remains open.
+- Fixes menu bar project navigation shortcuts so Option-Up/Down and Command-Up/Down keep working when macOS adds system arrow-key modifier flags.
+- Keeps the shortcut behavior stable when Caps Lock is enabled.
 ]]></description>
-            <enclosure url="https://github.com/gityeop/CodexMate/releases/latest/download/CodexMate-0.0.38.zip" length="4605951" type="application/octet-stream" sparkle:edSignature="xsY32UKkKVhCF3n6CcbkeA0oZUu2qh26U2/KjhTr0DSWcG15/x3Ac5aF6lOSDMThHyNrVB4EvQvwHMk7pffWAw=="/>
+            <enclosure url="https://github.com/gityeop/CodexMate/releases/latest/download/CodexMate-0.0.39.zip" length="4433542" type="application/octet-stream" sparkle:edSignature="2QC+eWiGgSSuUQasCHnl++r73ux8vzXSi3xxV+4x2gK6AxbLMImBSt2nyMBkyX5y0kXYug5rFLtYhxaM9mEqDw=="/>
         </item>
     </channel>
 </rss>
