@@ -1335,38 +1335,65 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 action: #selector(quit)
             )
         )
-        menu.addItem(
-            makeHiddenShortcutItem(
-                action: #selector(moveToPreviousProjectSelectionAction),
-                keyEquivalent: String(UnicodeScalar(NSUpArrowFunctionKey)!),
-                modifierMask: [.option]
-            )
-        )
-        menu.addItem(
-            makeHiddenShortcutItem(
-                action: #selector(moveToNextProjectSelectionAction),
-                keyEquivalent: String(UnicodeScalar(NSDownArrowFunctionKey)!),
-                modifierMask: [.option]
-            )
-        )
-        menu.addItem(
-            makeHiddenShortcutItem(
-                action: #selector(moveToPreviousProjectSelectionAction),
-                keyEquivalent: String(UnicodeScalar(NSUpArrowFunctionKey)!),
-                modifierMask: [.command]
-            )
-        )
-        menu.addItem(
-            makeHiddenShortcutItem(
-                action: #selector(moveToNextProjectSelectionAction),
-                keyEquivalent: String(UnicodeScalar(NSDownArrowFunctionKey)!),
-                modifierMask: [.command]
-            )
-        )
+        addHiddenMenuNavigationShortcutItems()
         if currentEffectiveDisplayMode == .notch, isMenuOpen {
             notchStatusOverlay.setMenuItems(overlayMenuEntries(from: menu.items))
         }
         scheduleRefreshTimerIfNeeded()
+    }
+
+    private func addHiddenMenuNavigationShortcutItems() {
+        let upArrow = String(UnicodeScalar(NSUpArrowFunctionKey)!)
+        let downArrow = String(UnicodeScalar(NSDownArrowFunctionKey)!)
+
+        for modifierMask in arrowKeyEquivalentModifierMasks(base: .option) {
+            menu.addItem(
+                makeHiddenShortcutItem(
+                    action: #selector(moveToPreviousProjectSelectionAction),
+                    keyEquivalent: upArrow,
+                    modifierMask: modifierMask
+                )
+            )
+            menu.addItem(
+                makeHiddenShortcutItem(
+                    action: #selector(moveToNextProjectSelectionAction),
+                    keyEquivalent: downArrow,
+                    modifierMask: modifierMask
+                )
+            )
+        }
+
+        for modifierMask in arrowKeyEquivalentModifierMasks(base: .command) {
+            menu.addItem(
+                makeHiddenShortcutItem(
+                    action: #selector(moveToPreviousProjectSelectionAction),
+                    keyEquivalent: upArrow,
+                    modifierMask: modifierMask
+                )
+            )
+            menu.addItem(
+                makeHiddenShortcutItem(
+                    action: #selector(moveToNextProjectSelectionAction),
+                    keyEquivalent: downArrow,
+                    modifierMask: modifierMask
+                )
+            )
+        }
+    }
+
+    private func arrowKeyEquivalentModifierMasks(base: NSEvent.ModifierFlags) -> [NSEvent.ModifierFlags] {
+        let systemFlagVariants: [NSEvent.ModifierFlags] = [
+            [],
+            .numericPad,
+            .function,
+            [.numericPad, .function],
+            .capsLock,
+            [.capsLock, .numericPad],
+            [.capsLock, .function],
+            [.capsLock, .numericPad, .function]
+        ]
+
+        return systemFlagVariants.map { base.union($0) }
     }
 
     private func updateMenuNavigationState(menuSections: [ThreadMenuSection]) {

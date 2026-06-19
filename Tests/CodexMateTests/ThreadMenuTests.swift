@@ -91,6 +91,42 @@ final class ThreadMenuTests: XCTestCase {
                 ),
                 .movePrimarySelection(-1)
             ),
+            (
+                try makeKeyEvent(
+                    keyCode: 125,
+                    modifierFlags: [.option, .function, .numericPad],
+                    characters: String(UnicodeScalar(NSDownArrowFunctionKey)!),
+                    charactersIgnoringModifiers: String(UnicodeScalar(NSDownArrowFunctionKey)!)
+                ),
+                .movePrimarySelection(1)
+            ),
+            (
+                try makeKeyEvent(
+                    keyCode: 126,
+                    modifierFlags: [.command, .function, .numericPad],
+                    characters: String(UnicodeScalar(NSUpArrowFunctionKey)!),
+                    charactersIgnoringModifiers: String(UnicodeScalar(NSUpArrowFunctionKey)!)
+                ),
+                .movePrimarySelection(-1)
+            ),
+            (
+                try makeKeyEvent(
+                    keyCode: 125,
+                    modifierFlags: [.option, .capsLock, .function, .numericPad],
+                    characters: String(UnicodeScalar(NSDownArrowFunctionKey)!),
+                    charactersIgnoringModifiers: String(UnicodeScalar(NSDownArrowFunctionKey)!)
+                ),
+                .movePrimarySelection(1)
+            ),
+            (
+                try makeKeyEvent(
+                    keyCode: 126,
+                    modifierFlags: [.command, .capsLock, .function, .numericPad],
+                    characters: String(UnicodeScalar(NSUpArrowFunctionKey)!),
+                    charactersIgnoringModifiers: String(UnicodeScalar(NSUpArrowFunctionKey)!)
+                ),
+                .movePrimarySelection(-1)
+            ),
         ]
 
         for (index, testCase) in cases.enumerated() {

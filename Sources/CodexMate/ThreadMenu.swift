@@ -30,8 +30,7 @@ final class ThreadMenu: NSMenu {
         }
 
         let modifierFlags = event.modifierFlags
-            .intersection(.deviceIndependentFlagsMask)
-            .subtracting([.numericPad, .function])
+            .intersection([.command, .option, .control, .shift])
 
         if modifierFlags.isEmpty && (event.keyCode == 36 || event.keyCode == 76) {
             return .openHighlightedItem
