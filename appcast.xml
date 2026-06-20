@@ -3,19 +3,20 @@
     <channel>
         <title>CodexMate</title>
         <item>
-            <title>0.0.40</title>
-            <pubDate>Sat, 20 Jun 2026 01:05:02 +0900</pubDate>
-            <link>https://github.com/gityeop/CodexMate/releases/tag/v0.0.40</link>
-            <sparkle:version>40</sparkle:version>
-            <sparkle:shortVersionString>0.0.40</sparkle:shortVersionString>
+            <title>0.0.41</title>
+            <pubDate>Sat, 20 Jun 2026 14:36:32 +0900</pubDate>
+            <link>https://github.com/gityeop/CodexMate/releases/tag/v0.0.41</link>
+            <sparkle:version>41</sparkle:version>
+            <sparkle:shortVersionString>0.0.41</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description sparkle:format="markdown"><![CDATA[# CodexMate 0.0.40
+            <description sparkle:format="markdown"><![CDATA[# CodexMate 0.0.41
 
-- Keeps the highlighted menu thread stable across live refreshes so Return opens the selected thread after arrow-key navigation.
-- Prevents Option-arrow navigation from turning a following keyboard activation into a thread id copy.
+- Changes menu navigation so Option-Up/Down keeps moving between each project's first thread and Settings.
+- Changes Command-Up/Down to jump directly to the first or last primary menu target.
+- Applies the same shortcut semantics to the notch expanded menu and menu bar mode.
 ]]></description>
-            <enclosure url="https://github.com/gityeop/CodexMate/releases/latest/download/CodexMate-0.0.40.zip" length="4434291" type="application/octet-stream" sparkle:edSignature="AtF/jqFmQbfLGWNfY62N1h6BJPnivU0zKuTSJBL660DQ9enblcf0N/V6oHwhLU6v4yvo8voaYJzHt9IkVTrwCQ=="/>
+            <enclosure url="https://github.com/gityeop/CodexMate/releases/latest/download/CodexMate-0.0.41.zip" length="4435618" type="application/octet-stream" sparkle:edSignature="EK4bjuSHFPfd59QPTgu6e5agQDoaR5aiV2VdFQG69f8TL3Pqs7nOksP3bhD9YA3j3P8G8e769p2batB+czusDA=="/>
         </item>
     </channel>
 </rss>
