@@ -29,4 +29,14 @@ ditto -c -k --keepParent "$APP_PATH" "$ZIP_PATH"
 xcrun notarytool "${notarytool_args[@]}"
 xcrun stapler staple "$APP_PATH"
 
+SPARKLE_UPDATER_APP="$APP_PATH/Contents/Frameworks/Sparkle.framework/Versions/Current/Updater.app"
+if [[ ! -d "$SPARKLE_UPDATER_APP" ]]; then
+  echo "Sparkle Updater app not found at $SPARKLE_UPDATER_APP" >&2
+  exit 1
+fi
+
+xcrun stapler staple "$SPARKLE_UPDATER_APP"
+xcrun stapler validate "$SPARKLE_UPDATER_APP"
+xcrun stapler validate "$APP_PATH"
+
 echo "Notarized app: $APP_PATH"
