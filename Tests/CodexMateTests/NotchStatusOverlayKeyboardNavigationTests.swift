@@ -135,6 +135,20 @@ final class NotchStatusOverlayKeyboardNavigationTests: XCTestCase {
         XCTAssertEqual(try selectedRowTitle(in: view), "Project A Thread 1")
     }
 
+    func testCommandArrowNavigationMovesToPrimaryBoundaries() throws {
+        let view = NotchStatusOverlayView(frame: NSRect(x: 0, y: 0, width: 520, height: 220))
+        view.setMenuItems(makeProjectNavigationMenuItems())
+        view.menuExpansionProgress = 1
+        view.prepareForMenuOpen()
+        view.layoutSubtreeIfNeeded()
+
+        try sendKeyEvent(to: view, keyCode: 125, characters: "↓", modifierFlags: [.command])
+        XCTAssertEqual(try selectedRowTitle(in: view), "Settings")
+
+        try sendKeyEvent(to: view, keyCode: 126, characters: "↑", modifierFlags: [.command])
+        XCTAssertEqual(try selectedRowTitle(in: view), "Project A Thread 1")
+    }
+
     func testArrowNavigationScrollsSelectedRowIntoView() throws {
         let view = NotchStatusOverlayView(frame: NSRect(x: 0, y: 0, width: 520, height: 220))
         view.setMenuItems(makeScrollableMenuItems())
@@ -593,6 +607,20 @@ final class NotchStatusOverlayKeyboardNavigationTests: XCTestCase {
             .header("Project B | 스레드 2개"),
             .item(primaryText: "Project B Thread 1", navigationIndex: 1, onSelect: {}),
             .item(primaryText: "Project B Thread 2", navigationIndex: 1, onSelect: {}),
+        ]
+    }
+
+    private func makeProjectNavigationMenuItems() -> [NotchStatusOverlayMenuEntry] {
+        [
+            .header("Project A | 스레드 2개"),
+            .item(primaryText: "Project A Thread 1", navigationIndex: 0, onSelect: {}),
+            .item(primaryText: "Project A Thread 2", navigationIndex: 0, onSelect: {}),
+            .separator(),
+            .header("Project B | 스레드 2개"),
+            .item(primaryText: "Project B Thread 1", navigationIndex: 1, onSelect: {}),
+            .item(primaryText: "Project B Thread 2", navigationIndex: 1, onSelect: {}),
+            .separator(),
+            .item(primaryText: "Settings", navigationIndex: 2, onSelect: {}),
         ]
     }
 

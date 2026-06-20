@@ -1385,14 +1385,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         for modifierMask in arrowKeyEquivalentModifierMasks(base: .command) {
             menu.addItem(
                 makeHiddenShortcutItem(
-                    action: #selector(moveToPreviousProjectSelectionAction),
+                    action: #selector(moveToFirstProjectSelectionAction),
                     keyEquivalent: upArrow,
                     modifierMask: modifierMask
                 )
             )
             menu.addItem(
                 makeHiddenShortcutItem(
-                    action: #selector(moveToNextProjectSelectionAction),
+                    action: #selector(moveToLastProjectSelectionAction),
                     keyEquivalent: downArrow,
                     modifierMask: modifierMask
                 )
@@ -2192,6 +2192,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return true
         case let .movePrimarySelection(delta):
             return moveProjectSelection(by: delta)
+        case let .moveBoundarySelection(delta):
+            return moveProjectSelectionToBoundary(delta)
         case .togglePinnedThread:
             return togglePinnedSelectedThread()
         }
@@ -2376,6 +2378,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    private func moveProjectSelectionToBoundary(_ delta: Int) -> Bool {
+        switch currentEffectiveDisplayMode {
+        case .menuBar:
+            return moveMenuBarProjectSelectionToBoundary(delta)
+        case .notch:
+            return notchStatusOverlay.moveExpandedMenuPrimarySelectionToBoundary(delta)
+        case nil:
+            return false
+        }
+    }
+
     private func moveMenuBarProjectSelection(by delta: Int) -> Bool {
         guard isMenuOpen, !optionShortcutTargetIDs.isEmpty else {
             return false
@@ -2386,6 +2399,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return false
         }
 
+        return moveMenuBarProjectSelection(to: targetThreadID, currentThreadID: currentThreadID)
+    }
+
+    private func moveMenuBarProjectSelectionToBoundary(_ delta: Int) -> Bool {
+        guard isMenuOpen else {
+            return false
+        }
+
+        let targetThreadID = delta > 0 ? optionShortcutTargetIDs.last : optionShortcutTargetIDs.first
+        guard let targetThreadID else {
+            return false
+        }
+
+        let currentThreadID = (menu.highlightedItem?.representedObject as? String) ?? highlightedThreadID
+        return moveMenuBarProjectSelection(to: targetThreadID, currentThreadID: currentThreadID)
+    }
+
+    private func moveMenuBarProjectSelection(to targetThreadID: String, currentThreadID: String?) -> Bool {
         if targetThreadID == currentThreadID {
             return true
         }
@@ -2423,6 +2454,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc
     private func moveToNextProjectSelectionAction() {
         _ = moveProjectSelection(by: 1)
+    }
+
+    @objc
+    private func moveToFirstProjectSelectionAction() {
+        _ = moveProjectSelectionToBoundary(-1)
+    }
+
+    @objc
+    private func moveToLastProjectSelectionAction() {
+        _ = moveProjectSelectionToBoundary(1)
     }
 
     private func handleOverlayShortcutEvent(_ event: NSEvent) -> Bool {

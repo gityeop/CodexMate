@@ -405,6 +405,14 @@ final class NotchStatusOverlayController {
         return overlayView.moveKeyboardSelectionByPrimaryTarget(delta)
     }
 
+    func moveExpandedMenuPrimarySelectionToBoundary(_ delta: Int) -> Bool {
+        guard isMenuExpanded else {
+            return false
+        }
+
+        return overlayView.moveKeyboardSelectionToPrimaryBoundary(delta)
+    }
+
     func showMenu(on screen: NSScreen) {
         currentScreen = screen
         isMenuExpanded = true
@@ -1501,6 +1509,17 @@ final class NotchStatusOverlayView: NSView {
             }
         }
 
+        if modifierFlags == .command {
+            switch event.keyCode {
+            case 125:
+                return moveKeyboardSelectionToPrimaryBoundary(1)
+            case 126:
+                return moveKeyboardSelectionToPrimaryBoundary(-1)
+            default:
+                return false
+            }
+        }
+
         guard modifierFlags.isEmpty else {
             return false
         }
@@ -1528,6 +1547,15 @@ final class NotchStatusOverlayView: NSView {
 
     func moveKeyboardSelectionByPrimaryTarget(_ delta: Int) -> Bool {
         guard let nextIndex = nextPrimarySelectableMenuRowIndex(from: selectedMenuRowIndex, delta: delta) else {
+            return false
+        }
+
+        setSelectedMenuRowIndex(nextIndex)
+        return true
+    }
+
+    func moveKeyboardSelectionToPrimaryBoundary(_ delta: Int) -> Bool {
+        guard let nextIndex = primarySelectableBoundaryMenuRowIndex(delta: delta) else {
             return false
         }
 
@@ -1619,6 +1647,30 @@ final class NotchStatusOverlayView: NSView {
         }
 
         let boundaryPosition = delta > 0 ? 0 : orderedNavigationIndices.count - 1
+        return firstSelectableIndexByNavigation[orderedNavigationIndices[boundaryPosition]]
+    }
+
+    private func primarySelectableBoundaryMenuRowIndex(delta: Int) -> Int? {
+        var firstSelectableIndexByNavigation: [Int: Int] = [:]
+        var orderedNavigationIndices: [Int] = []
+
+        for (index, row) in menuRows.enumerated() {
+            guard row.kind == .item,
+                  row.isEnabled,
+                  let navigationIndex = row.navigationIndex,
+                  firstSelectableIndexByNavigation[navigationIndex] == nil else {
+                continue
+            }
+
+            firstSelectableIndexByNavigation[navigationIndex] = index
+            orderedNavigationIndices.append(navigationIndex)
+        }
+
+        guard !orderedNavigationIndices.isEmpty else {
+            return nil
+        }
+
+        let boundaryPosition = delta > 0 ? orderedNavigationIndices.count - 1 : 0
         return firstSelectableIndexByNavigation[orderedNavigationIndices[boundaryPosition]]
     }
 

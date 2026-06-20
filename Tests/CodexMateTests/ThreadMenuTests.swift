@@ -81,7 +81,7 @@ final class ThreadMenuTests: XCTestCase {
                     modifierFlags: [.command],
                     characters: "↓"
                 ),
-                .movePrimarySelection(1)
+                .moveBoundarySelection(1)
             ),
             (
                 try makeKeyEvent(
@@ -89,7 +89,7 @@ final class ThreadMenuTests: XCTestCase {
                     modifierFlags: [.command],
                     characters: "↑"
                 ),
-                .movePrimarySelection(-1)
+                .moveBoundarySelection(-1)
             ),
             (
                 try makeKeyEvent(
@@ -107,7 +107,7 @@ final class ThreadMenuTests: XCTestCase {
                     characters: String(UnicodeScalar(NSUpArrowFunctionKey)!),
                     charactersIgnoringModifiers: String(UnicodeScalar(NSUpArrowFunctionKey)!)
                 ),
-                .movePrimarySelection(-1)
+                .moveBoundarySelection(-1)
             ),
             (
                 try makeKeyEvent(
@@ -125,7 +125,7 @@ final class ThreadMenuTests: XCTestCase {
                     characters: String(UnicodeScalar(NSUpArrowFunctionKey)!),
                     charactersIgnoringModifiers: String(UnicodeScalar(NSUpArrowFunctionKey)!)
                 ),
-                .movePrimarySelection(-1)
+                .moveBoundarySelection(-1)
             ),
         ]
 
