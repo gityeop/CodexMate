@@ -3,20 +3,20 @@
     <channel>
         <title>CodexMate</title>
         <item>
-            <title>0.0.42</title>
-            <pubDate>Sun, 21 Jun 2026 17:58:03 +0900</pubDate>
-            <link>https://github.com/gityeop/CodexMate/releases/tag/v0.0.42</link>
-            <sparkle:version>42</sparkle:version>
-            <sparkle:shortVersionString>0.0.42</sparkle:shortVersionString>
+            <title>0.0.43</title>
+            <pubDate>Mon, 22 Jun 2026 01:09:13 +0900</pubDate>
+            <link>https://github.com/gityeop/CodexMate/releases/tag/v0.0.43</link>
+            <sparkle:version>43</sparkle:version>
+            <sparkle:shortVersionString>0.0.43</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description sparkle:format="markdown"><![CDATA[# CodexMate 0.0.42
+            <description sparkle:format="markdown"><![CDATA[# CodexMate 0.0.43
 
-- Fixes menu bar Option-Up/Down and Command-Up/Down handling so modifier-arrow navigation works without AppKit's default menu movement running first.
-- Keeps Option-Up/Down moving between each project's first thread and Settings, and Command-Up/Down jumping to the first or last menu target.
-- Adds regression coverage for the menu bar physical modifier mapping while preserving notch menu navigation behavior.
+- Adds an Accessibility permission prompt when CodexMate is running in menu bar mode without the required macOS permission.
+- Opens System Settings directly to Privacy & Security > Accessibility from the permission alert.
+- Stops the menu bar keyboard navigation event tap from failing silently when the permission is missing.
 ]]></description>
-            <enclosure url="https://github.com/gityeop/CodexMate/releases/latest/download/CodexMate-0.0.42.zip" length="4442453" type="application/octet-stream" sparkle:edSignature="EP6fyKJdXYCdsw6q6C6jA/bjnlPBnO+q5KVQ4bHl1yKCSnMrHe5mxMGn1AgF1PmqlZRAkWy1DRJ+KoS4AyFuDA=="/>
+            <enclosure url="https://github.com/gityeop/CodexMate/releases/latest/download/CodexMate-0.0.43.zip" length="4444386" type="application/octet-stream" sparkle:edSignature="dZ8pQyjOWVgUsVGTYIjkMchl8SzFdeVY5OV4uMOAhn1OpeC9BpKqGnGRTh5Av1HoF/TIyGL2U9ujAlqIpZUPDw=="/>
         </item>
     </channel>
 </rss>
