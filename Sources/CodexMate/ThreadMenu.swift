@@ -1,6 +1,6 @@
 import AppKit
 
-enum ThreadMenuKeyboardShortcutAction: Equatable {
+enum ThreadMenuKeyboardShortcutAction: Equatable, Sendable {
     case openHighlightedItem
     case openProjectThread(Int)
     case movePrimarySelection(Int)
@@ -13,12 +13,13 @@ final class ThreadMenu: NSMenu {
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         if let action = Self.shortcutAction(for: event) {
-            if action == .togglePinnedThread {
+            switch action {
+            case .movePrimarySelection, .moveBoundarySelection, .togglePinnedThread:
                 return super.performKeyEquivalent(with: event)
-            }
-
-            if onKeyboardShortcut?(action) == true {
-                return true
+            case .openHighlightedItem, .openProjectThread:
+                if onKeyboardShortcut?(action) == true {
+                    return true
+                }
             }
         }
 

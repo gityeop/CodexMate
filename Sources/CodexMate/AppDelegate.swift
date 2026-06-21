@@ -192,10 +192,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var hoverTooltipWorkItem: DispatchWorkItem?
     private var highlightedThreadID: String?
     private var menuBarFocusedThreadID: String?
+    private var menuBarNavigationIdentifier: String?
     private var projectShortcutThreadIDs: [String] = []
     private var optionShortcutTargetIDs: [String] = []
     private var threadProjectIndexByThreadID: [String: Int] = [:]
     private var pendingMenuBarPositionedThreadID: String?
+    private var handledMenuBarModifiedArrowEventSignature: String?
     private var skipNextMenuBarMenuWillOpenRender = false
     private var skipNextMenuBarMenuWillOpenRefresh = false
     private var foregroundRefreshObserverTokens: [NSObjectProtocol] = []
@@ -205,6 +207,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var foregroundRefreshThrottle = ForegroundRefreshThrottle(
         minimumInterval: ForegroundRefreshPolicy.minimumInterval
     )
+    private var menuBarModifiedArrowEventTap: CFMachPort?
+    private var menuBarModifiedArrowEventTapRunLoopSource: CFRunLoopSource?
     private var menuShortcutEventMonitor: Any?
     private var menuDismissLocalEventMonitor: Any?
     private var menuDismissGlobalEventMonitor: Any?
@@ -259,6 +263,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.onKeyboardShortcut = { [weak self] action in
             self?.handleMenuKeyboardShortcut(action) ?? false
         }
+        debugLog("menuBarNavigationImplementation=event-tap-sync-physical-modifier-v2")
         configureMainMenu()
         configureNotchStatusPanel()
         configurePreferencesObservers()
@@ -315,6 +320,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         removeForegroundRefreshObservers()
         invalidateTimers()
         cancelNotificationRenderTask()
+        removeMenuBarModifiedArrowEventTap()
         removeMenuShortcutEventMonitor()
         removeMenuDismissEventMonitors()
         notchStatusOverlay.hide()
@@ -1314,6 +1320,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         menuBarFocusedThreadID = restoredFocusedThreadID
         highlightedThreadID = restoredFocusedThreadID
+        menuBarNavigationIdentifier = restoredFocusedThreadID
         if let highlightedThreadID,
            let tooltipContent = hoverTooltipContentsByThreadID[highlightedThreadID],
            hoverTooltipController.isVisible {
@@ -1341,7 +1348,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 action: #selector(quit)
             )
         )
-        addHiddenMenuNavigationShortcutItems()
         addHiddenMenuActivationShortcutItems()
         if currentEffectiveDisplayMode == .notch, isMenuOpen {
             notchStatusOverlay.setMenuItems(overlayMenuEntries(from: menu.items))
@@ -1359,60 +1365,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 )
             )
         }
-    }
-
-    private func addHiddenMenuNavigationShortcutItems() {
-        let upArrow = String(UnicodeScalar(NSUpArrowFunctionKey)!)
-        let downArrow = String(UnicodeScalar(NSDownArrowFunctionKey)!)
-
-        for modifierMask in arrowKeyEquivalentModifierMasks(base: .option) {
-            menu.addItem(
-                makeHiddenShortcutItem(
-                    action: #selector(moveToPreviousProjectSelectionAction),
-                    keyEquivalent: upArrow,
-                    modifierMask: modifierMask
-                )
-            )
-            menu.addItem(
-                makeHiddenShortcutItem(
-                    action: #selector(moveToNextProjectSelectionAction),
-                    keyEquivalent: downArrow,
-                    modifierMask: modifierMask
-                )
-            )
-        }
-
-        for modifierMask in arrowKeyEquivalentModifierMasks(base: .command) {
-            menu.addItem(
-                makeHiddenShortcutItem(
-                    action: #selector(moveToFirstProjectSelectionAction),
-                    keyEquivalent: upArrow,
-                    modifierMask: modifierMask
-                )
-            )
-            menu.addItem(
-                makeHiddenShortcutItem(
-                    action: #selector(moveToLastProjectSelectionAction),
-                    keyEquivalent: downArrow,
-                    modifierMask: modifierMask
-                )
-            )
-        }
-    }
-
-    private func arrowKeyEquivalentModifierMasks(base: NSEvent.ModifierFlags) -> [NSEvent.ModifierFlags] {
-        let systemFlagVariants: [NSEvent.ModifierFlags] = [
-            [],
-            .numericPad,
-            .function,
-            [.numericPad, .function],
-            .capsLock,
-            [.capsLock, .numericPad],
-            [.capsLock, .function],
-            [.capsLock, .numericPad, .function]
-        ]
-
-        return systemFlagVariants.map { base.union($0) }
     }
 
     private func updateMenuNavigationState(menuSections: [ThreadMenuSection]) {
@@ -1720,6 +1672,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func updateHoverTooltip(for item: NSMenuItem?) {
+        menuBarNavigationIdentifier = item?.representedObject as? String
+
         if let item {
             let representedThreadID = item.representedObject as? String
             menuBarFocusedThreadID = representedThreadID.flatMap { threadID in
@@ -2125,6 +2079,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         highlightedThreadID = hoverTooltipContentsByThreadID[positioningThreadID] == nil ? nil : positioningThreadID
         menuBarFocusedThreadID = highlightedThreadID
+        menuBarNavigationIdentifier = positioningThreadID
         skipNextMenuBarMenuWillOpenRender = true
         menu.popUp(positioning: positioningItem, at: NSPoint(x: button.bounds.midX, y: button.bounds.minY), in: button)
     }
@@ -2164,6 +2119,55 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
             return self.handleOverlayShortcutEvent(event) ? nil : event
         }
+    }
+
+    private func installMenuBarModifiedArrowEventTap() {
+        guard menuBarModifiedArrowEventTap == nil,
+              menuBarModifiedArrowEventTapRunLoopSource == nil else {
+            return
+        }
+
+        let eventMask = CGEventMask(1 << CGEventType.keyDown.rawValue)
+        guard let eventTap = CGEvent.tapCreate(
+            tap: .cgSessionEventTap,
+            place: .headInsertEventTap,
+            options: .defaultTap,
+            eventsOfInterest: eventMask,
+            callback: { _, type, event, userInfo in
+                AppDelegate.handleMenuBarModifiedArrowEventTapCallback(
+                    type: type,
+                    event: event,
+                    userInfo: userInfo
+                )
+            },
+            userInfo: Unmanaged.passUnretained(self).toOpaque()
+        ) else {
+            preconditionFailure("Failed to install menu bar modified-arrow event tap.")
+        }
+
+        let runLoopSource = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, eventTap, 0)
+        CFRunLoopAddSource(CFRunLoopGetMain(), runLoopSource, .commonModes)
+        CGEvent.tapEnable(tap: eventTap, enable: true)
+        menuBarModifiedArrowEventTap = eventTap
+        menuBarModifiedArrowEventTapRunLoopSource = runLoopSource
+        debugLog("menuBar modifiedArrowEventTap installed")
+    }
+
+    private func removeMenuBarModifiedArrowEventTap() {
+        if let eventTap = menuBarModifiedArrowEventTap {
+            CGEvent.tapEnable(tap: eventTap, enable: false)
+        }
+
+        if let runLoopSource = menuBarModifiedArrowEventTapRunLoopSource {
+            CFRunLoopRemoveSource(CFRunLoopGetMain(), runLoopSource, .commonModes)
+        }
+
+        if menuBarModifiedArrowEventTap != nil {
+            debugLog("menuBar modifiedArrowEventTap removed")
+        }
+
+        menuBarModifiedArrowEventTap = nil
+        menuBarModifiedArrowEventTapRunLoopSource = nil
     }
 
     private func removeMenuShortcutEventMonitor() {
@@ -2248,9 +2252,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if hoverTooltipContentsByThreadID[focusedThreadID] == nil {
             menuBarFocusedThreadID = nil
             highlightedThreadID = nil
+            menuBarNavigationIdentifier = nil
         } else {
             menuBarFocusedThreadID = focusedThreadID
             highlightedThreadID = focusedThreadID
+            menuBarNavigationIdentifier = focusedThreadID
         }
 
         if hoverTooltipController.isVisible,
@@ -2394,7 +2400,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return false
         }
 
-        let currentThreadID = (menu.highlightedItem?.representedObject as? String) ?? highlightedThreadID
+        let currentThreadID = selectedMenuBarNavigationIdentifier()
         guard let targetThreadID = menuBarProjectTargetThreadID(from: currentThreadID, delta: delta) else {
             return false
         }
@@ -2407,13 +2413,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return false
         }
 
-        let targetThreadID = delta > 0 ? optionShortcutTargetIDs.last : optionShortcutTargetIDs.first
-        guard let targetThreadID else {
+        guard let targetItem = menuBarBoundarySelectionItem(delta) else {
             return false
         }
 
-        let currentThreadID = (menu.highlightedItem?.representedObject as? String) ?? highlightedThreadID
-        return moveMenuBarProjectSelection(to: targetThreadID, currentThreadID: currentThreadID)
+        if targetItem == menu.highlightedItem {
+            return true
+        }
+
+        highlightMenuBarItem(targetItem)
+        return true
     }
 
     private func moveMenuBarProjectSelection(to targetThreadID: String, currentThreadID: String?) -> Bool {
@@ -2421,9 +2430,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return true
         }
 
-        pendingMenuBarPositionedThreadID = targetThreadID
-        closeMenu()
+        highlightMenuBarItem(identifier: targetThreadID)
         return true
+    }
+
+    private func selectedMenuBarNavigationIdentifier() -> String? {
+        (menu.highlightedItem?.representedObject as? String)
+            ?? menuBarNavigationIdentifier
+            ?? highlightedThreadID
     }
 
     private func menuBarProjectTargetThreadID(from currentThreadID: String?, delta: Int) -> String? {
@@ -2446,24 +2460,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return optionShortcutTargetIDs[targetProjectIndex]
     }
 
-    @objc
-    private func moveToPreviousProjectSelectionAction() {
-        _ = moveProjectSelection(by: -1)
+    private func menuBarBoundarySelectionItem(_ delta: Int) -> NSMenuItem? {
+        Self.menuBarBoundarySelectionItem(in: menu, delta: delta)
     }
 
-    @objc
-    private func moveToNextProjectSelectionAction() {
-        _ = moveProjectSelection(by: 1)
+    static func menuBarBoundarySelectionItem(in menu: NSMenu, delta: Int) -> NSMenuItem? {
+        let selectableItems = menu.items.filter { item in
+            item.isEnabled && !item.isHidden && !item.isSeparatorItem && item.action != nil
+        }
+
+        return delta > 0 ? selectableItems.last : selectableItems.first
     }
 
-    @objc
-    private func moveToFirstProjectSelectionAction() {
-        _ = moveProjectSelectionToBoundary(-1)
-    }
+    private func menuBarTargetItem(
+        for action: ThreadMenuKeyboardShortcutAction,
+        currentThreadID: String?
+    ) -> NSMenuItem? {
+        switch action {
+        case let .movePrimarySelection(delta):
+            guard let targetThreadID = menuBarProjectTargetThreadID(from: currentThreadID, delta: delta) else {
+                return nil
+            }
 
-    @objc
-    private func moveToLastProjectSelectionAction() {
-        _ = moveProjectSelectionToBoundary(1)
+            return menu.items.first(where: { ($0.representedObject as? String) == targetThreadID })
+        case let .moveBoundarySelection(delta):
+            return menuBarBoundarySelectionItem(delta)
+        case .openHighlightedItem, .openProjectThread, .togglePinnedThread:
+            return nil
+        }
     }
 
     private func handleOverlayShortcutEvent(_ event: NSEvent) -> Bool {
@@ -2488,6 +2512,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
            notchStatusOverlay.handleExpandedMenuKeyEvent(event) {
             debugLog("overlay shortcut handledByNotchMenu keyCode=\(event.keyCode)")
             return true
+        }
+
+        if currentEffectiveDisplayMode == .menuBar {
+            if handleMenuBarModifiedArrowKeyEquivalentEvent(event) {
+                return true
+            }
+
+            if Self.isMenuBarModifiedArrowKeyEvent(event) {
+                return false
+            }
         }
 
         guard let action = ThreadMenu.shortcutAction(for: event) else {
@@ -2666,14 +2700,198 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 }
 
 extension AppDelegate: NSMenuDelegate {
+    enum MenuBarPhysicalModifier: Hashable, Sendable {
+        case option
+        case command
+    }
+
+    nonisolated static func menuBarModifiedArrowShortcutAction(
+        for event: NSEvent,
+        physicalModifiers: Set<MenuBarPhysicalModifier>
+    ) -> ThreadMenuKeyboardShortcutAction? {
+        guard event.type == .keyDown else {
+            return nil
+        }
+
+        return menuBarModifiedArrowShortcutAction(
+            keyCode: event.keyCode,
+            physicalModifiers: physicalModifiers
+        )
+    }
+
+    nonisolated static func menuBarModifiedArrowShortcutAction(
+        keyCode: UInt16,
+        physicalModifiers: Set<MenuBarPhysicalModifier>
+    ) -> ThreadMenuKeyboardShortcutAction? {
+        switch (physicalModifiers, keyCode) {
+        case ([.option], 125):
+            return .movePrimarySelection(1)
+        case ([.option], 126):
+            return .movePrimarySelection(-1)
+        case ([.command], 125):
+            return .moveBoundarySelection(1)
+        case ([.command], 126):
+            return .moveBoundarySelection(-1)
+        default:
+            return nil
+        }
+    }
+
+    nonisolated private static func pressedMenuBarPhysicalModifiers() -> Set<MenuBarPhysicalModifier> {
+        var modifiers = Set<MenuBarPhysicalModifier>()
+
+        if CGEventSource.keyState(.combinedSessionState, key: 58)
+            || CGEventSource.keyState(.combinedSessionState, key: 61) {
+            modifiers.insert(.option)
+        }
+
+        if CGEventSource.keyState(.combinedSessionState, key: 55)
+            || CGEventSource.keyState(.combinedSessionState, key: 54) {
+            modifiers.insert(.command)
+        }
+
+        return modifiers
+    }
+
+    nonisolated private static func isMenuBarModifiedArrowKeyEvent(_ event: NSEvent) -> Bool {
+        guard event.type == .keyDown,
+              event.keyCode == 125 || event.keyCode == 126 else {
+            return false
+        }
+
+        let modifierFlags = event.modifierFlags
+            .intersection([.command, .option, .control, .shift])
+        return modifierFlags == .option || modifierFlags == .command
+    }
+
+    nonisolated private static func handleMenuBarModifiedArrowEventTapCallback(
+        type: CGEventType,
+        event: CGEvent,
+        userInfo: UnsafeMutableRawPointer?
+    ) -> Unmanaged<CGEvent>? {
+        guard type == .keyDown else {
+            return Unmanaged.passUnretained(event)
+        }
+
+        let keyCode = UInt16(event.getIntegerValueField(.keyboardEventKeycode))
+        guard let action = menuBarModifiedArrowShortcutAction(
+            keyCode: keyCode,
+            physicalModifiers: pressedMenuBarPhysicalModifiers()
+        ) else {
+            return Unmanaged.passUnretained(event)
+        }
+
+        guard let userInfo else {
+            preconditionFailure("Missing AppDelegate for menu bar modified-arrow event tap.")
+        }
+
+        let flagsRawValue = event.flags.rawValue
+        let appDelegate = Unmanaged<AppDelegate>.fromOpaque(userInfo).takeUnretainedValue()
+        MainActor.assumeIsolated {
+            appDelegate.handleMenuBarModifiedArrowEventTapAction(
+                action,
+                keyCode: keyCode,
+                flagsRawValue: flagsRawValue
+            )
+        }
+
+        return nil
+    }
+
+    private func handleMenuBarModifiedArrowEventTapAction(
+        _ action: ThreadMenuKeyboardShortcutAction,
+        keyCode: UInt16,
+        flagsRawValue: UInt64
+    ) {
+        guard currentEffectiveDisplayMode == .menuBar,
+              isMenuOpen else {
+            return
+        }
+
+        debugLog(
+            "menuBar modifiedArrowEventTap keyCode=\(keyCode) physicalModifiers=\(Self.pressedMenuBarPhysicalModifiers()) flags=\(flagsRawValue) action=\(action)"
+        )
+        _ = handleMenuKeyboardShortcut(action)
+    }
+
+    private func handleMenuBarModifiedArrowKeyEquivalent(
+        _ event: NSEvent,
+        action: ThreadMenuKeyboardShortcutAction
+    ) -> Bool {
+        guard currentEffectiveDisplayMode == .menuBar,
+              isMenuOpen,
+              menuBarTargetItem(
+                for: action,
+                currentThreadID: selectedMenuBarNavigationIdentifier()
+              ) != nil else {
+            return false
+        }
+
+        let signature = menuBarModifiedArrowEventSignature(event)
+        guard handledMenuBarModifiedArrowEventSignature != signature else {
+            return true
+        }
+
+        debugLog(
+            "menuBar modifiedArrowKeyEquivalent physicalModifiers=\(Self.pressedMenuBarPhysicalModifiers()) logicalFlags=\(event.modifierFlags.rawValue) action=\(action)"
+        )
+        handledMenuBarModifiedArrowEventSignature = signature
+        return handleMenuKeyboardShortcut(action)
+    }
+
+    private func handleMenuBarModifiedArrowKeyEquivalentEvent(_ event: NSEvent) -> Bool {
+        guard currentEffectiveDisplayMode == .menuBar,
+              let menuBarAction = Self.menuBarModifiedArrowShortcutAction(
+                for: event,
+                physicalModifiers: Self.pressedMenuBarPhysicalModifiers()
+              ) else {
+            return false
+        }
+
+        debugLog("menuBar modifiedArrowKeyEquivalentEvent action=\(menuBarAction)")
+        return handleMenuBarModifiedArrowKeyEquivalent(event, action: menuBarAction)
+    }
+
+    private func highlightMenuBarItem(identifier: String) {
+        guard let item = menu.items.first(where: { ($0.representedObject as? String) == identifier }) else {
+            preconditionFailure("Menu item missing for keyboard highlight: \(identifier)")
+        }
+
+        highlightMenuBarItem(item)
+    }
+
+    private func highlightMenuBarItem(_ item: NSMenuItem) {
+        let selector = NSSelectorFromString("highlightItem:")
+        precondition(menu.responds(to: selector), "NSMenu does not respond to highlightItem:")
+        menu.perform(selector, with: item)
+        updateHoverTooltip(for: item)
+    }
+
+    private func menuBarModifiedArrowEventSignature(_ event: NSEvent) -> String {
+        "\(event.timestamp)|\(event.keyCode)|\(event.modifierFlags.rawValue)"
+    }
+
     func menuHasKeyEquivalent(
         _ menu: NSMenu,
         for event: NSEvent,
         target: AutoreleasingUnsafeMutablePointer<AnyObject?>,
         action: UnsafeMutablePointer<Selector?>
     ) -> Bool {
-        guard menu == self.menu,
-              let shortcutAction = ThreadMenu.shortcutAction(for: event) else {
+        guard menu == self.menu else {
+            return false
+        }
+
+        if currentEffectiveDisplayMode == .menuBar {
+            if handleMenuBarModifiedArrowKeyEquivalentEvent(event) {
+                return true
+            }
+
+            if Self.isMenuBarModifiedArrowKeyEvent(event) {
+                return false
+            }
+        }
+
+        guard let shortcutAction = ThreadMenu.shortcutAction(for: event) else {
             return false
         }
 
@@ -2691,6 +2909,8 @@ extension AppDelegate: NSMenuDelegate {
         debugLog("menuWillOpen")
         hideHoverTooltip()
         menuBarFocusedThreadID = nil
+        menuBarNavigationIdentifier = nil
+        handledMenuBarModifiedArrowEventSignature = nil
         isMenuOpen = true
         armFastThreadDiscoveryRefreshWindow()
         if skipNextMenuBarMenuWillOpenRender {
@@ -2699,6 +2919,9 @@ extension AppDelegate: NSMenuDelegate {
             renderMenu()
         }
         KeyboardShortcuts.disable(.toggleMenuBarDropdown)
+        if currentEffectiveDisplayMode == .menuBar {
+            installMenuBarModifiedArrowEventTap()
+        }
         installMenuShortcutEventMonitor()
         menuToggleController.menuWillOpen()
         scheduleRefreshTimerIfNeeded()
@@ -2744,7 +2967,10 @@ extension AppDelegate: NSMenuDelegate {
         debugLog("menuDidClose")
         hideHoverTooltip()
         menuBarFocusedThreadID = nil
+        menuBarNavigationIdentifier = nil
+        handledMenuBarModifiedArrowEventSignature = nil
         isMenuOpen = false
+        removeMenuBarModifiedArrowEventTap()
         removeMenuShortcutEventMonitor()
         KeyboardShortcuts.enable(.toggleMenuBarDropdown)
         menuToggleController.menuDidClose()

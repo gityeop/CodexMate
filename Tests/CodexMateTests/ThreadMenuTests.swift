@@ -138,6 +138,106 @@ final class ThreadMenuTests: XCTestCase {
         }
     }
 
+    func testMenuBarModifiedArrowShortcutsUsePhysicalModifiers() throws {
+        let cases: [(
+            event: NSEvent,
+            physicalModifiers: Set<AppDelegate.MenuBarPhysicalModifier>,
+            expected: ThreadMenuKeyboardShortcutAction?
+        )] = [
+            (
+                try makeKeyEvent(
+                    keyCode: 125,
+                    modifierFlags: [.command, .function, .numericPad],
+                    characters: String(UnicodeScalar(NSDownArrowFunctionKey)!),
+                    charactersIgnoringModifiers: String(UnicodeScalar(NSDownArrowFunctionKey)!)
+                ),
+                [.option],
+                .movePrimarySelection(1)
+            ),
+            (
+                try makeKeyEvent(
+                    keyCode: 126,
+                    modifierFlags: [.command, .capsLock, .function, .numericPad],
+                    characters: String(UnicodeScalar(NSUpArrowFunctionKey)!),
+                    charactersIgnoringModifiers: String(UnicodeScalar(NSUpArrowFunctionKey)!)
+                ),
+                [.option],
+                .movePrimarySelection(-1)
+            ),
+            (
+                try makeKeyEvent(
+                    keyCode: 125,
+                    modifierFlags: [.option],
+                    characters: "↓"
+                ),
+                [.command],
+                .moveBoundarySelection(1)
+            ),
+            (
+                try makeKeyEvent(
+                    keyCode: 126,
+                    modifierFlags: [.option, .capsLock, .function, .numericPad],
+                    characters: String(UnicodeScalar(NSUpArrowFunctionKey)!),
+                    charactersIgnoringModifiers: String(UnicodeScalar(NSUpArrowFunctionKey)!)
+                ),
+                [.command],
+                .moveBoundarySelection(-1)
+            ),
+            (
+                try makeKeyEvent(
+                    keyCode: 125,
+                    modifierFlags: [.command, .option],
+                    characters: "↓"
+                ),
+                [.command, .option],
+                nil
+            ),
+            (
+                try makeKeyEvent(
+                    keyCode: 125,
+                    modifierFlags: [.option],
+                    characters: "↓"
+                ),
+                [],
+                nil
+            ),
+        ]
+
+        for (index, testCase) in cases.enumerated() {
+            XCTAssertEqual(
+                AppDelegate.menuBarModifiedArrowShortcutAction(
+                    for: testCase.event,
+                    physicalModifiers: testCase.physicalModifiers
+                ),
+                testCase.expected,
+                "case \(index)"
+            )
+        }
+    }
+
+    func testMenuBarBoundarySelectionUsesFirstAndLastSelectableMenuItems() {
+        let menu = NSMenu()
+        menu.addItem(NSMenuItem(title: "Project A", action: nil, keyEquivalent: ""))
+        menu.addItem(makeSelectableItem(title: "Project A Thread 1"))
+        menu.addItem(makeSelectableItem(title: "Project A Thread 2"))
+        menu.addItem(.separator())
+        menu.addItem(makeSelectableItem(title: "Settings"))
+        menu.addItem(makeSelectableItem(title: "Quit"))
+
+        let hiddenShortcut = makeSelectableItem(title: "Hidden Shortcut")
+        hiddenShortcut.isHidden = true
+        menu.addItem(hiddenShortcut)
+
+        XCTAssertEqual(
+            AppDelegate.menuBarBoundarySelectionItem(in: menu, delta: -1)?.title,
+            "Project A Thread 1"
+        )
+        XCTAssertEqual(
+            AppDelegate.menuBarBoundarySelectionItem(in: menu, delta: 1)?.title,
+            "Quit"
+        )
+    }
+
     func testPerformKeyEquivalentDoesNotConsumePinnedToggleShortcut() throws {
         let menu = ThreadMenu()
         var handledActions: [ThreadMenuKeyboardShortcutAction] = []
@@ -156,6 +256,58 @@ final class ThreadMenuTests: XCTestCase {
         XCTAssertTrue(handledActions.isEmpty)
     }
 
+    func testPerformKeyEquivalentDoesNotDispatchModifiedArrowNavigation() throws {
+        let cases: [NSEvent] = [
+            try makeKeyEvent(
+                keyCode: 125,
+                modifierFlags: [.option],
+                characters: "↓"
+            ),
+            try makeKeyEvent(
+                keyCode: 126,
+                modifierFlags: [.option],
+                characters: "↑"
+            ),
+            try makeKeyEvent(
+                keyCode: 125,
+                modifierFlags: [.command],
+                characters: "↓"
+            ),
+            try makeKeyEvent(
+                keyCode: 126,
+                modifierFlags: [.command],
+                characters: "↑"
+            ),
+        ]
+
+        for event in cases {
+            let menu = ThreadMenu()
+            var handledActions: [ThreadMenuKeyboardShortcutAction] = []
+            menu.onKeyboardShortcut = { action in
+                handledActions.append(action)
+                return true
+            }
+
+            XCTAssertFalse(menu.performKeyEquivalent(with: event))
+            XCTAssertTrue(handledActions.isEmpty)
+        }
+    }
+
+    func testMenuBarPhysicalModifierActionCanDifferFromThreadMenuLogicalAction() throws {
+        let event = try makeKeyEvent(
+            keyCode: 125,
+            modifierFlags: [.command, .function, .numericPad],
+            characters: String(UnicodeScalar(NSDownArrowFunctionKey)!),
+            charactersIgnoringModifiers: String(UnicodeScalar(NSDownArrowFunctionKey)!)
+        )
+
+        XCTAssertEqual(ThreadMenu.shortcutAction(for: event), .moveBoundarySelection(1))
+        XCTAssertEqual(
+            AppDelegate.menuBarModifiedArrowShortcutAction(for: event, physicalModifiers: [.option]),
+            .movePrimarySelection(1)
+        )
+    }
+
     func testPerformKeyEquivalentDispatchesReturnActivationShortcut() throws {
         let menu = ThreadMenu()
         var handledActions: [ThreadMenuKeyboardShortcutAction] = []
@@ -171,6 +323,12 @@ final class ThreadMenuTests: XCTestCase {
 
         XCTAssertTrue(menu.performKeyEquivalent(with: event))
         XCTAssertEqual(handledActions, [.openHighlightedItem])
+    }
+
+    func testMenuSupportsProgrammaticHighlightSelector() {
+        let menu = ThreadMenu()
+
+        XCTAssertTrue(menu.responds(to: NSSelectorFromString("highlightItem:")))
     }
 
     func testThreadIDCopyShortcutOnlyUsesOptionMouseActivation() throws {
@@ -240,5 +398,9 @@ final class ThreadMenuTests: XCTestCase {
                 pressure: 1
             )
         )
+    }
+
+    private func makeSelectableItem(title: String) -> NSMenuItem {
+        NSMenuItem(title: title, action: #selector(NSObject.description), keyEquivalent: "")
     }
 }
