@@ -204,6 +204,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var cancellables: Set<AnyCancellable> = []
     private var loggedUnhandledServerRequestMethods: Set<String> = []
     private var loggedUnhandledThreadNotificationMethods: Set<String> = []
+    private var isShowingAccessibilityPermissionAlert = false
     private var foregroundRefreshThrottle = ForegroundRefreshThrottle(
         minimumInterval: ForegroundRefreshPolicy.minimumInterval
     )
@@ -270,6 +271,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         configureGlobalShortcut()
         relativeDateFormatter.locale = preferences.locale
         applyPresentationMode(force: true)
+        requestAccessibilityPermissionIfNeeded()
 
         if promoMockupEnabled {
             isInitialThreadBootstrapInProgress = false
@@ -576,6 +578,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     "displayModeChanged requested=\(self.requestedDisplayMode.rawValue) effective=\(self.requestedDisplayMode.resolved(hasHardwareNotch: self.preferredOverlayScreen() != nil).rawValue)"
                 )
                 self.applyPresentationMode()
+                self.requestAccessibilityPermissionIfNeeded()
                 self.renderMenu()
             }
             .store(in: &cancellables)
@@ -611,6 +614,67 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
                 return
             }
+        }
+    }
+
+    private func requestAccessibilityPermissionIfNeeded() {
+        guard currentEffectiveDisplayMode == .menuBar else {
+            return
+        }
+
+        guard !AccessibilityPermission.isTrusted(prompt: false) else {
+            return
+        }
+
+        presentAccessibilityPermissionAlert(
+            requestSystemPrompt: true,
+            diagnostic: "Accessibility permission missing for menu bar keyboard monitoring."
+        )
+    }
+
+    @discardableResult
+    private func requireAccessibilityPermissionForMenuBarKeyboardMonitoring() -> Bool {
+        guard currentEffectiveDisplayMode == .menuBar else {
+            return true
+        }
+
+        guard AccessibilityPermission.isTrusted(prompt: false) else {
+            presentAccessibilityPermissionAlert(
+                requestSystemPrompt: true,
+                diagnostic: "Menu bar keyboard monitoring blocked: Accessibility permission missing."
+            )
+            return false
+        }
+
+        return true
+    }
+
+    private func presentAccessibilityPermissionAlert(requestSystemPrompt: Bool, diagnostic: String) {
+        debugLog(diagnostic)
+
+        guard !isShowingAccessibilityPermissionAlert else {
+            return
+        }
+
+        isShowingAccessibilityPermissionAlert = true
+        if requestSystemPrompt {
+            _ = AccessibilityPermission.isTrusted(prompt: true)
+        }
+
+        NSApp.activate(ignoringOtherApps: true)
+
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = strings.text("permission.accessibility.title", language: preferences.language)
+        alert.informativeText = strings.text("permission.accessibility.message", language: preferences.language)
+        alert.addButton(withTitle: strings.text("permission.accessibility.openSettings", language: preferences.language))
+        alert.addButton(withTitle: strings.text("permission.accessibility.notNow", language: preferences.language))
+
+        let response = alert.runModal()
+        isShowingAccessibilityPermissionAlert = false
+
+        if response == .alertFirstButtonReturn {
+            AccessibilityPermission.openSettings()
         }
     }
 
@@ -2061,6 +2125,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         debugLog(
             "openMenuBarMenu positioningThreadID=\(positioningThreadID ?? "nil") requestRefresh=\(requestRefresh)"
         )
+        guard requireAccessibilityPermissionForMenuBarKeyboardMonitoring() else {
+            return
+        }
+
         hideHoverTooltip()
         renderMenu()
         if requestRefresh {
@@ -2127,6 +2195,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
+        guard AccessibilityPermission.isTrusted(prompt: false) else {
+            presentAccessibilityPermissionAlert(
+                requestSystemPrompt: true,
+                diagnostic: "Failed to install menu bar modified-arrow event tap: Accessibility permission missing."
+            )
+            return
+        }
+
         let eventMask = CGEventMask(1 << CGEventType.keyDown.rawValue)
         guard let eventTap = CGEvent.tapCreate(
             tap: .cgSessionEventTap,
@@ -2142,7 +2218,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             },
             userInfo: Unmanaged.passUnretained(self).toOpaque()
         ) else {
-            preconditionFailure("Failed to install menu bar modified-arrow event tap.")
+            presentAccessibilityPermissionAlert(
+                requestSystemPrompt: true,
+                diagnostic: "Failed to install menu bar modified-arrow event tap."
+            )
+            return
         }
 
         let runLoopSource = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, eventTap, 0)
