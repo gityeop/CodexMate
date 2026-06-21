@@ -344,6 +344,30 @@ final class MenubarSnapshotSelectorTests: XCTestCase {
         XCTAssertEqual(snapshot.menuSections.dropFirst().first?.threads.map(\.thread.id), ["thread-c", "thread-a"])
     }
 
+    func testSnapshotDoesNotBackfillProjectSectionWhenPinnedThreadsConsumeVisibleRoots() {
+        var state = AppStateStore()
+        state.replaceRecentThreads(
+            with: [
+                codexThread(id: "thread-a-1", updatedAt: 500, cwd: "/tmp/A/work"),
+                codexThread(id: "thread-a-2", updatedAt: 400, cwd: "/tmp/A/work"),
+                codexThread(id: "thread-a-3", updatedAt: 300, cwd: "/tmp/A/work"),
+                codexThread(id: "thread-a-4", updatedAt: 200, cwd: "/tmp/A/work")
+            ]
+        )
+
+        let snapshot = MenubarSnapshotSelector.makeSnapshot(
+            state: state,
+            projectCatalog: projectCatalog,
+            threadReadMarkers: ThreadReadMarkerStore(),
+            pinnedThreadIDs: ["thread-a-1", "thread-a-2"],
+            projectLimit: 1,
+            visibleThreadLimit: 2
+        )
+
+        XCTAssertEqual(snapshot.menuSections.map(\.displayName), ["Pinned"])
+        XCTAssertEqual(snapshot.menuSections.first?.threads.map(\.thread.id), ["thread-a-1", "thread-a-2"])
+    }
+
     func testSnapshotHidesMissingPinnedThreadButKeepsNormalMenuSections() {
         var state = AppStateStore()
         state.replaceRecentThreads(

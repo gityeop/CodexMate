@@ -104,7 +104,11 @@ enum ThreadMenuBuilder {
         let threadByID = Dictionary(uniqueKeysWithValues: allThreads.map { ($0.id, $0) })
         let allThreadIDs = Set(allThreads.map(\.id))
 
-        if let visibleRootIDs, !visibleRootIDs.isEmpty {
+        if let visibleRootIDs {
+            guard !visibleRootIDs.isEmpty else {
+                return []
+            }
+
             var roots = allThreads.filter { visibleRootIDs.contains($0.id) }
             let orphanThreads = allThreads.filter { thread in
                 guard thread.thread.isSubagent else {
