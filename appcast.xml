@@ -3,20 +3,20 @@
     <channel>
         <title>CodexMate</title>
         <item>
-            <title>0.0.43</title>
-            <pubDate>Mon, 22 Jun 2026 01:09:13 +0900</pubDate>
-            <link>https://github.com/gityeop/CodexMate/releases/tag/v0.0.43</link>
-            <sparkle:version>43</sparkle:version>
-            <sparkle:shortVersionString>0.0.43</sparkle:shortVersionString>
+            <title>0.0.44</title>
+            <pubDate>Mon, 22 Jun 2026 01:20:14 +0900</pubDate>
+            <link>https://github.com/gityeop/CodexMate/releases/tag/v0.0.44</link>
+            <sparkle:version>44</sparkle:version>
+            <sparkle:shortVersionString>0.0.44</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description sparkle:format="markdown"><![CDATA[# CodexMate 0.0.43
+            <description sparkle:format="markdown"><![CDATA[# CodexMate 0.0.44
 
-- Adds an Accessibility permission prompt when CodexMate is running in menu bar mode without the required macOS permission.
-- Opens System Settings directly to Privacy & Security > Accessibility from the permission alert.
-- Stops the menu bar keyboard navigation event tap from failing silently when the permission is missing.
+- Fixes pinned thread menus so hidden project threads are not backfilled when pinned items consume the visible project roots.
+- Prevents large project sections from suddenly expanding after several threads are pinned.
+- Adds regression coverage for pinned thread sections and project menu visibility.
 ]]></description>
-            <enclosure url="https://github.com/gityeop/CodexMate/releases/latest/download/CodexMate-0.0.43.zip" length="4444386" type="application/octet-stream" sparkle:edSignature="dZ8pQyjOWVgUsVGTYIjkMchl8SzFdeVY5OV4uMOAhn1OpeC9BpKqGnGRTh5Av1HoF/TIyGL2U9ujAlqIpZUPDw=="/>
+            <enclosure url="https://github.com/gityeop/CodexMate/releases/latest/download/CodexMate-0.0.44.zip" length="4444460" type="application/octet-stream" sparkle:edSignature="5jlsslKy9hs8KcrnDh+smxbbalobJiFiBkIUQcVOgu0bWjlVoOPpuzQ4aMuh+eF0AsCkHmRhS10v2DjXYDBJAw=="/>
         </item>
     </channel>
 </rss>
