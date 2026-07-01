@@ -13,17 +13,9 @@ enum MenubarSnapshotSelector {
         visibleThreadLimit: Int,
         now: Date = Date()
     ) -> MenubarSnapshot {
-        let projectSections = projectSectionsWithSubagentThreads(
-            state: state,
-            projectCatalog: projectCatalog,
-            threadReadMarkers: threadReadMarkers,
-            projectLimit: projectLimit,
-            visibleThreadLimit: visibleThreadLimit,
-            now: now
-        )
-        let allProjectSections = threadListViewMode == .projects && pinnedThreadIDs.isEmpty
-            ? projectSections
-            : projectSectionsWithSubagentThreads(
+        let needsAllProjectSections = threadListViewMode != .projects || !pinnedThreadIDs.isEmpty
+        let allProjectSections = needsAllProjectSections
+            ? projectSectionsWithSubagentThreads(
                 state: state,
                 projectCatalog: projectCatalog,
                 threadReadMarkers: threadReadMarkers,
@@ -31,9 +23,23 @@ enum MenubarSnapshotSelector {
                 visibleThreadLimit: .max,
                 now: now
             )
+            : []
+        let excludedThreadIDs = excludedPinnedThreadIDs(
+            pinnedThreadIDs,
+            in: allProjectSections
+        )
+        let projectSections = projectSectionsWithSubagentThreads(
+            state: state,
+            projectCatalog: projectCatalog,
+            threadReadMarkers: threadReadMarkers,
+            projectLimit: projectLimit,
+            visibleThreadLimit: visibleThreadLimit,
+            now: now,
+            excludedThreadIDs: threadListViewMode == .projects ? excludedThreadIDs : []
+        )
         let menuSnapshotSections = menuSnapshotSections(
             projectSections: projectSections,
-            allProjectSections: allProjectSections,
+            allProjectSections: needsAllProjectSections ? allProjectSections : projectSections,
             viewMode: threadListViewMode,
             pinnedThreadIDs: pinnedThreadIDs,
             visibleThreadLimit: visibleThreadLimit
@@ -62,7 +68,8 @@ enum MenubarSnapshotSelector {
         threadReadMarkers: ThreadReadMarkerStore,
         projectLimit: Int,
         visibleThreadLimit: Int,
-        now: Date
+        now: Date,
+        excludedThreadIDs: Set<String> = []
     ) -> [MenubarProjectSectionSnapshot] {
         let allThreads = state.recentThreads
         guard !allThreads.isEmpty else { return [] }
@@ -79,6 +86,10 @@ enum MenubarSnapshotSelector {
         let threadsByID = Dictionary(uniqueKeysWithValues: allThreads.map { ($0.id, $0) })
 
         for thread in allThreads {
+            guard !excludedThreadIDs.contains(thread.id) else {
+                continue
+            }
+
             guard !thread.hasUnhydratedPlaceholderMetadata else {
                 continue
             }
@@ -173,6 +184,23 @@ enum MenubarSnapshotSelector {
             projectLimit: projectLimit,
             visibleThreadLimit: visibleThreadLimit
         )
+    }
+
+    private static func excludedPinnedThreadIDs(
+        _ pinnedThreadIDs: Set<String>,
+        in projectSections: [MenubarProjectSectionSnapshot]
+    ) -> Set<String> {
+        guard !pinnedThreadIDs.isEmpty else {
+            return []
+        }
+
+        let allThreadSnapshots = uniqueThreadSnapshots(projectSections.flatMap(\.allThreads))
+        let pinnedRootIDs = Set(
+            allThreadSnapshots
+                .filter { pinnedThreadIDs.contains($0.id) }
+                .map(\.id)
+        )
+        return pinnedRootIDs.union(descendantIDs(of: pinnedRootIDs, in: allThreadSnapshots))
     }
 
     private static func menuSnapshotSections(

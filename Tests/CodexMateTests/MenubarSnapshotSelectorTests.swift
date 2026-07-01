@@ -344,7 +344,43 @@ final class MenubarSnapshotSelectorTests: XCTestCase {
         XCTAssertEqual(snapshot.menuSections.dropFirst().first?.threads.map(\.thread.id), ["thread-c", "thread-a"])
     }
 
-    func testSnapshotDoesNotBackfillProjectSectionWhenPinnedThreadsConsumeVisibleRoots() {
+    func testProjectSortingIgnoresPinnedThreadsAndUsesThemAgainWhenUnpinned() {
+        var state = AppStateStore()
+        state.replaceRecentThreads(
+            with: [
+                codexThread(id: "thread-a-new", updatedAt: 500, cwd: "/tmp/A/work"),
+                codexThread(id: "thread-b", updatedAt: 400, cwd: "/tmp/B/work"),
+                codexThread(id: "thread-c", updatedAt: 300, cwd: "/tmp/C/work"),
+                codexThread(id: "thread-a-old", updatedAt: 100, cwd: "/tmp/A/work")
+            ]
+        )
+
+        let pinnedSnapshot = MenubarSnapshotSelector.makeSnapshot(
+            state: state,
+            projectCatalog: projectCatalog,
+            threadReadMarkers: ThreadReadMarkerStore(),
+            pinnedThreadIDs: ["thread-a-new"],
+            projectLimit: 3,
+            visibleThreadLimit: 2
+        )
+
+        XCTAssertEqual(pinnedSnapshot.menuSections.map(\.displayName), ["Pinned", "B", "C", "A"])
+        XCTAssertEqual(pinnedSnapshot.menuSections.map(\.threadCount), [1, 1, 1, 1])
+        XCTAssertEqual(pinnedSnapshot.projectSections.map(\.section.displayName), ["B", "C", "A"])
+
+        let unpinnedSnapshot = MenubarSnapshotSelector.makeSnapshot(
+            state: state,
+            projectCatalog: projectCatalog,
+            threadReadMarkers: ThreadReadMarkerStore(),
+            projectLimit: 3,
+            visibleThreadLimit: 2
+        )
+
+        XCTAssertEqual(unpinnedSnapshot.menuSections.map(\.displayName), ["A", "B", "C"])
+        XCTAssertEqual(unpinnedSnapshot.projectSections.first?.threads.map(\.id), ["thread-a-new", "thread-a-old"])
+    }
+
+    func testSnapshotKeepsRemainingProjectThreadsWhenPinnedThreadsConsumeVisibleRoots() {
         var state = AppStateStore()
         state.replaceRecentThreads(
             with: [
@@ -364,8 +400,9 @@ final class MenubarSnapshotSelectorTests: XCTestCase {
             visibleThreadLimit: 2
         )
 
-        XCTAssertEqual(snapshot.menuSections.map(\.displayName), ["Pinned"])
+        XCTAssertEqual(snapshot.menuSections.map(\.displayName), ["Pinned", "A"])
         XCTAssertEqual(snapshot.menuSections.first?.threads.map(\.thread.id), ["thread-a-1", "thread-a-2"])
+        XCTAssertEqual(snapshot.menuSections.dropFirst().first?.threads.map(\.thread.id), ["thread-a-3", "thread-a-4"])
     }
 
     func testSnapshotHidesMissingPinnedThreadButKeepsNormalMenuSections() {
