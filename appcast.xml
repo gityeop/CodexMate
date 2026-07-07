@@ -3,20 +3,18 @@
     <channel>
         <title>CodexMate</title>
         <item>
-            <title>0.0.45</title>
-            <pubDate>Wed, 01 Jul 2026 09:17:05 +0900</pubDate>
-            <link>https://github.com/gityeop/CodexMate/releases/tag/v0.0.45</link>
-            <sparkle:version>45</sparkle:version>
-            <sparkle:shortVersionString>0.0.45</sparkle:shortVersionString>
+            <title>0.0.46</title>
+            <pubDate>Wed, 08 Jul 2026 07:20:45 +0900</pubDate>
+            <link>https://github.com/gityeop/CodexMate/releases/tag/v0.0.46</link>
+            <sparkle:version>46</sparkle:version>
+            <sparkle:shortVersionString>0.0.46</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description sparkle:format="markdown"><![CDATA[# CodexMate 0.0.45
+            <description sparkle:format="markdown"><![CDATA[# CodexMate 0.0.46
 
-- Fixes project-sorted thread lists so pinned threads no longer affect the ordering, counts, or latest activity time of their original project section.
-- Restores unpinned threads to normal project sorting as soon as they are unpinned.
-- Adds regression coverage for pinned and unpinned project sorting behavior.
+- Updates the app icon to the new CodexMate pixel-style artwork.
 ]]></description>
-            <enclosure url="https://github.com/gityeop/CodexMate/releases/latest/download/CodexMate-0.0.45.zip" length="4448012" type="application/octet-stream" sparkle:edSignature="MWgV4CKv1OkeY8GQL9MK9IgMlN4MVhHUr2ciSmOcHUo3+zLDqBaIipY3natlggeffTem4J73PD+014nzwBV6DA=="/>
+            <enclosure url="https://github.com/gityeop/CodexMate/releases/latest/download/CodexMate-0.0.46.zip" length="4083209" type="application/octet-stream" sparkle:edSignature="LJKBNFYLH1GnTTSq1GzmQoQl/KBdsTgjqhW8IG7GM+m6S+r060tCWt7ke82ljvI6KU2iA4+nuHP1a5UPNu+6BQ=="/>
         </item>
     </channel>
 </rss>
