@@ -24,6 +24,10 @@ struct ThreadNotificationContent: Equatable {
 }
 
 enum ThreadNotificationPlanner {
+    static func allowsNotifications(for row: AppStateStore.ThreadRow) -> Bool {
+        !row.isSubagent
+    }
+
     static func statusByThreadID(from rows: [AppStateStore.ThreadRow]) -> [String: AppStateStore.ThreadStatus] {
         Dictionary(uniqueKeysWithValues: rows.map { ($0.id, $0.displayStatus) })
     }
@@ -33,6 +37,8 @@ enum ThreadNotificationPlanner {
         currentRows: [AppStateStore.ThreadRow]
     ) -> [ThreadDesktopNotification] {
         currentRows.compactMap { row in
+            guard allowsNotifications(for: row) else { return nil }
+
             let currentStatus = row.displayStatus
             let previousStatus = previousStatusByThreadID[row.id]
 

@@ -90,6 +90,30 @@ final class ThreadNotificationPlannerTests: XCTestCase {
         )
     }
 
+    func testSubagentRowsNeverEmitNotifications() {
+        let rows = [
+            row(id: "main", status: .idle),
+            row(id: "subagent-completed", status: .idle, isSubagent: true),
+            row(id: "subagent-waiting", status: .waitingForInput, isSubagent: true),
+            row(id: "subagent-failed", status: .failed(message: "boom"), isSubagent: true)
+        ]
+
+        let notifications = ThreadNotificationPlanner.notifications(
+            previousStatusByThreadID: [
+                "main": .running,
+                "subagent-completed": .running,
+                "subagent-waiting": .running,
+                "subagent-failed": .running
+            ],
+            currentRows: rows
+        )
+
+        XCTAssertEqual(
+            notifications,
+            [ThreadDesktopNotification(threadID: "main", kind: .completion)]
+        )
+    }
+
     func testStatusByThreadIDUsesDisplayStatus() {
         var waitingRow = row(id: "thread-a", status: .idle)
         waitingRow.pendingRequestKind = .approval
@@ -147,9 +171,10 @@ final class ThreadNotificationPlannerTests: XCTestCase {
 
     private func row(
         id: String,
-        status: AppStateStore.ThreadStatus
+        status: AppStateStore.ThreadStatus,
+        isSubagent: Bool = false
     ) -> AppStateStore.ThreadRow {
-        AppStateStore.ThreadRow(
+        var row = AppStateStore.ThreadRow(
             id: id,
             displayTitle: id,
             preview: id,
@@ -159,5 +184,7 @@ final class ThreadNotificationPlannerTests: XCTestCase {
             updatedAt: Date(timeIntervalSince1970: 100),
             isWatched: true
         )
+        row.isSubagent = isSubagent
+        return row
     }
 }

@@ -284,6 +284,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         configureForegroundRefreshObservers()
         requestNotificationPermission()
+
+#if DEBUG
+        if CommandLine.arguments.contains("--notification-qa") {
+            isInitialThreadBootstrapInProgress = false
+            controller.setConnection(.connected(binaryPath: "notification QA"))
+            renderMenu()
+            scheduleAgentNotificationQA()
+            return
+        }
+#endif
+
         isInitialThreadBootstrapInProgress = true
         renderMenu()
 
@@ -616,6 +627,62 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
     }
+
+#if DEBUG
+    private func scheduleAgentNotificationQA() {
+        let mainThreadID = "notification-qa-main"
+        let subagentThreadID = "notification-qa-subagent"
+        let now = Int(Date().timeIntervalSince1970)
+        let mainThread = CodexThread(
+            id: mainThreadID,
+            preview: "QA Main Agent — should notify",
+            createdAt: now,
+            updatedAt: now,
+            status: .active(flags: []),
+            cwd: "/tmp/CodexMate-Notification-QA",
+            name: "QA Main Agent — should notify"
+        )
+        let subagentThread = CodexThread(
+            id: subagentThreadID,
+            preview: "QA Subagent — must stay silent",
+            createdAt: now,
+            updatedAt: now,
+            status: .active(flags: []),
+            cwd: "/tmp/CodexMate-Notification-QA",
+            name: "QA Subagent — must stay silent",
+            source: #"{"subagent":{"thread_spawn":{"parent_thread_id":"notification-qa-main","depth":1,"agent_path":null,"agent_nickname":"QA Teammate","agent_role":"explorer"}}}"#,
+            agentRole: "explorer",
+            agentNickname: "QA Teammate"
+        )
+
+        controller.apply(notification: .threadStarted(ThreadStartedNotification(thread: mainThread)))
+        controller.apply(notification: .threadStarted(ThreadStartedNotification(thread: subagentThread)))
+        renderMenu()
+        debugLog("notification QA scheduled main=\(mainThreadID) subagent=\(subagentThreadID)")
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+            self?.completeNotificationQAThread(threadID: mainThreadID, turnID: "notification-qa-main-turn")
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self] in
+            self?.completeNotificationQAThread(threadID: subagentThreadID, turnID: "notification-qa-subagent-turn")
+        }
+    }
+
+    private func completeNotificationQAThread(threadID: String, turnID: String) {
+        controller.apply(
+            notification: .turnCompleted(
+                TurnCompletedNotification(
+                    threadId: threadID,
+                    turn: CodexTurn(id: turnID, status: .completed, error: nil)
+                )
+            )
+        )
+        sendThreadDesktopNotification(
+            ThreadDesktopNotification(threadID: threadID, kind: .completion)
+        )
+        renderMenu()
+    }
+#endif
 
     private func requestAccessibilityPermissionIfNeeded() {
         guard currentEffectiveDisplayMode == .menuBar else {
@@ -1069,14 +1136,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
-        guard let metadata = notificationMetadata(forThreadID: notification.threadID) else {
+        guard let thread = controller.recentThreads.first(where: { $0.id == notification.threadID }) else {
             debugLog("User notification missing metadata thread=\(notification.threadID) kind=\(String(describing: notification.kind))")
+            return
+        }
+        guard ThreadNotificationPlanner.allowsNotifications(for: thread) else {
+            debugLog("User notification suppressed for subagent thread=\(notification.threadID) kind=\(String(describing: notification.kind))")
             return
         }
 
         let content = ThreadNotificationContentBuilder.content(
             body: body,
-            metadata: metadata,
+            metadata: notificationMetadata(for: thread),
             kind: notification.kind
         )
         sendNotification(
@@ -1087,11 +1158,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
     }
 
-    private func notificationMetadata(forThreadID threadID: String) -> ThreadNotificationMetadata? {
-        guard let thread = controller.recentThreads.first(where: { $0.id == threadID }) else {
-            return nil
-        }
-
+    private func notificationMetadata(for thread: AppStateStore.ThreadRow) -> ThreadNotificationMetadata {
         let project = controller.projectCatalog.project(forThreadID: thread.id, cwd: thread.cwd)
         return ThreadNotificationMetadata(
             projectDisplayName: project.displayName,
