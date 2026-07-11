@@ -3,18 +3,18 @@
     <channel>
         <title>CodexMate</title>
         <item>
-            <title>0.0.46</title>
-            <pubDate>Wed, 08 Jul 2026 07:20:45 +0900</pubDate>
-            <link>https://github.com/gityeop/CodexMate/releases/tag/v0.0.46</link>
-            <sparkle:version>46</sparkle:version>
-            <sparkle:shortVersionString>0.0.46</sparkle:shortVersionString>
+            <title>0.0.47</title>
+            <pubDate>Sat, 11 Jul 2026 22:39:32 +0900</pubDate>
+            <link>https://github.com/gityeop/CodexMate/releases/tag/v0.0.47</link>
+            <sparkle:version>47</sparkle:version>
+            <sparkle:shortVersionString>0.0.47</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description sparkle:format="markdown"><![CDATA[# CodexMate 0.0.46
+            <description sparkle:format="markdown"><![CDATA[# CodexMate 0.0.47
 
-- Updates the app icon to the new CodexMate pixel-style artwork.
+- Keeps teammate and subagent notifications silent while continuing to notify when the main agent needs attention or finishes.
 ]]></description>
-            <enclosure url="https://github.com/gityeop/CodexMate/releases/latest/download/CodexMate-0.0.46.zip" length="4083209" type="application/octet-stream" sparkle:edSignature="LJKBNFYLH1GnTTSq1GzmQoQl/KBdsTgjqhW8IG7GM+m6S+r060tCWt7ke82ljvI6KU2iA4+nuHP1a5UPNu+6BQ=="/>
+            <enclosure url="https://github.com/gityeop/CodexMate/releases/latest/download/CodexMate-0.0.47.zip" length="4083036" type="application/octet-stream" sparkle:edSignature="WjAAI5g6lcPoB2E2gi2uTyDCnPY7AaQja/yWlhDv6w+K435XN6rfT3Afm8Xhy5rx2QuYb8HrXSqRWewTceDZBg=="/>
         </item>
     </channel>
 </rss>
