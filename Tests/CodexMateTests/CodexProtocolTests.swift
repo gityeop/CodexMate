@@ -62,6 +62,7 @@ final class CodexProtocolTests: XCTestCase {
         )
 
         XCTAssertTrue(thread.isSubagent)
+        XCTAssertTrue(thread.isGuardianSubagent)
         XCTAssertNil(thread.subagentParentThreadID)
     }
 
@@ -102,7 +103,9 @@ final class CodexProtocolTests: XCTestCase {
         )
 
         XCTAssertTrue(thread.isSubagent)
+        XCTAssertTrue(thread.isGuardianSubagent)
         XCTAssertNil(thread.subagentParentThreadID)
+        XCTAssertEqual(thread.source, #"{"subagent":{"other":"guardian"}}"#)
     }
 
     func testThreadStartedNotificationDecodesObjectSubagentSource() throws {

@@ -90,6 +90,10 @@ enum MenubarSnapshotSelector {
                 continue
             }
 
+            guard !thread.isGuardianSubagent else {
+                continue
+            }
+
             guard !thread.hasUnhydratedPlaceholderMetadata else {
                 continue
             }

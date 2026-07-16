@@ -181,9 +181,11 @@ private struct ThreadSourcePayload: Codable {
 
 private struct SubagentPayload: Codable {
     let threadSpawn: ThreadSpawnPayload?
+    let other: String?
 
     private enum CodingKeys: String, CodingKey {
         case threadSpawn = "thread_spawn"
+        case other
     }
 }
 
@@ -370,6 +372,10 @@ struct ThreadClosedNotification: Decodable, Equatable {
 extension CodexThread {
     var isSubagent: Bool {
         ThreadSourcePayload.parse(from: source)?.subagent != nil
+    }
+
+    var isGuardianSubagent: Bool {
+        ThreadSourcePayload.parse(from: source)?.subagent?.other == "guardian"
     }
 
     var subagentParentThreadID: String? {

@@ -156,6 +156,7 @@ struct AppStateStore {
         var cwd: String
         var sessionPath: String? = nil
         var isSubagent = false
+        var isGuardianSubagent = false
         var parentThreadID: String? = nil
         var agentNickname: String? = nil
         var status: ThreadStatus
@@ -437,6 +438,7 @@ struct AppStateStore {
             row.cwd = thread.cwd
             row.sessionPath = thread.path
             row.isSubagent = thread.isSubagent
+            row.isGuardianSubagent = thread.isGuardianSubagent
             row.parentThreadID = thread.subagentParentThreadID
             row.agentNickname = thread.agentNickname
 
@@ -515,6 +517,7 @@ struct AppStateStore {
         row.cwd = thread.cwd
         row.sessionPath = thread.path
         row.isSubagent = thread.isSubagent
+        row.isGuardianSubagent = thread.isGuardianSubagent
         row.parentThreadID = thread.subagentParentThreadID
         row.agentNickname = thread.agentNickname
         let newStatus = ThreadStatus(threadStatus: thread.status)
@@ -561,6 +564,7 @@ struct AppStateStore {
         row.cwd = thread.cwd
         row.sessionPath = thread.path
         row.isSubagent = thread.isSubagent
+        row.isGuardianSubagent = thread.isGuardianSubagent
         row.parentThreadID = thread.subagentParentThreadID
         row.agentNickname = thread.agentNickname
 
@@ -1271,6 +1275,7 @@ struct AppStateStore {
             row.cwd = notification.thread.cwd
             row.sessionPath = notification.thread.path
             row.isSubagent = notification.thread.isSubagent
+            row.isGuardianSubagent = notification.thread.isGuardianSubagent
             row.parentThreadID = notification.thread.subagentParentThreadID
             row.agentNickname = notification.thread.agentNickname
             row.updatedAt = max(row.updatedAt, observedAt)
@@ -1868,6 +1873,7 @@ private extension AppStateStore.ThreadRow {
         self.cwd = thread.cwd
         self.sessionPath = thread.path
         self.isSubagent = thread.isSubagent
+        self.isGuardianSubagent = thread.isGuardianSubagent
         self.parentThreadID = thread.subagentParentThreadID
         self.agentNickname = thread.agentNickname
         self.status = initialStatus

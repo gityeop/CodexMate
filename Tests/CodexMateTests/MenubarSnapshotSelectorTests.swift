@@ -263,6 +263,46 @@ final class MenubarSnapshotSelectorTests: XCTestCase {
         XCTAssertEqual(snapshot.menuSections.map(\.displayName), ["Chats"])
     }
 
+    func testSnapshotHidesGuardianWhileKeepingSpawnedSubagentWithParent() {
+        var state = AppStateStore()
+        state.replaceRecentThreads(
+            with: [
+                codexThread(id: "parent-thread", updatedAt: 200, cwd: "/tmp/munebar-schedule"),
+                codexThread(
+                    id: "child-thread",
+                    updatedAt: 210,
+                    cwd: "/tmp/munebar-schedule",
+                    source: #"{"subagent":{"thread_spawn":{"parent_thread_id":"parent-thread","depth":1}}}"#
+                ),
+                codexThread(
+                    id: "guardian-thread",
+                    updatedAt: 220,
+                    cwd: "/tmp/munebar-schedule",
+                    source: #"{"subagent":{"other":"guardian"}}"#
+                )
+            ]
+        )
+
+        let snapshot = MenubarSnapshotSelector.makeSnapshot(
+            state: state,
+            projectCatalog: CodexDesktopProjectCatalog(
+                workspaceRoots: [
+                    .init(path: "/tmp/A", displayName: "A")
+                ],
+                projectlessThreadIDs: ["parent-thread"]
+            ),
+            threadReadMarkers: ThreadReadMarkerStore(),
+            projectLimit: 3,
+            visibleThreadLimit: 3,
+            now: Date(timeIntervalSince1970: 250)
+        )
+
+        XCTAssertEqual(snapshot.projectSections.map(\.section.displayName), ["Chats"])
+        XCTAssertEqual(snapshot.projectSections.first?.allThreads.map(\.id).sorted(), ["child-thread", "parent-thread"])
+        XCTAssertEqual(snapshot.menuSections.map(\.displayName), ["Chats"])
+        XCTAssertFalse(snapshot.menuSections.flatMap(\.threads).contains { $0.thread.id == "guardian-thread" })
+    }
+
     func testSnapshotReportsNoVisibleRecentThreadsWhenOnlyRemovedProjectThreadsRemain() {
         var state = AppStateStore()
         let removedProjectPath = FileManager.default.temporaryDirectory
