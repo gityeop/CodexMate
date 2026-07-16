@@ -114,6 +114,31 @@ final class ThreadNotificationPlannerTests: XCTestCase {
         )
     }
 
+    func testGuardianSubagentNeverEmitsNotifications() {
+        var store = AppStateStore()
+        store.replaceRecentThreads(with: [
+            CodexThread(
+                id: "guardian",
+                preview: #"{"outcome":"allow"}"#,
+                createdAt: 100,
+                updatedAt: 100,
+                status: .idle,
+                cwd: "/tmp",
+                name: nil,
+                source: #"{"subagent":{"other":"guardian"}}"#
+            )
+        ])
+
+        XCTAssertTrue(store.recentThreads[0].isSubagent)
+        XCTAssertEqual(
+            ThreadNotificationPlanner.notifications(
+                previousStatusByThreadID: ["guardian": .running],
+                currentRows: store.recentThreads
+            ),
+            []
+        )
+    }
+
     func testStatusByThreadIDUsesDisplayStatus() {
         var waitingRow = row(id: "thread-a", status: .idle)
         waitingRow.pendingRequestKind = .approval

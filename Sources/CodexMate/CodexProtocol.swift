@@ -369,7 +369,7 @@ struct ThreadClosedNotification: Decodable, Equatable {
 
 extension CodexThread {
     var isSubagent: Bool {
-        ThreadSourcePayload.parse(from: source)?.subagent?.threadSpawn != nil
+        ThreadSourcePayload.parse(from: source)?.subagent != nil
     }
 
     var subagentParentThreadID: String? {

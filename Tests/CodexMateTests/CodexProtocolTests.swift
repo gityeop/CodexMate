@@ -56,6 +56,15 @@ final class CodexProtocolTests: XCTestCase {
         )
     }
 
+    func testCodexThreadRecognizesGuardianSubagentStringSource() throws {
+        let thread = try decodeThread(
+            sourceJSON: #""{\"subagent\":{\"other\":\"guardian\"}}""#
+        )
+
+        XCTAssertTrue(thread.isSubagent)
+        XCTAssertNil(thread.subagentParentThreadID)
+    }
+
     func testCodexThreadDecodesObjectSubagentSource() throws {
         let thread = try decodeThread(
             sourceJSON: """
@@ -79,6 +88,21 @@ final class CodexProtocolTests: XCTestCase {
             thread.source,
             #"{"subagent":{"thread_spawn":{"agent_nickname":"Dalton","agent_path":"/tmp/agent","agent_role":"explorer","depth":1,"parent_thread_id":"parent-thread"}}}"#
         )
+    }
+
+    func testCodexThreadRecognizesGuardianSubagentObjectSource() throws {
+        let thread = try decodeThread(
+            sourceJSON: """
+            {
+              "subagent": {
+                "other": "guardian"
+              }
+            }
+            """
+        )
+
+        XCTAssertTrue(thread.isSubagent)
+        XCTAssertNil(thread.subagentParentThreadID)
     }
 
     func testThreadStartedNotificationDecodesObjectSubagentSource() throws {
