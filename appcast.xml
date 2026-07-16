@@ -3,18 +3,19 @@
     <channel>
         <title>CodexMate</title>
         <item>
-            <title>0.0.47</title>
-            <pubDate>Sat, 11 Jul 2026 22:39:32 +0900</pubDate>
-            <link>https://github.com/gityeop/CodexMate/releases/tag/v0.0.47</link>
-            <sparkle:version>47</sparkle:version>
-            <sparkle:shortVersionString>0.0.47</sparkle:shortVersionString>
+            <title>0.0.48</title>
+            <pubDate>Fri, 17 Jul 2026 06:23:05 +0900</pubDate>
+            <link>https://github.com/gityeop/CodexMate/releases/tag/v0.0.48</link>
+            <sparkle:version>48</sparkle:version>
+            <sparkle:shortVersionString>0.0.48</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description sparkle:format="markdown"><![CDATA[# CodexMate 0.0.47
+            <description sparkle:format="markdown"><![CDATA[# CodexMate 0.0.48
 
-- Keeps teammate and subagent notifications silent while continuing to notify when the main agent needs attention or finishes.
+- Prevents guardian and other internal subagent threads from appearing as user-facing notifications.
+- Prevents those internal notifications from opening active threads and triggering live-writer resume errors.
 ]]></description>
-            <enclosure url="https://github.com/gityeop/CodexMate/releases/latest/download/CodexMate-0.0.47.zip" length="4083036" type="application/octet-stream" sparkle:edSignature="WjAAI5g6lcPoB2E2gi2uTyDCnPY7AaQja/yWlhDv6w+K435XN6rfT3Afm8Xhy5rx2QuYb8HrXSqRWewTceDZBg=="/>
+            <enclosure url="https://github.com/gityeop/CodexMate/releases/latest/download/CodexMate-0.0.48.zip" length="4083070" type="application/octet-stream" sparkle:edSignature="dLIpTwmHGeC19GxToFIJqozg7GhBPCHcjo57yyneoGerWZ/4dgdenqx0dYU5eBo+7UNyw4YufLLb7BU2jhmsDQ=="/>
         </item>
     </channel>
 </rss>
