@@ -3,19 +3,20 @@
     <channel>
         <title>CodexMate</title>
         <item>
-            <title>0.0.49</title>
-            <pubDate>Fri, 17 Jul 2026 06:45:37 +0900</pubDate>
-            <link>https://github.com/gityeop/CodexMate/releases/tag/v0.0.49</link>
-            <sparkle:version>49</sparkle:version>
-            <sparkle:shortVersionString>0.0.49</sparkle:shortVersionString>
+            <title>0.0.50</title>
+            <pubDate>Wed, 22 Jul 2026 09:45:14 +0900</pubDate>
+            <link>https://github.com/gityeop/CodexMate/releases/tag/v0.0.50</link>
+            <sparkle:version>50</sparkle:version>
+            <sparkle:shortVersionString>0.0.50</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description sparkle:format="markdown"><![CDATA[# CodexMate 0.0.49
+            <description sparkle:format="markdown"><![CDATA[# CodexMate 0.0.50
 
-- Prevents guardian threads from appearing in the menu or creating phantom projects from internal working directories.
-- Keeps regular spawned subagents grouped beneath their parent tasks.
+- Adds a polished weekly Codex usage header with the remaining allowance, reset time, and a full-width status bar.
+- Adapts the usage display to light and dark appearances, Korean and English, and VoiceOver.
+- Shows the original Codex usage error directly in the menu when the usage request fails.
 ]]></description>
-            <enclosure url="https://github.com/gityeop/CodexMate/releases/latest/download/CodexMate-0.0.49.zip" length="4083534" type="application/octet-stream" sparkle:edSignature="d17qXon3uk4r/U81wO3cGtf3M9VYZHQrQu+TOaBaWsyDyfgb1bgeQbRG3ZhN50K6xS5BhnqiNr8FgPmvnLwUAQ=="/>
+            <enclosure url="https://github.com/gityeop/CodexMate/releases/latest/download/CodexMate-0.0.50.zip" length="4133360" type="application/octet-stream" sparkle:edSignature="4LeKPlnsxwjMGY8NfHkTZ7u0esASw7NNG20gxWpdOOzjnBnLiE4kIh80H1IOC+U7aGYx5NICCuDiBNIsAVmwCA=="/>
         </item>
     </channel>
 </rss>
