@@ -201,6 +201,27 @@ actor CodexAppServerClient {
         }
     }
 
+    func call<Result: Decodable>(method: String) async throws -> Result {
+        let requestID = nextRequestID
+        nextRequestID += 1
+
+        let data = try encoder.encode(JSONRPCRequestWithoutParams(id: requestID, method: method))
+        let responseData = try await waitForResponse(
+            requestID: requestID,
+            method: method,
+            data: data
+        )
+
+        do {
+            return try decodeResult(from: responseData)
+        } catch let error as DecodingError {
+            throw CodexAppServerClientError.decodingFailure(
+                method: method,
+                details: describeDecodingError(error)
+            )
+        }
+    }
+
     private func waitForResponse(
         requestID: Int,
         method: String,
@@ -483,6 +504,12 @@ private struct JSONRPCRequest<Params: Encodable>: Encodable {
     let id: Int
     let method: String
     let params: Params
+}
+
+private struct JSONRPCRequestWithoutParams: Encodable {
+    let jsonrpc = "2.0"
+    let id: Int
+    let method: String
 }
 
 private struct JSONRPCNotification: Encodable {

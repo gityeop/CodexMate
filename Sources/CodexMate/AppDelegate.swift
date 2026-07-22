@@ -60,6 +60,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         static let minimumInterval: TimeInterval = 1
     }
 
+    private enum WeeklyUsageRefreshPolicy {
+        static let refreshInterval: TimeInterval = 60
+    }
+
     private enum NotificationRenderPolicy {
         static let coalescingDelayNanoseconds: UInt64 = 100_000_000
     }
@@ -129,6 +133,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let failedIndicatorImage = AppDelegate.makeTextIndicatorImage("⚠️")
     private let hoverTooltipController = ThreadHoverTooltipController()
     private let defaults = UserDefaults.standard
+    private let weeklyUsageService = WeeklyUsageService()
     private lazy var localDesktopRecentThreadListing = DesktopStateRecentThreadListing(
         codexDirectoryURLProvider: { [codexHomeStore] in
             codexHomeStore.currentDirectoryURL
@@ -164,6 +169,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var pendingThreadMetadataRefreshIDs: Set<String> = []
     private var refreshTimer: Timer?
     private var refreshTimerInterval: TimeInterval?
+    private var weeklyUsageRefreshTimer: Timer?
+    private var weeklyUsageRefreshTask: Task<Void, Never>?
+    private var currentWeeklyUsage: WeeklyUsageReading?
+    private var currentWeeklyUsageErrorMessage: String?
     private var currentStatusSprite: MenubarStatusPresentation.StatusSprite = .connecting
     private var currentStatusDisplayName = AppStateStore.OverallStatus.connecting.displayName
     private var currentNotchStatusContent = MenubarStatusPresentation.notchStatusContent(
@@ -272,6 +281,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         relativeDateFormatter.locale = preferences.locale
         applyPresentationMode(force: true)
         requestAccessibilityPermissionIfNeeded()
+        startWeeklyUsageUpdates()
 
         if promoMockupEnabled {
             isInitialThreadBootstrapInProgress = false
@@ -336,6 +346,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         removeMenuBarModifiedArrowEventTap()
         removeMenuShortcutEventMonitor()
         removeMenuDismissEventMonitors()
+        stopWeeklyUsageUpdates()
         notchStatusOverlay.hide()
     }
 
@@ -1205,6 +1216,67 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         requestThreadRefresh(now: now)
     }
 
+    private func startWeeklyUsageUpdates() {
+        guard weeklyUsageRefreshTimer == nil else {
+            return
+        }
+
+        requestWeeklyUsageRefresh()
+        let timer = Timer(
+            timeInterval: WeeklyUsageRefreshPolicy.refreshInterval,
+            repeats: true
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.requestWeeklyUsageRefresh()
+            }
+        }
+        weeklyUsageRefreshTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
+    }
+
+    private func stopWeeklyUsageUpdates() {
+        weeklyUsageRefreshTimer?.invalidate()
+        weeklyUsageRefreshTimer = nil
+        weeklyUsageRefreshTask?.cancel()
+        weeklyUsageRefreshTask = nil
+
+        Task {
+            await weeklyUsageService.stop()
+        }
+    }
+
+    private func requestWeeklyUsageRefresh() {
+        guard weeklyUsageRefreshTask == nil else {
+            return
+        }
+
+        weeklyUsageRefreshTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer {
+                self.weeklyUsageRefreshTask = nil
+            }
+
+            do {
+                let reading = try await self.weeklyUsageService.read()
+                self.currentWeeklyUsage = reading
+                self.currentWeeklyUsageErrorMessage = nil
+                self.debugLog(
+                    "Weekly usage refresh succeeded remaining=\(reading.remainingPercent) resetsAt=\(reading.resetsAt?.timeIntervalSince1970.description ?? "nil") readAt=\(reading.readAt.timeIntervalSince1970)"
+                )
+            } catch is CancellationError {
+                return
+            } catch {
+                self.currentWeeklyUsage = nil
+                self.currentWeeklyUsageErrorMessage = error.localizedDescription
+                self.debugLog("Weekly usage refresh failed: \(error.localizedDescription)")
+            }
+
+            if self.isMenuOpen {
+                self.renderMenu()
+            }
+        }
+    }
+
     private var notificationsEnabled: Bool {
         Bundle.main.bundleURL.pathExtension == "app"
     }
@@ -1437,6 +1509,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         var hoverTooltipContentsByThreadID: [String: MenubarStatusPresentation.ThreadTooltipContent] = [:]
         menu.removeAllItems()
+        menu.addItem(makeWeeklyUsageMenuItem())
         for item in visibleThreadMenuItems(
             snapshot: snapshot,
             menuSections: menuSections,
@@ -1660,6 +1733,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func makeStaticItem(title: String) -> NSMenuItem {
         let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
         item.isEnabled = false
+        return item
+    }
+
+    private func makeWeeklyUsageMenuItem() -> NSMenuItem {
+        let remainingPercent = currentWeeklyUsage?.remainingPercent
+        let indicatorView = WeeklyUsageIndicatorView(
+            remainingPercent: remainingPercent,
+            resetsAt: currentWeeklyUsage?.resetsAt,
+            errorMessage: currentWeeklyUsageErrorMessage,
+            language: preferences.language
+        )
+        let item = NSMenuItem(
+            title: indicatorView.accessibilityText,
+            action: nil,
+            keyEquivalent: ""
+        )
+        item.isEnabled = false
+
+        let intrinsicSize = indicatorView.intrinsicContentSize
+        indicatorView.frame = NSRect(origin: .zero, size: intrinsicSize)
+        item.view = indicatorView
         return item
     }
 

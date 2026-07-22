@@ -30,8 +30,10 @@ enum CodexBinaryLocator {
         return [
             "/Applications/Codex.app/Contents/Resources/codex",
             "/Applications/Codex.app/Contents/MacOS/codex",
+            "/Applications/ChatGPT.app/Contents/Resources/codex",
             "\(NSHomeDirectory())/Applications/Codex.app/Contents/Resources/codex",
             "\(NSHomeDirectory())/Applications/Codex.app/Contents/MacOS/codex",
+            "\(NSHomeDirectory())/Applications/ChatGPT.app/Contents/Resources/codex",
         ] + pathCandidates
     }
 }
