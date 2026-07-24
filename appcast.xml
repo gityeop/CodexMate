@@ -3,20 +3,19 @@
     <channel>
         <title>CodexMate</title>
         <item>
-            <title>0.0.50</title>
-            <pubDate>Wed, 22 Jul 2026 09:45:14 +0900</pubDate>
-            <link>https://github.com/gityeop/CodexMate/releases/tag/v0.0.50</link>
-            <sparkle:version>50</sparkle:version>
-            <sparkle:shortVersionString>0.0.50</sparkle:shortVersionString>
+            <title>0.0.51</title>
+            <pubDate>Fri, 24 Jul 2026 22:44:24 +0900</pubDate>
+            <link>https://github.com/gityeop/CodexMate/releases/tag/v0.0.51</link>
+            <sparkle:version>51</sparkle:version>
+            <sparkle:shortVersionString>0.0.51</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description sparkle:format="markdown"><![CDATA[# CodexMate 0.0.50
+            <description sparkle:format="markdown"><![CDATA[# CodexMate 0.0.51
 
-- Adds a polished weekly Codex usage header with the remaining allowance, reset time, and a full-width status bar.
-- Adapts the usage display to light and dark appearances, Korean and English, and VoiceOver.
-- Shows the original Codex usage error directly in the menu when the usage request fails.
+- Keeps the weekly Codex usage indicator visible when pinning or unpinning threads in menu bar mode.
+- Adds the weekly usage bar to the expanded notch menu.
 ]]></description>
-            <enclosure url="https://github.com/gityeop/CodexMate/releases/latest/download/CodexMate-0.0.50.zip" length="4133360" type="application/octet-stream" sparkle:edSignature="4LeKPlnsxwjMGY8NfHkTZ7u0esASw7NNG20gxWpdOOzjnBnLiE4kIh80H1IOC+U7aGYx5NICCuDiBNIsAVmwCA=="/>
+            <enclosure url="https://github.com/gityeop/CodexMate/releases/latest/download/CodexMate-0.0.51.zip" length="4140169" type="application/octet-stream" sparkle:edSignature="vrLJjnwJEnbUkQ46NofmN4ZGE3/1MximEGut8RDDd2fJrBOQLKXgPFTA0aIyRLz9WaYUlSVjPhXhekypwcx4Cg=="/>
         </item>
     </channel>
 </rss>
