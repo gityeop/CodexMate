@@ -47,6 +47,46 @@ final class NotchStatusOverlayKeyboardNavigationTests: XCTestCase {
         XCTAssertEqual(try selectedRowTitle(in: view), "Thread 1")
     }
 
+    func testWeeklyUsageEntryRendersBarRowAndStaysOutsideKeyboardSelection() throws {
+        let view = NotchStatusOverlayView(frame: NSRect(x: 0, y: 0, width: 520, height: 220))
+        view.setMenuItems([
+            .weeklyUsage(
+                WeeklyUsageIndicatorPresentation(
+                    titleText: "주간 사용량",
+                    valueText: "87% 남음",
+                    detailText: "초기화: 7월 29일 오전 2:06",
+                    remainingPercent: 87,
+                    showsError: false
+                )
+            ),
+            .header("Pinned | 스레드 1개"),
+            .item(primaryText: "Thread 1", identifier: "thread-1", onSelect: {}),
+        ])
+        view.menuExpansionProgress = 1
+        view.prepareForMenuOpen()
+        view.layoutSubtreeIfNeeded()
+
+        let usageView = try XCTUnwrap(
+            firstView(in: view, identifier: "CodexMateNotchWeeklyUsageIndicator")
+        )
+        let titleLabel = try XCTUnwrap(
+            firstLabel(in: view, identifier: "CodexMateNotchWeeklyUsageTitleLabel")
+        )
+        let valueLabel = try XCTUnwrap(
+            firstLabel(in: view, identifier: "CodexMateNotchWeeklyUsageValueLabel")
+        )
+        let detailLabel = try XCTUnwrap(
+            firstLabel(in: view, identifier: "CodexMateNotchWeeklyUsageDetailLabel")
+        )
+
+        XCTAssertEqual(usageView.frame.height, 48)
+        XCTAssertEqual(titleLabel.stringValue, "주간 사용량")
+        XCTAssertEqual(valueLabel.stringValue, "87% 남음")
+        XCTAssertEqual(detailLabel.stringValue, "초기화: 7월 29일 오전 2:06")
+        XCTAssertEqual(view.selectedMenuItemIdentifier(), "thread-1")
+        XCTAssertEqual(try selectedRowTitle(in: view), "Thread 1")
+    }
+
     func testArrowNavigationAcceptsFunctionModifier() throws {
         let view = NotchStatusOverlayView(frame: NSRect(x: 0, y: 0, width: 520, height: 220))
         view.setMenuItems(makeMenuItems())

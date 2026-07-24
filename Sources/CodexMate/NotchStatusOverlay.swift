@@ -11,6 +11,7 @@ struct NotchStatusOverlayMenuEntry {
         case item
         case header
         case separator
+        case weeklyUsage(WeeklyUsageIndicatorPresentation)
     }
 
     let kind: Kind
@@ -71,6 +72,23 @@ struct NotchStatusOverlayMenuEntry {
             secondaryText: nil,
             identifier: nil,
             indicatorText: nil,
+            indicatorImage: nil,
+            navigationIndex: nil,
+            indentationLevel: 0,
+            isEnabled: false,
+            onSelect: nil
+        )
+    }
+
+    static func weeklyUsage(
+        _ presentation: WeeklyUsageIndicatorPresentation
+    ) -> NotchStatusOverlayMenuEntry {
+        NotchStatusOverlayMenuEntry(
+            kind: .weeklyUsage(presentation),
+            primaryText: presentation.titleText,
+            secondaryText: presentation.detailText,
+            identifier: nil,
+            indicatorText: presentation.valueText,
             indicatorImage: nil,
             navigationIndex: nil,
             indentationLevel: 0,
@@ -768,6 +786,184 @@ private final class NotchStatusDotView: NSView {
     }
 }
 
+private final class NotchWeeklyUsageIndicatorView: NSView {
+    private enum Metrics {
+        static let rowHeight: CGFloat = 48
+        static let titleY: CGFloat = 0
+        static let titleHeight: CGFloat = 17
+        static let detailY: CGFloat = 19
+        static let detailHeight: CGFloat = 14
+        static let textSpacing: CGFloat = 12
+        static let barY: CGFloat = 40
+        static let barHeight: CGFloat = 4
+    }
+
+    static let rowHeight = Metrics.rowHeight
+
+    private let presentation: WeeklyUsageIndicatorPresentation
+    private let titleLabel = NSTextField(labelWithString: "")
+    private let valueLabel = NSTextField(labelWithString: "")
+    private let detailLabel = NSTextField(labelWithString: "")
+
+    override var isFlipped: Bool {
+        true
+    }
+
+    override var isOpaque: Bool {
+        false
+    }
+
+    init(presentation: WeeklyUsageIndicatorPresentation) {
+        self.presentation = presentation
+        super.init(frame: .zero)
+
+        identifier = NSUserInterfaceItemIdentifier("CodexMateNotchWeeklyUsageIndicator")
+        configureLabel(
+            titleLabel,
+            identifier: "CodexMateNotchWeeklyUsageTitleLabel",
+            text: presentation.titleText,
+            font: NSFont.systemFont(ofSize: 12, weight: .semibold),
+            color: NSColor(calibratedWhite: 1, alpha: 0.78),
+            alignment: .left,
+            lineBreakMode: .byTruncatingTail
+        )
+        configureLabel(
+            valueLabel,
+            identifier: "CodexMateNotchWeeklyUsageValueLabel",
+            text: presentation.valueText,
+            font: NSFont.systemFont(ofSize: 12, weight: .semibold),
+            color: valueColor,
+            alignment: .right,
+            lineBreakMode: .byClipping
+        )
+        configureLabel(
+            detailLabel,
+            identifier: "CodexMateNotchWeeklyUsageDetailLabel",
+            text: presentation.detailText ?? "",
+            font: NSFont.systemFont(ofSize: 10.5),
+            color: detailColor,
+            alignment: .left,
+            lineBreakMode: .byTruncatingTail
+        )
+        detailLabel.isHidden = presentation.detailText == nil
+
+        setAccessibilityElement(true)
+        setAccessibilityRole(.staticText)
+        setAccessibilityLabel(
+            [
+                presentation.titleText,
+                presentation.valueText,
+                presentation.detailText,
+            ]
+            .compactMap { $0 }
+            .joined(separator: ", ")
+        )
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func layout() {
+        super.layout()
+
+        let contentWidth = max(0, bounds.width)
+        let valueWidth = min(contentWidth, ceil(valueLabel.intrinsicContentSize.width))
+        let titleWidth = max(0, contentWidth - valueWidth - Metrics.textSpacing)
+
+        titleLabel.frame = CGRect(
+            x: 0,
+            y: Metrics.titleY,
+            width: titleWidth,
+            height: Metrics.titleHeight
+        )
+        valueLabel.frame = CGRect(
+            x: bounds.maxX - valueWidth,
+            y: Metrics.titleY,
+            width: valueWidth,
+            height: Metrics.titleHeight
+        )
+        detailLabel.frame = CGRect(
+            x: 0,
+            y: Metrics.detailY,
+            width: contentWidth,
+            height: Metrics.detailHeight
+        )
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+
+        let barRect = CGRect(
+            x: 0,
+            y: Metrics.barY,
+            width: bounds.width,
+            height: Metrics.barHeight
+        )
+        NSColor(calibratedWhite: 1, alpha: 0.14).setFill()
+        NSBezierPath(
+            roundedRect: barRect,
+            xRadius: barRect.height / 2,
+            yRadius: barRect.height / 2
+        ).fill()
+
+        guard let remainingPercent = presentation.remainingPercent,
+              remainingPercent > 0 else {
+            return
+        }
+
+        let proportionalWidth = barRect.width * CGFloat(remainingPercent) / 100
+        let activeRect = CGRect(
+            x: barRect.minX,
+            y: barRect.minY,
+            width: min(barRect.width, max(barRect.height, proportionalWidth)),
+            height: barRect.height
+        )
+        WeeklyUsageIndicatorView.progressColor(for: remainingPercent).setFill()
+        NSBezierPath(
+            roundedRect: activeRect,
+            xRadius: activeRect.height / 2,
+            yRadius: activeRect.height / 2
+        ).fill()
+    }
+
+    private var valueColor: NSColor {
+        if presentation.showsError {
+            return .systemRed
+        }
+
+        return presentation.remainingPercent == nil
+            ? NSColor(calibratedWhite: 1, alpha: 0.52)
+            : NSColor(calibratedWhite: 1, alpha: 0.88)
+    }
+
+    private var detailColor: NSColor {
+        presentation.showsError
+            ? .systemRed
+            : NSColor(calibratedWhite: 1, alpha: 0.52)
+    }
+
+    private func configureLabel(
+        _ label: NSTextField,
+        identifier: String,
+        text: String,
+        font: NSFont,
+        color: NSColor,
+        alignment: NSTextAlignment,
+        lineBreakMode: NSLineBreakMode
+    ) {
+        label.identifier = NSUserInterfaceItemIdentifier(identifier)
+        label.stringValue = text
+        label.font = font
+        label.textColor = color
+        label.alignment = alignment
+        label.cell?.lineBreakMode = lineBreakMode
+        label.cell?.usesSingleLineMode = true
+        label.maximumNumberOfLines = 1
+        addSubview(label)
+    }
+}
+
 final class NotchStatusOverlayView: NSView {
     private struct MenuItemSignature: Equatable {
         let kind: NotchStatusOverlayMenuEntry.Kind
@@ -873,6 +1069,7 @@ final class NotchStatusOverlayView: NSView {
         case item
         case header
         case separator
+        case weeklyUsage
     }
 
     private struct MenuRowRecord {
@@ -1382,6 +1579,21 @@ final class NotchStatusOverlayView: NSView {
                         isEnabled: false
                     )
                 )
+            case let .weeklyUsage(presentation):
+                let weeklyUsageView = NotchWeeklyUsageIndicatorView(
+                    presentation: presentation
+                )
+                menuDocumentView.addSubview(weeklyUsageView)
+                menuRows.append(
+                    MenuRowRecord(
+                        view: weeklyUsageView,
+                        kind: .weeklyUsage,
+                        identifier: nil,
+                        selectionKey: nil,
+                        navigationIndex: nil,
+                        isEnabled: false
+                    )
+                )
             case .item:
                 let rowView = ThreadDropdownMenuRowView(frame: .zero)
                 rowView.configure(
@@ -1459,6 +1671,14 @@ final class NotchStatusOverlayView: NSView {
                     height: 1
                 )
                 y += Layout.menuSeparatorHeight
+            case .weeklyUsage:
+                row.view.frame = CGRect(
+                    x: Layout.menuRowLeadingInset,
+                    y: y,
+                    width: itemWidth,
+                    height: NotchWeeklyUsageIndicatorView.rowHeight
+                )
+                y += NotchWeeklyUsageIndicatorView.rowHeight
             }
 
             if index < menuRows.count - 1 {

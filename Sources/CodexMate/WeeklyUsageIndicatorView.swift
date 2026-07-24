@@ -1,5 +1,13 @@
 import AppKit
 
+struct WeeklyUsageIndicatorPresentation: Equatable {
+    let titleText: String
+    let valueText: String
+    let detailText: String?
+    let remainingPercent: Int?
+    let showsError: Bool
+}
+
 @MainActor
 final class WeeklyUsageIndicatorView: NSView {
     private enum Metrics {
@@ -66,6 +74,16 @@ final class WeeklyUsageIndicatorView: NSView {
         [titleText, valueText, detailText]
             .compactMap { $0 }
             .joined(separator: ", ")
+    }
+
+    var presentation: WeeklyUsageIndicatorPresentation {
+        WeeklyUsageIndicatorPresentation(
+            titleText: titleText,
+            valueText: valueText,
+            detailText: detailText,
+            remainingPercent: remainingPercent,
+            showsError: errorMessage != nil
+        )
     }
 
     override var isFlipped: Bool {

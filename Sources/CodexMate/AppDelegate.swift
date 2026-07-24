@@ -1662,6 +1662,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return nil
         }
 
+        if let weeklyUsageView = item.view as? WeeklyUsageIndicatorView {
+            return .weeklyUsage(weeklyUsageView.presentation)
+        }
+
         if item.isSeparatorItem {
             return .separator()
         }
@@ -2518,19 +2522,47 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func replaceVisibleThreadMenuItems(_ visibleItems: [NSMenuItem]) {
+        guard let weeklyUsageItem = menu.items.first,
+              weeklyUsageItem.view is WeeklyUsageIndicatorView else {
+            preconditionFailure("Weekly usage menu item missing.")
+        }
+
+        Self.replaceOpenMenuBarThreadItems(
+            in: menu,
+            weeklyUsageItem: weeklyUsageItem,
+            settingsIdentifier: MenuNavigationIdentifier.settings,
+            visibleItems: visibleItems
+        )
+    }
+
+    static func replaceOpenMenuBarThreadItems(
+        in menu: NSMenu,
+        weeklyUsageItem: NSMenuItem,
+        settingsIdentifier: String,
+        visibleItems: [NSMenuItem]
+    ) {
+        guard menu.items.first === weeklyUsageItem else {
+            preconditionFailure("Weekly usage menu item must remain first.")
+        }
+
         guard let settingsIndex = menu.items.firstIndex(where: {
-            ($0.representedObject as? String) == MenuNavigationIdentifier.settings
+            ($0.representedObject as? String) == settingsIdentifier
         }) else {
             preconditionFailure("Settings menu item missing.")
         }
 
-        for _ in 0..<settingsIndex {
-            menu.removeItem(at: 0)
+        let replaceableItemCount = settingsIndex - 1
+        guard replaceableItemCount >= 0 else {
+            preconditionFailure("Settings menu item must follow weekly usage.")
+        }
+
+        for _ in 0..<replaceableItemCount {
+            menu.removeItem(at: 1)
         }
 
         let replacementItems = visibleItems + [.separator()]
         for (index, item) in replacementItems.enumerated() {
-            menu.insertItem(item, at: index)
+            menu.insertItem(item, at: index + 1)
         }
     }
 
