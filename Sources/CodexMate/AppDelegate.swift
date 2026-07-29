@@ -61,7 +61,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private enum WeeklyUsageRefreshPolicy {
-        static let refreshInterval: TimeInterval = 60
+        static let refreshInterval: TimeInterval = 5 * 60
     }
 
     private enum NotificationRenderPolicy {

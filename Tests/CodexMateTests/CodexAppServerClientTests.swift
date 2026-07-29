@@ -75,6 +75,74 @@ final class CodexAppServerClientTests: XCTestCase {
         XCTAssertFalse(isConnected)
     }
 
+    func testCallAcceptsAResponseThatArrivesBeforeTheTimeout() async throws {
+        let client = CodexAppServerClient(requestTimeout: 0.5)
+        let binaryURL = try makeFakeCodexBinary(firstRateLimitsResponseDelaySeconds: 0.1)
+
+        _ = try await client.start(codexBinaryURL: binaryURL)
+        let response: AccountRateLimitsResponse = try await client.call(
+            method: "account/rateLimits/read"
+        )
+
+        XCTAssertEqual(response.rateLimits.primary?.usedPercent, 25)
+        await client.stop()
+    }
+
+    func testTimedOutCallDoesNotPreventTheNextCallFromSucceeding() async throws {
+        let client = CodexAppServerClient(requestTimeout: 0.5)
+        let binaryURL = try makeFakeCodexBinary(firstRateLimitsResponseDelaySeconds: 0.8)
+
+        _ = try await client.start(codexBinaryURL: binaryURL)
+
+        do {
+            let _: AccountRateLimitsResponse = try await client.call(
+                method: "account/rateLimits/read"
+            )
+            XCTFail("Expected the first call to time out")
+        } catch let error as CodexAppServerClientError {
+            guard case let .requestTimedOut(method, seconds) = error else {
+                return XCTFail("Expected request timeout, got \(error)")
+            }
+            XCTAssertEqual(method, "account/rateLimits/read")
+            XCTAssertEqual(seconds, 0.5, accuracy: 0.01)
+        }
+
+        try await Task.sleep(nanoseconds: 850_000_000)
+
+        let response: AccountRateLimitsResponse = try await client.call(
+            method: "account/rateLimits/read"
+        )
+        XCTAssertEqual(response.rateLimits.primary?.usedPercent, 25)
+
+        await client.stop()
+    }
+
+    func testStandardErrorLineIsReportedAsADiagnostic() async throws {
+        let client = CodexAppServerClient(requestTimeout: 0.5)
+        let binaryURL = try makeFakeCodexBinary(
+            firstRateLimitsResponseDelaySeconds: 0,
+            emitsRateLimitsDiagnostic: true
+        )
+        let diagnosticExpectation = expectation(description: "app-server diagnostic")
+
+        await client.setCallbacks(
+            onMessage: { message in
+                guard case let .diagnostic(text) = message else { return }
+                XCTAssertEqual(text, "rate-limit diagnostic")
+                diagnosticExpectation.fulfill()
+            },
+            onTermination: nil
+        )
+
+        _ = try await client.start(codexBinaryURL: binaryURL)
+        let _: AccountRateLimitsResponse = try await client.call(
+            method: "account/rateLimits/read"
+        )
+
+        await fulfillment(of: [diagnosticExpectation], timeout: 1.0)
+        await client.stop()
+    }
+
     func testDescribeDecodingErrorIncludesMissingKeyAndPath() {
         let error = DecodingError.keyNotFound(
             DynamicCodingKey(stringValue: "preview")!,
@@ -150,6 +218,8 @@ final class CodexAppServerClientTests: XCTestCase {
         delayedShutdownSeconds: TimeInterval = 0,
         keepRunningUntilStopped: Bool = false,
         respondsToInitialize: Bool = true,
+        firstRateLimitsResponseDelaySeconds: TimeInterval? = nil,
+        emitsRateLimitsDiagnostic: Bool = false,
         file: StaticString = #filePath,
         line: UInt = #line
     ) throws -> URL {
@@ -166,6 +236,9 @@ final class CodexAppServerClientTests: XCTestCase {
         delayed_shutdown=\(delayedShutdownSeconds)
         keep_running_until_stopped=\(keepRunningUntilStopped ? 1 : 0)
         responds_to_initialize=\(respondsToInitialize ? 1 : 0)
+        responds_to_rate_limits=\(firstRateLimitsResponseDelaySeconds == nil ? 0 : 1)
+        first_rate_limits_response_delay=\(firstRateLimitsResponseDelaySeconds ?? 0)
+        emits_rate_limits_diagnostic=\(emitsRateLimitsDiagnostic ? 1 : 0)
         if [[ "$delayed_shutdown" != "0.0" ]]; then
           trap "sleep $delayed_shutdown; exit 0" TERM INT
         fi
@@ -179,12 +252,25 @@ final class CodexAppServerClientTests: XCTestCase {
         request_id=$(printf '%s\n' "$request" | sed -n 's/.*"id":[[:space:]]*\\([0-9][0-9]*\\).*/\\1/p')
         [[ -n "$request_id" ]] || request_id=1
         printf '{"jsonrpc":"2.0","id":%s,"result":{"userAgent":"CodexMateTests","codexHome":"/tmp/codexmate-tests"}}\n' "$request_id"
-        if [[ "$keep_running_until_stopped" == "1" ]]; then
+        read -r _ || exit 0
+        if [[ "$responds_to_rate_limits" == "1" ]]; then
+          rate_limits_request_count=0
+          while read -r request; do
+            rate_limits_request_count=$((rate_limits_request_count + 1))
+            if [[ "$emits_rate_limits_diagnostic" == "1" && "$rate_limits_request_count" == "1" ]]; then
+              printf '%s\n' 'rate-limit diagnostic' >&2
+            fi
+            if [[ "$rate_limits_request_count" == "1" && "$first_rate_limits_response_delay" != "0.0" ]]; then
+              sleep "$first_rate_limits_response_delay"
+            fi
+            request_id=$(printf '%s\n' "$request" | sed -n 's/.*"id":[[:space:]]*\\([0-9][0-9]*\\).*/\\1/p')
+            [[ -n "$request_id" ]] || exit 1
+            printf '{"jsonrpc":"2.0","id":%s,"result":{"rateLimits":{"primary":{"usedPercent":25,"windowDurationMins":10080,"resetsAt":2000000000},"secondary":null}}}\n' "$request_id"
+          done
+        elif [[ "$keep_running_until_stopped" == "1" ]]; then
           while read -r _; do
             :
           done
-        else
-          read -r _ || exit 0
         fi
         if [[ "$delayed_shutdown" != "0.0" ]]; then
           sleep "$delayed_shutdown"
