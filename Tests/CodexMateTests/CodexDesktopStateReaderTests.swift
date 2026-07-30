@@ -937,6 +937,102 @@ final class CodexDesktopStateReaderTests: XCTestCase {
         XCTAssertEqual(state?.hasActiveTask, true)
     }
 
+    func testSessionPendingStateSkipsLineLargerThanTailReadBudget() throws {
+        let tempDirectoryURL = FileManager.default.temporaryDirectory
+            .appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: tempDirectoryURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDirectoryURL) }
+
+        let sessionURL = tempDirectoryURL.appending(path: "thread-huge-compaction.jsonl")
+        try """
+        {"timestamp":"2026-07-30T12:39:18.086Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-1"}}
+
+        """.write(to: sessionURL, atomically: true, encoding: .utf8)
+
+        let handle = try FileHandle(forWritingTo: sessionURL)
+        defer { try? handle.close() }
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data(#"{"timestamp":"2026-07-30T12:47:28.244Z","type":"compacted","payload":{"message":""#.utf8))
+        let payloadChunk = Data(repeating: 0x78, count: 64 * 1024)
+        for _ in 0..<272 {
+            try handle.write(contentsOf: payloadChunk)
+        }
+        try handle.write(contentsOf: Data(#""}}"#.utf8))
+        try handle.write(contentsOf: Data("\n".utf8))
+        try handle.write(
+            contentsOf: Data(
+                #"{"timestamp":"2026-07-30T12:49:53.000Z","type":"event_msg","payload":{"type":"token_count"}}"#.utf8
+            )
+        )
+
+        let reader = CodexDesktopStateReader()
+        let state = reader.sessionPendingState(forSessionFileAt: sessionURL)
+
+        XCTAssertEqual(state?.hasActiveTask, true)
+    }
+
+    func testSessionPendingStateUpdatesCachedStateFromAppendedEvents() throws {
+        let tempDirectoryURL = FileManager.default.temporaryDirectory
+            .appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: tempDirectoryURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDirectoryURL) }
+
+        let sessionURL = tempDirectoryURL.appending(path: "thread-appending.jsonl")
+        try (
+            """
+            {"timestamp":"2026-07-30T12:39:18.086Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-1"}}
+            """
+            + "\n"
+        ).write(to: sessionURL, atomically: true, encoding: .utf8)
+
+        let reader = CodexDesktopStateReader()
+        XCTAssertEqual(
+            reader.sessionPendingState(forSessionFileAt: sessionURL),
+            .init(waitingForInput: false, needsApproval: false, hasActiveTask: true)
+        )
+
+        try appendSessionLine(
+            #"{"timestamp":"2026-07-30T12:40:00.000Z","type":"response_item","payload":{"type":"function_call","name":"request_user_input","call_id":"call-1","arguments":"{}"}}"#,
+            to: sessionURL
+        )
+        XCTAssertEqual(
+            reader.sessionPendingState(forSessionFileAt: sessionURL),
+            .init(waitingForInput: true, needsApproval: false, hasActiveTask: true)
+        )
+
+        try appendSessionLine(
+            #"{"timestamp":"2026-07-30T12:41:00.000Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call-1","output":"answer"}}"#,
+            to: sessionURL
+        )
+        XCTAssertEqual(
+            reader.sessionPendingState(forSessionFileAt: sessionURL),
+            .init(waitingForInput: false, needsApproval: false, hasActiveTask: true)
+        )
+
+        try appendSessionLine(
+            #"{"timestamp":"2026-07-30T12:42:00.000Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-1"}}"#,
+            to: sessionURL
+        )
+        XCTAssertEqual(
+            reader.sessionPendingState(forSessionFileAt: sessionURL),
+            .init(
+                waitingForInput: false,
+                needsApproval: false,
+                hasActiveTask: false,
+                latestTaskCompletedAt: date("2026-07-30T12:42:00.000Z")
+            )
+        )
+
+        try appendSessionLine(
+            #"{"timestamp":"2026-07-30T12:43:00.000Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-2"}}"#,
+            to: sessionURL
+        )
+        XCTAssertEqual(
+            reader.sessionPendingState(forSessionFileAt: sessionURL),
+            .init(waitingForInput: false, needsApproval: false, hasActiveTask: true)
+        )
+    }
+
     func testSnapshotUsesDesktopCommandExecutionApprovalToSuppressRunning() throws {
         let tempDirectoryURL = FileManager.default.temporaryDirectory
             .appending(path: UUID().uuidString)
@@ -1969,6 +2065,13 @@ final class CodexDesktopStateReaderTests: XCTestCase {
             .appending(path: String(format: "%02d", day), directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
         return directoryURL
+    }
+
+    private func appendSessionLine(_ line: String, to sessionURL: URL) throws {
+        let handle = try FileHandle(forWritingTo: sessionURL)
+        defer { try? handle.close() }
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data("\(line)\n".utf8))
     }
 
     private func date(_ value: String) -> Date {

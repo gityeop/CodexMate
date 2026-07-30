@@ -83,7 +83,7 @@ struct CodexDesktopStateReader {
         let latestTurnCompletedAtByThreadID: [String: Date]
     }
 
-    private enum SessionEvent {
+    enum SessionEvent {
         case taskStarted(turnID: String, collaborationModeKind: String?)
         case taskComplete(turnID: String, completedAt: Date?)
         case turnAborted(turnID: String, completedAt: Date?)
@@ -92,6 +92,86 @@ struct CodexDesktopStateReader {
         case userMessage
         case functionCall(name: String, callID: String, arguments: Any?)
         case functionCallOutput(callID: String)
+    }
+
+    struct SessionPendingContinuation: Equatable {
+        var unresolvedRequestUserInputCallIDs: Set<String> = []
+        var unresolvedApprovalCallIDs: Set<String> = []
+        var activeTaskIDs: Set<String> = []
+        var collaborationModeKindByTurnID: [String: String] = [:]
+        var waitingForPlanReply = false
+        var latestTaskCompletedAt: Date?
+
+        var state: SessionPendingState {
+            SessionPendingState(
+                waitingForInput: waitingForPlanReply || !unresolvedRequestUserInputCallIDs.isEmpty,
+                needsApproval: !unresolvedApprovalCallIDs.isEmpty,
+                hasActiveTask: !activeTaskIDs.isEmpty,
+                latestTaskCompletedAt: latestTaskCompletedAt
+            )
+        }
+
+        mutating func apply(_ event: SessionEvent) {
+            switch event {
+            case let .taskStarted(turnID, collaborationModeKind):
+                activeTaskIDs = [turnID]
+                unresolvedRequestUserInputCallIDs.removeAll()
+                unresolvedApprovalCallIDs.removeAll()
+                waitingForPlanReply = false
+                latestTaskCompletedAt = nil
+                collaborationModeKindByTurnID = [:]
+                if let collaborationModeKind {
+                    collaborationModeKindByTurnID[turnID] = collaborationModeKind
+                }
+            case let .taskComplete(turnID, completedAt):
+                latestTaskCompletedAt = CodexDesktopStateReader.latestDate(latestTaskCompletedAt, completedAt)
+                let collaborationModeKind = collaborationModeKindByTurnID[turnID]
+                activeTaskIDs.remove(turnID)
+                unresolvedRequestUserInputCallIDs.removeAll()
+                unresolvedApprovalCallIDs.removeAll()
+                collaborationModeKindByTurnID.removeValue(forKey: turnID)
+                waitingForPlanReply = collaborationModeKind == "plan"
+            case let .turnAborted(turnID, completedAt):
+                latestTaskCompletedAt = CodexDesktopStateReader.latestDate(latestTaskCompletedAt, completedAt)
+                activeTaskIDs.remove(turnID)
+                unresolvedRequestUserInputCallIDs.removeAll()
+                unresolvedApprovalCallIDs.removeAll()
+                collaborationModeKindByTurnID.removeValue(forKey: turnID)
+                waitingForPlanReply = false
+            case let .execApprovalRequest(callID):
+                unresolvedApprovalCallIDs.insert(callID)
+            case let .execCommandResolution(callID):
+                unresolvedApprovalCallIDs.remove(callID)
+            case .userMessage:
+                waitingForPlanReply = false
+            case let .functionCall(name, callID, _):
+                waitingForPlanReply = false
+                if name == "request_user_input" {
+                    unresolvedRequestUserInputCallIDs.insert(callID)
+                } else if name == "request_approval" || name == "requestApproval" {
+                    unresolvedApprovalCallIDs.insert(callID)
+                }
+            case let .functionCallOutput(callID):
+                waitingForPlanReply = false
+                unresolvedRequestUserInputCallIDs.remove(callID)
+                unresolvedApprovalCallIDs.remove(callID)
+            }
+        }
+    }
+
+    struct SessionPendingScanCheckpoint: Equatable {
+        var continuation: SessionPendingContinuation
+        var trailingLine = Data()
+        var isSkippingOversizedLine = false
+
+        init(continuation: SessionPendingContinuation = SessionPendingContinuation()) {
+            self.continuation = continuation
+        }
+    }
+
+    private struct SessionPendingTailScanResult {
+        let checkpoint: SessionPendingScanCheckpoint
+        let fileSize: Int
     }
 
     private struct SQLiteQuerySection {
@@ -1287,7 +1367,7 @@ struct CodexDesktopStateReader {
             }
 
             let sessionURL = URL(fileURLWithPath: rawPath)
-            let sessionModifiedAt = (try? sessionURL.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
+            let sessionModifiedAt = sessionFileMetadata(for: sessionURL).modificationDate
             let shortID = String(threadID.prefix(8))
             if shouldSkipSessionPendingStateRead(
                 context: context,
@@ -1378,91 +1458,76 @@ struct CodexDesktopStateReader {
     }
 
     func sessionPendingState(forSessionFileAt sessionURL: URL) -> SessionPendingState? {
-        let resourceValues = (try? sessionURL.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])) ?? URLResourceValues()
-        let modificationDate = resourceValues.contentModificationDate
-        let fileSize = resourceValues.fileSize
+        let metadata = sessionFileMetadata(for: sessionURL)
+        let modificationDate = metadata.modificationDate
+        let fileSize = metadata.fileSize
 
         if let cached = sessionPendingStateCache.value(for: sessionURL.path, modificationDate: modificationDate, fileSize: fileSize) {
             return cached
         }
 
-        guard let state = sessionPendingStateByScanningTail(forSessionFileAt: sessionURL) else {
-            return nil
+        if let fileSize,
+           let appendSource = sessionPendingStateCache.appendSource(for: sessionURL.path, fileSize: fileSize) {
+            guard let checkpoint = sessionPendingStateByReadingForward(
+                forSessionFileAt: sessionURL,
+                fromOffset: appendSource.offset,
+                toOffset: fileSize,
+                checkpoint: appendSource.checkpoint
+            ) else {
+                return nil
+            }
+
+            sessionPendingStateCache.store(
+                checkpoint,
+                for: sessionURL.path,
+                modificationDate: modificationDate,
+                fileSize: fileSize
+            )
+            return checkpoint.continuation.state
         }
 
-        sessionPendingStateCache.store(state, for: sessionURL.path, modificationDate: modificationDate, fileSize: fileSize)
-        return state
+        guard let scanResult = sessionPendingStateByScanningTail(forSessionFileAt: sessionURL) else {
+            return nil
+        }
+        let refreshedMetadata = sessionFileMetadata(for: sessionURL)
+        let cachedModificationDate = refreshedMetadata.fileSize == scanResult.fileSize
+            ? refreshedMetadata.modificationDate
+            : nil
+
+        sessionPendingStateCache.store(
+            scanResult.checkpoint,
+            for: sessionURL.path,
+            modificationDate: cachedModificationDate,
+            fileSize: scanResult.fileSize
+        )
+        return scanResult.checkpoint.continuation.state
+    }
+
+    private func sessionFileMetadata(for sessionURL: URL) -> (modificationDate: Date?, fileSize: Int?) {
+        guard let attributes = try? fileManager.attributesOfItem(atPath: sessionURL.path) else {
+            return (nil, nil)
+        }
+
+        let modificationDate = attributes[.modificationDate] as? Date
+        let fileSize = (attributes[.size] as? NSNumber)?.intValue
+        return (modificationDate, fileSize)
     }
 
     static func parseSessionPendingState(from contents: String) -> SessionPendingState {
-        var unresolvedRequestUserInputCallIDs: Set<String> = []
-        var unresolvedApprovalCallIDs: Set<String> = []
-        var activeTaskIDs: Set<String> = []
-        var collaborationModeKindByTurnID: [String: String] = [:]
-        var waitingForPlanReply = false
-        var latestTaskCompletedAt: Date?
+        var continuation = SessionPendingContinuation()
 
         for line in contents.split(whereSeparator: \.isNewline) {
             guard let event = sessionEvent(for: line) else {
                 continue
             }
 
-            switch event {
-            case let .taskStarted(turnID, collaborationModeKind):
-                // A thread only executes one turn at a time; a newer task start
-                // supersedes any orphaned active turn that never emitted completion.
-                activeTaskIDs = [turnID]
-                unresolvedRequestUserInputCallIDs.removeAll()
-                unresolvedApprovalCallIDs.removeAll()
-                waitingForPlanReply = false
-                collaborationModeKindByTurnID = [:]
-                if let collaborationModeKind {
-                    collaborationModeKindByTurnID[turnID] = collaborationModeKind
-                }
-            case let .taskComplete(turnID, completedAt):
-                latestTaskCompletedAt = Self.latestDate(latestTaskCompletedAt, completedAt)
-                let collaborationModeKind = collaborationModeKindByTurnID[turnID]
-                activeTaskIDs.remove(turnID)
-                unresolvedRequestUserInputCallIDs.removeAll()
-                unresolvedApprovalCallIDs.removeAll()
-                collaborationModeKindByTurnID.removeValue(forKey: turnID)
-                waitingForPlanReply = collaborationModeKind == "plan"
-            case let .turnAborted(turnID, completedAt):
-                latestTaskCompletedAt = Self.latestDate(latestTaskCompletedAt, completedAt)
-                activeTaskIDs.remove(turnID)
-                unresolvedRequestUserInputCallIDs.removeAll()
-                unresolvedApprovalCallIDs.removeAll()
-                collaborationModeKindByTurnID.removeValue(forKey: turnID)
-                waitingForPlanReply = false
-            case let .execApprovalRequest(callID):
-                unresolvedApprovalCallIDs.insert(callID)
-            case let .execCommandResolution(callID):
-                unresolvedApprovalCallIDs.remove(callID)
-            case .userMessage:
-                waitingForPlanReply = false
-            case let .functionCall(name, callID, _):
-                waitingForPlanReply = false
-                if name == "request_user_input" {
-                    unresolvedRequestUserInputCallIDs.insert(callID)
-                } else if name == "request_approval" || name == "requestApproval" {
-                    unresolvedApprovalCallIDs.insert(callID)
-                }
-            case let .functionCallOutput(callID):
-                waitingForPlanReply = false
-                unresolvedRequestUserInputCallIDs.remove(callID)
-                unresolvedApprovalCallIDs.remove(callID)
-            }
+            continuation.apply(event)
         }
 
-        return SessionPendingState(
-            waitingForInput: waitingForPlanReply || !unresolvedRequestUserInputCallIDs.isEmpty,
-            needsApproval: !unresolvedApprovalCallIDs.isEmpty,
-            hasActiveTask: !activeTaskIDs.isEmpty,
-            latestTaskCompletedAt: latestTaskCompletedAt
-        )
+        return continuation.state
     }
 
-    private func sessionPendingStateByScanningTail(forSessionFileAt sessionURL: URL) -> SessionPendingState? {
+    private func sessionPendingStateByScanningTail(forSessionFileAt sessionURL: URL) -> SessionPendingTailScanResult? {
         guard let handle = try? FileHandle(forReadingFrom: sessionURL) else {
             return nil
         }
@@ -1483,16 +1548,31 @@ struct CodexDesktopStateReader {
         var sawLaterPlanReplyClearer = false
         var latestTaskCompletedAt: Date?
 
-        func finalState(hasActiveTask: Bool) -> SessionPendingState {
-            SessionPendingState(
-                waitingForInput: waitingForPlanReply || !unresolvedRequestUserInputCallIDs.isEmpty,
-                needsApproval: !unresolvedApprovalCallIDs.isEmpty,
-                hasActiveTask: hasActiveTask,
-                latestTaskCompletedAt: latestTaskCompletedAt
+        func finalResult(
+            activeTurnID: String? = nil,
+            collaborationModeKind: String? = nil
+        ) -> SessionPendingTailScanResult {
+            var collaborationModeKindByTurnID: [String: String] = [:]
+            if let activeTurnID, let collaborationModeKind {
+                collaborationModeKindByTurnID[activeTurnID] = collaborationModeKind
+            }
+
+            return SessionPendingTailScanResult(
+                checkpoint: SessionPendingScanCheckpoint(
+                    continuation: SessionPendingContinuation(
+                        unresolvedRequestUserInputCallIDs: unresolvedRequestUserInputCallIDs,
+                        unresolvedApprovalCallIDs: unresolvedApprovalCallIDs,
+                        activeTaskIDs: activeTurnID.map { [$0] } ?? [],
+                        collaborationModeKindByTurnID: collaborationModeKindByTurnID,
+                        waitingForPlanReply: waitingForPlanReply,
+                        latestTaskCompletedAt: latestTaskCompletedAt
+                    )
+                ),
+                fileSize: Int(totalBytes)
             )
         }
 
-        func consume(_ line: String) -> SessionPendingState? {
+        func consume(_ line: String) -> SessionPendingTailScanResult? {
             guard let event = Self.sessionEvent(for: line) else {
                 return nil
             }
@@ -1501,26 +1581,29 @@ struct CodexDesktopStateReader {
                 if case let .taskStarted(turnID, collaborationModeKind) = event,
                    turnID == pendingCompletedTurnIDForPlanLookup {
                     waitingForPlanReply = collaborationModeKind == "plan"
-                    return finalState(hasActiveTask: false)
+                    return finalResult()
                 }
 
                 return nil
             }
 
             switch event {
-            case .taskStarted:
-                return finalState(hasActiveTask: true)
+            case let .taskStarted(turnID, collaborationModeKind):
+                return finalResult(
+                    activeTurnID: turnID,
+                    collaborationModeKind: collaborationModeKind
+                )
             case let .taskComplete(turnID, completedAt):
                 latestTaskCompletedAt = Self.latestDate(latestTaskCompletedAt, completedAt)
                 if sawLaterPlanReplyClearer {
-                    return finalState(hasActiveTask: false)
+                    return finalResult()
                 }
 
                 pendingCompletedTurnIDForPlanLookup = turnID
                 return nil
             case let .turnAborted(_, completedAt):
                 latestTaskCompletedAt = Self.latestDate(latestTaskCompletedAt, completedAt)
-                return finalState(hasActiveTask: false)
+                return finalResult()
             case let .execApprovalRequest(callID):
                 if !resolvedApprovalCallIDs.contains(callID) {
                     unresolvedApprovalCallIDs.insert(callID)
@@ -1552,11 +1635,17 @@ struct CodexDesktopStateReader {
             return nil
         }
 
-        while offset > 0 && scannedBytes < Self.sessionMaxTailReadSize {
-            let remainingTailBudget = Self.sessionMaxTailReadSize - scannedBytes
-            let chunkSize = min(Self.sessionReadChunkSize, offset, remainingTailBudget)
+        while offset > 0 && (scannedBytes < Self.sessionMaxTailReadSize || skippingOversizedLine) {
+            let chunkSize: Int
+            if skippingOversizedLine {
+                chunkSize = min(Self.sessionReadChunkSize, offset)
+            } else {
+                let remainingTailBudget = Self.sessionMaxTailReadSize - scannedBytes
+                chunkSize = min(Self.sessionReadChunkSize, offset, remainingTailBudget)
+            }
             offset -= chunkSize
 
+            let wasSkippingOversizedLine = skippingOversizedLine
             let segment: Data
             do {
                 try handle.seek(toOffset: UInt64(offset))
@@ -1564,8 +1653,10 @@ struct CodexDesktopStateReader {
                 if chunk.isEmpty {
                     continue
                 }
-                scannedBytes += chunk.count
-                if !skippingOversizedLine && !buffer.isEmpty {
+                if !wasSkippingOversizedLine {
+                    scannedBytes += chunk.count
+                }
+                if !wasSkippingOversizedLine && !buffer.isEmpty {
                     chunk.append(buffer)
                 }
                 segment = chunk
@@ -1575,19 +1666,23 @@ struct CodexDesktopStateReader {
 
             let split = Self.splitReverseJSONLLines(
                 in: segment,
-                skippingOversizedSuffix: skippingOversizedLine,
+                skippingOversizedSuffix: wasSkippingOversizedLine,
                 maxLineBytes: Self.sessionMaxLineReadSize
             )
             buffer = split.prefix
             skippingOversizedLine = split.skippingOversizedPrefix
+
+            if wasSkippingOversizedLine || skippingOversizedLine {
+                scannedBytes = 0
+            }
 
             for lineRange in split.lineRanges {
                 guard let line = Self.decodedJSONLine(from: segment.subdata(in: lineRange)) else {
                     continue
                 }
 
-                if let state = consume(line) {
-                    return state
+                if let result = consume(line) {
+                    return result
                 }
             }
         }
@@ -1595,11 +1690,92 @@ struct CodexDesktopStateReader {
         if offset == 0,
            !skippingOversizedLine,
            let line = Self.decodedJSONLine(from: buffer),
-           let state = consume(line) {
-            return state
+           let result = consume(line) {
+            return result
         }
 
-        return finalState(hasActiveTask: false)
+        return finalResult()
+    }
+
+    private func sessionPendingStateByReadingForward(
+        forSessionFileAt sessionURL: URL,
+        fromOffset: Int,
+        toOffset: Int,
+        checkpoint initialCheckpoint: SessionPendingScanCheckpoint
+    ) -> SessionPendingScanCheckpoint? {
+        guard let handle = try? FileHandle(forReadingFrom: sessionURL) else {
+            return nil
+        }
+
+        defer { try? handle.close() }
+
+        var checkpoint = initialCheckpoint
+        var offset = fromOffset
+
+        do {
+            try handle.seek(toOffset: UInt64(fromOffset))
+            while offset < toOffset {
+                let chunkSize = min(Self.sessionReadChunkSize, toOffset - offset)
+                guard let chunk = try handle.read(upToCount: chunkSize),
+                      !chunk.isEmpty else {
+                    return nil
+                }
+
+                Self.consumeForwardJSONLChunk(chunk, checkpoint: &checkpoint)
+                offset += chunk.count
+            }
+        } catch {
+            return nil
+        }
+
+        return checkpoint
+    }
+
+    private static func consumeForwardJSONLChunk(
+        _ chunk: Data,
+        checkpoint: inout SessionPendingScanCheckpoint
+    ) {
+        var segmentStart = chunk.startIndex
+
+        while segmentStart < chunk.endIndex {
+            let remaining = chunk[segmentStart...]
+            guard let newlineIndex = remaining.firstIndex(of: 0x0A) else {
+                appendForwardLineSegment(remaining, checkpoint: &checkpoint)
+                return
+            }
+
+            appendForwardLineSegment(
+                chunk[segmentStart..<newlineIndex],
+                checkpoint: &checkpoint
+            )
+
+            if !checkpoint.isSkippingOversizedLine,
+               let line = decodedJSONLine(from: checkpoint.trailingLine),
+               let event = sessionEvent(for: line) {
+                checkpoint.continuation.apply(event)
+            }
+
+            checkpoint.trailingLine.removeAll(keepingCapacity: true)
+            checkpoint.isSkippingOversizedLine = false
+            segmentStart = chunk.index(after: newlineIndex)
+        }
+    }
+
+    private static func appendForwardLineSegment(
+        _ segment: Data.SubSequence,
+        checkpoint: inout SessionPendingScanCheckpoint
+    ) {
+        guard !checkpoint.isSkippingOversizedLine else {
+            return
+        }
+
+        guard checkpoint.trailingLine.count + segment.count <= sessionMaxLineReadSize else {
+            checkpoint.trailingLine.removeAll(keepingCapacity: true)
+            checkpoint.isSkippingOversizedLine = true
+            return
+        }
+
+        checkpoint.trailingLine.append(contentsOf: segment)
     }
 
     private static func splitReverseJSONLLines(
@@ -1931,7 +2107,7 @@ final class SessionPendingStateCache {
     private struct Entry {
         let modificationDate: Date?
         let fileSize: Int?
-        let state: CodexDesktopStateReader.SessionPendingState
+        let checkpoint: CodexDesktopStateReader.SessionPendingScanCheckpoint
     }
 
     private var entries: [String: Entry] = [:]
@@ -1944,11 +2120,33 @@ final class SessionPendingStateCache {
             return nil
         }
 
-        return entry.state
+        return entry.checkpoint.continuation.state
     }
 
-    func store(_ state: CodexDesktopStateReader.SessionPendingState, for path: String, modificationDate: Date?, fileSize: Int?) {
-        entries[path] = Entry(modificationDate: modificationDate, fileSize: fileSize, state: state)
+    func appendSource(
+        for path: String,
+        fileSize: Int
+    ) -> (offset: Int, checkpoint: CodexDesktopStateReader.SessionPendingScanCheckpoint)? {
+        guard let entry = entries[path],
+              let cachedFileSize = entry.fileSize,
+              fileSize > cachedFileSize else {
+            return nil
+        }
+
+        return (cachedFileSize, entry.checkpoint)
+    }
+
+    func store(
+        _ checkpoint: CodexDesktopStateReader.SessionPendingScanCheckpoint,
+        for path: String,
+        modificationDate: Date?,
+        fileSize: Int?
+    ) {
+        entries[path] = Entry(
+            modificationDate: modificationDate,
+            fileSize: fileSize,
+            checkpoint: checkpoint
+        )
     }
 
     func prune(keepingPaths: Set<String>) {

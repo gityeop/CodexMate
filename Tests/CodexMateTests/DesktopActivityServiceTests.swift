@@ -214,6 +214,87 @@ final class DesktopActivityServiceTests: XCTestCase {
         XCTAssertEqual(update.runtimeSnapshot?.activeTurnCount, 0)
     }
 
+    func testLoadDoesNotCarryCachedCompletionIntoNewActiveTurn() async throws {
+        let tempDirectoryURL = FileManager.default.temporaryDirectory
+            .appending(path: UUID().uuidString, directoryHint: .isDirectory)
+        let logsDirectoryURL = tempDirectoryURL.appending(path: "desktop-logs", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: logsDirectoryURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDirectoryURL) }
+
+        let databaseURL = tempDirectoryURL.appending(path: "state.sqlite")
+        try createStateDatabase(
+            at: databaseURL,
+            sql: """
+            CREATE TABLE threads (
+                id TEXT PRIMARY KEY,
+                first_user_message TEXT NOT NULL DEFAULT '',
+                title TEXT NOT NULL DEFAULT '',
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                cwd TEXT NOT NULL,
+                rollout_path TEXT,
+                archived INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE TABLE logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                process_uuid TEXT,
+                target TEXT,
+                message TEXT,
+                ts INTEGER NOT NULL,
+                ts_nanos INTEGER NOT NULL DEFAULT 0,
+                thread_id TEXT
+            );
+            INSERT INTO threads (id, first_user_message, title, created_at, updated_at, cwd, rollout_path, archived)
+            VALUES ('thread-1', 'Preview', 'Thread 1', 90, 120, '/tmp/project', NULL, 0);
+            """
+        )
+
+        let sessionURL = tempDirectoryURL.appending(path: "thread-1.jsonl")
+        try (
+            """
+            {"timestamp":"1970-01-01T00:01:40.000Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-1"}}
+            {"timestamp":"1970-01-01T00:01:50.000Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-1","completed_at":110}}
+            """
+            + "\n"
+        ).write(to: sessionURL, atomically: true, encoding: .utf8)
+
+        let service = DesktopActivityService(
+            stateReader: CodexDesktopStateReader(
+                now: { Date(timeIntervalSince1970: 130) },
+                stateDatabaseURLOverride: databaseURL
+            ),
+            conversationActivityReader: CodexDesktopConversationActivityReader(
+                logsDirectoryURL: logsDirectoryURL,
+                lookbackDays: 1
+            )
+        )
+
+        let completedUpdate = await service.load(
+            candidateSessionPaths: ["thread-1": sessionURL.path],
+            now: Date(timeIntervalSince1970: 130)
+        )
+        XCTAssertEqual(
+            completedUpdate.runtimeSnapshot?.latestTurnCompletedAtByThreadID["thread-1"],
+            Date(timeIntervalSince1970: 110)
+        )
+
+        try appendSessionLine(
+            #"{"timestamp":"1970-01-01T00:02:00.000Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-2"}}"#,
+            to: sessionURL
+        )
+
+        let activeUpdate = await service.load(
+            candidateSessionPaths: ["thread-1": sessionURL.path],
+            now: Date(timeIntervalSince1970: 130)
+        )
+
+        XCTAssertEqual(activeUpdate.runtimeSnapshot?.runningThreadIDs, ["thread-1"])
+        XCTAssertEqual(activeUpdate.runtimeSnapshot?.sessionBackedRunningThreadIDs, ["thread-1"])
+        XCTAssertEqual(activeUpdate.runtimeSnapshot?.activeTurnCount, 1)
+        XCTAssertNil(activeUpdate.runtimeSnapshot?.latestTurnCompletedAtByThreadID["thread-1"])
+        XCTAssertNil(activeUpdate.latestTurnCompletedAtByThreadID["thread-1"])
+    }
+
     func testLoadPassesThroughDesktopArchiveAndUnarchiveHints() async throws {
         let tempDirectoryURL = FileManager.default.temporaryDirectory
             .appending(path: UUID().uuidString, directoryHint: .isDirectory)
@@ -423,6 +504,13 @@ final class DesktopActivityServiceTests: XCTestCase {
             XCTFail(errorMessage)
             return
         }
+    }
+
+    private func appendSessionLine(_ line: String, to sessionURL: URL) throws {
+        let handle = try FileHandle(forWritingTo: sessionURL)
+        defer { try? handle.close() }
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data("\(line)\n".utf8))
     }
 
     private func date(_ value: String) -> Date? {
