@@ -3,19 +3,20 @@
     <channel>
         <title>CodexMate</title>
         <item>
-            <title>0.0.52</title>
-            <pubDate>Wed, 29 Jul 2026 12:33:04 +0900</pubDate>
-            <link>https://github.com/gityeop/CodexMate/releases/tag/v0.0.52</link>
-            <sparkle:version>52</sparkle:version>
-            <sparkle:shortVersionString>0.0.52</sparkle:shortVersionString>
+            <title>0.0.53</title>
+            <pubDate>Fri, 31 Jul 2026 00:31:49 +0900</pubDate>
+            <link>https://github.com/gityeop/CodexMate/releases/tag/v0.0.53</link>
+            <sparkle:version>53</sparkle:version>
+            <sparkle:shortVersionString>0.0.53</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description sparkle:format="markdown"><![CDATA[# CodexMate 0.0.52
+            <description sparkle:format="markdown"><![CDATA[# CodexMate 0.0.53
 
-- Makes weekly usage refreshes more resilient to temporary Codex app-server delays.
-- Adds request timing and app-server diagnostics for investigating weekly usage failures.
+- Keeps live thread status icons accurate when a new task starts after a completed turn.
+- Speeds up status refreshes for large thread histories by incrementally reading newly appended session events.
+- Skips oversized compaction records without losing nearby task state.
 ]]></description>
-            <enclosure url="https://github.com/gityeop/CodexMate/releases/latest/download/CodexMate-0.0.52.zip" length="4141523" type="application/octet-stream" sparkle:edSignature="qMgTqoVUda2PPi9SCxYY/LsSZH5iqi0XiDRA8CXdXJDNifjSoy49/qHxH9pmHcs+4VlpMHo3YnGRxKJTiXojBw=="/>
+            <enclosure url="https://github.com/gityeop/CodexMate/releases/latest/download/CodexMate-0.0.53.zip" length="4148828" type="application/octet-stream" sparkle:edSignature="F2wtS954VvUZmzJUgU9spnJ9PSgicSkwL6O8eoyipX+5pUxdXrwLvR+MiSYsYC7v9C8/I2Q6izj+PioieNNVBA=="/>
         </item>
     </channel>
 </rss>
