@@ -928,19 +928,13 @@ private final class NotchWeeklyUsageIndicatorView: NSView {
     }
 
     private var valueColor: NSColor {
-        if presentation.showsError {
-            return .systemRed
-        }
-
         return presentation.remainingPercent == nil
             ? NSColor(calibratedWhite: 1, alpha: 0.52)
             : NSColor(calibratedWhite: 1, alpha: 0.88)
     }
 
     private var detailColor: NSColor {
-        presentation.showsError
-            ? .systemRed
-            : NSColor(calibratedWhite: 1, alpha: 0.52)
+        NSColor(calibratedWhite: 1, alpha: 0.52)
     }
 
     private func configureLabel(

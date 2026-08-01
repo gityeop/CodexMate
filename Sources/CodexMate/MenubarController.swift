@@ -171,6 +171,7 @@ struct MenubarControllerEffects: Equatable {
     var shouldRequestDesktopActivityRefresh = false
     var shouldRequestDesktopActivityAfterThreadRefresh = false
     var shouldBoostThreadDiscovery = false
+    var didChangeThreadReadMarkers = false
 }
 
 struct MenubarThreadSnapshot: Equatable, Identifiable {
@@ -571,9 +572,11 @@ final class MenubarController {
                 effects.diagnostics.append(diagnostic)
             }
         }
+        let completionTrackingThreadIDs = Set(trackedThreads.map(\.id))
+            .union(Set(state.recentThreads.map(\.id)))
         let trackedCompletionHintThreadIDs = Set(update.latestTurnCompletedAtByThreadID.keys)
-            .intersection(Set(state.recentThreads.map(\.id)))
-        armUnreadTracking(for: trackedCompletionHintThreadIDs)
+            .intersection(completionTrackingThreadIDs)
+        effects.didChangeThreadReadMarkers = armUnreadTracking(for: trackedCompletionHintThreadIDs)
         state.apply(desktopCompletionHints: update.latestTurnCompletedAtByThreadID)
 
         let archivedThreadIDs = desktopArchiveHintThreadIDs(
@@ -590,7 +593,9 @@ final class MenubarController {
             effects.diagnostics.append(diagnostic)
         }
 
-        synchronizeThreadReadMarkers(from: update.latestViewedAtByThreadID)
+        effects.didChangeThreadReadMarkers =
+            synchronizeThreadReadMarkers(from: update.latestViewedAtByThreadID)
+            || effects.didChangeThreadReadMarkers
 
         if !threadIDsToSeed.isEmpty {
             pendingDiscoveredThreads.recordRetryAttempt(for: threadIDsToSeed, now: activityObservedAt)
@@ -648,15 +653,19 @@ final class MenubarController {
         return candidateRows
     }
 
-    func apply(notification: AppStateStore.NotificationEvent) {
+    @discardableResult
+    func apply(notification: AppStateStore.NotificationEvent) -> Bool {
+        var didChangeThreadReadMarkers = false
         if let threadID = notification.unreadTrackingThreadID {
-            armUnreadTracking(for: [threadID])
+            didChangeThreadReadMarkers = armUnreadTracking(for: [threadID])
         }
         state.apply(notification: notification)
 
         if let threadID = notification.discoveredThreadID {
             _ = pendingDiscoveredThreads.observe([threadID], now: now())
         }
+
+        return didChangeThreadReadMarkers
     }
 
     func refreshThreadMetadata(threadIDs: Set<String>) async -> MenubarControllerEffects {
@@ -796,10 +805,14 @@ final class MenubarController {
         return didChange
     }
 
-    private func armUnreadTracking(for threadIDs: Set<String>) {
+    private func armUnreadTracking(for threadIDs: Set<String>) -> Bool {
+        var didChange = false
         for threadID in threadIDs {
-            _ = threadReadMarkers.armUnreadTrackingIfNeeded(threadID: threadID)
+            if threadReadMarkers.armUnreadTrackingIfNeeded(threadID: threadID) {
+                didChange = true
+            }
         }
+        return didChange
     }
 
     private func shouldMarkResumePayloadRead(previousRow: AppStateStore.ThreadRow?, threadID: String) -> Bool {
@@ -886,17 +899,21 @@ final class MenubarController {
         }
     }
 
-    private func synchronizeThreadReadMarkers(from latestViewedAtByThreadID: [String: Date]) {
-        guard !latestViewedAtByThreadID.isEmpty else { return }
+    private func synchronizeThreadReadMarkers(from latestViewedAtByThreadID: [String: Date]) -> Bool {
+        guard !latestViewedAtByThreadID.isEmpty else { return false }
 
+        var didChange = false
         for thread in state.recentThreads {
             let viewedAt = latestViewedAtByThreadID[thread.id]
-            _ = threadReadMarkers.markReadIfViewedAfterLastTerminalActivity(
+            if threadReadMarkers.markReadIfViewedAfterLastTerminalActivity(
                 threadID: thread.id,
                 lastTerminalActivityAt: thread.lastTerminalActivityAt,
                 viewedAt: viewedAt
-            )
+            ) {
+                didChange = true
+            }
         }
+        return didChange
     }
 
     private func desktopArchiveHintThreadIDs(

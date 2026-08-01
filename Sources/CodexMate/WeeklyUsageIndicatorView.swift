@@ -5,7 +5,6 @@ struct WeeklyUsageIndicatorPresentation: Equatable {
     let valueText: String
     let detailText: String?
     let remainingPercent: Int?
-    let showsError: Bool
 }
 
 @MainActor
@@ -32,17 +31,12 @@ final class WeeklyUsageIndicatorView: NSView {
 
     let remainingPercent: Int?
     let resetsAt: Date?
-    let errorMessage: String?
 
     var titleText: String {
         strings.text("menu.weeklyUsage.title", language: language)
     }
 
     var valueText: String {
-        if errorMessage != nil {
-            return strings.text("menu.weeklyUsage.error", language: language)
-        }
-
         guard let remainingPercent else {
             return strings.text("menu.weeklyUsage.loading", language: language)
         }
@@ -55,10 +49,6 @@ final class WeeklyUsageIndicatorView: NSView {
     }
 
     var detailText: String? {
-        if let errorMessage {
-            return errorMessage
-        }
-
         guard let resetsAt else {
             return nil
         }
@@ -81,8 +71,7 @@ final class WeeklyUsageIndicatorView: NSView {
             titleText: titleText,
             valueText: valueText,
             detailText: detailText,
-            remainingPercent: remainingPercent,
-            showsError: errorMessage != nil
+            remainingPercent: remainingPercent
         )
     }
 
@@ -110,9 +99,13 @@ final class WeeklyUsageIndicatorView: NSView {
         strings: AppStrings = .shared,
         timeZone: TimeZone = .autoupdatingCurrent
     ) {
-        self.remainingPercent = remainingPercent.map { min(max($0, 0), 100) }
-        self.resetsAt = resetsAt
-        self.errorMessage = errorMessage
+        if errorMessage == nil {
+            self.remainingPercent = remainingPercent.map { min(max($0, 0), 100) }
+            self.resetsAt = resetsAt
+        } else {
+            self.remainingPercent = nil
+            self.resetsAt = nil
+        }
         self.language = language
         self.strings = strings
 
@@ -138,9 +131,7 @@ final class WeeklyUsageIndicatorView: NSView {
             valueLabel,
             text: valueText,
             font: NSFont.systemFont(ofSize: 13, weight: .semibold),
-            color: errorMessage == nil
-                ? (remainingPercent == nil ? .secondaryLabelColor : .labelColor)
-                : .systemRed,
+            color: self.remainingPercent == nil ? .secondaryLabelColor : .labelColor,
             alignment: .right,
             lineBreakMode: .byClipping
         )
@@ -148,7 +139,7 @@ final class WeeklyUsageIndicatorView: NSView {
             detailLabel,
             text: detailText ?? "",
             font: NSFont.systemFont(ofSize: 10.5),
-            color: errorMessage == nil ? .secondaryLabelColor : .systemRed,
+            color: .secondaryLabelColor,
             alignment: .left,
             lineBreakMode: .byTruncatingTail
         )

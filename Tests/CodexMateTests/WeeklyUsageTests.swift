@@ -136,21 +136,18 @@ final class WeeklyUsageIndicatorViewTests: XCTestCase {
         XCTAssertEqual(view.accessibilityText, "Weekly usage, Loading…")
     }
 
-    func testFailurePresentationExposesOriginalErrorMessage() {
+    func testFailurePresentationLooksLikeLoading() {
         let errorMessage = "Codex RPC error -32000: authentication required"
         let view = WeeklyUsageIndicatorView(
             remainingPercent: nil,
             resetsAt: nil,
             errorMessage: errorMessage,
-            language: .english
+            language: .korean
         )
 
-        XCTAssertEqual(view.valueText, "Error")
-        XCTAssertEqual(view.detailText, errorMessage)
-        XCTAssertEqual(
-            view.accessibilityText,
-            "Weekly usage, Error, \(errorMessage)"
-        )
+        XCTAssertEqual(view.valueText, "불러오는 중…")
+        XCTAssertNil(view.detailText)
+        XCTAssertEqual(view.accessibilityText, "주간 사용량, 불러오는 중…")
     }
 
     func testUsesNativeStatusColorsAtRemainingThresholds() {

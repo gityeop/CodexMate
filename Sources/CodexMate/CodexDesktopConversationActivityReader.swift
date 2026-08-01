@@ -428,7 +428,8 @@ final class CodexDesktopConversationActivityReader {
                let timestamp = parseTimestamp(String(timestampToken)),
                let threadID = threadIDToken(in: line),
                threadID != "null" {
-                if line.contains("Conversation created") {
+                if line.contains("Conversation created")
+                    || line.contains("thread_stream_view_activity_changed active=true") {
                     let currentLatestViewed = latestViewedAtByThreadID[threadID] ?? .distantPast
                     if timestamp > currentLatestViewed {
                         latestViewedAtByThreadID[threadID] = timestamp
@@ -447,47 +448,49 @@ final class CodexDesktopConversationActivityReader {
                 }
             }
 
-            // Recent Codex desktop builds do not consistently emit thread/resume when a thread is opened,
-            // but routed requests with a concrete conversationId still indicate the user is inside that thread.
+            // A routed thread/resume request is an explicit navigation signal. Other conversation-scoped
+            // requests can be emitted for background work and must not clear unread state.
             guard line.contains("response_routed"),
                   let threadID = tokenValue(for: "conversationId=", in: line),
                   threadID != "null",
                   let method = tokenValue(for: "method=", in: line),
                   let timestampToken = line.split(separator: " ", maxSplits: 1).first,
-                  let viewedAt = parseTimestamp(String(timestampToken)) else {
+                  let eventAt = parseTimestamp(String(timestampToken)) else {
                 continue
             }
 
-            let currentLatest = latestViewedAtByThreadID[threadID] ?? .distantPast
-            if viewedAt > currentLatest {
-                latestViewedAtByThreadID[threadID] = viewedAt
+            if method == "thread/resume" {
+                let currentLatest = latestViewedAtByThreadID[threadID] ?? .distantPast
+                if eventAt > currentLatest {
+                    latestViewedAtByThreadID[threadID] = eventAt
+                }
             }
 
             if method == "thread/archive" {
                 let currentLatestArchive = latestArchiveRequestedAtByThreadID[threadID] ?? .distantPast
-                if viewedAt > currentLatestArchive {
-                    latestArchiveRequestedAtByThreadID[threadID] = viewedAt
+                if eventAt > currentLatestArchive {
+                    latestArchiveRequestedAtByThreadID[threadID] = eventAt
                 }
             }
 
             if method == "thread/unarchive" {
                 let currentLatestUnarchive = latestUnarchiveRequestedAtByThreadID[threadID] ?? .distantPast
-                if viewedAt > currentLatestUnarchive {
-                    latestUnarchiveRequestedAtByThreadID[threadID] = viewedAt
+                if eventAt > currentLatestUnarchive {
+                    latestUnarchiveRequestedAtByThreadID[threadID] = eventAt
                 }
             }
 
             if method == "turn/start" {
                 let currentLatestTurnStart = latestTurnStartedAtByThreadID[threadID] ?? .distantPast
-                if viewedAt > currentLatestTurnStart {
-                    latestTurnStartedAtByThreadID[threadID] = viewedAt
+                if eventAt > currentLatestTurnStart {
+                    latestTurnStartedAtByThreadID[threadID] = eventAt
                 }
             }
 
             if method == "turn/interrupt" {
                 let currentLatestCompleted = latestTurnCompletedAtByThreadID[threadID] ?? .distantPast
-                if viewedAt > currentLatestCompleted {
-                    latestTurnCompletedAtByThreadID[threadID] = viewedAt
+                if eventAt > currentLatestCompleted {
+                    latestTurnCompletedAtByThreadID[threadID] = eventAt
                 }
             }
         }
@@ -511,6 +514,7 @@ final class CodexDesktopConversationActivityReader {
         }
 
         if line.contains("Conversation created")
+            || line.contains("thread_stream_view_activity_changed")
             || line.contains("maybe_resume_success")
             || line.contains("[desktop-notifications] show turn-complete")
             || line.contains("app-server event: turn/completed") {

@@ -55,8 +55,7 @@ final class NotchStatusOverlayKeyboardNavigationTests: XCTestCase {
                     titleText: "주간 사용량",
                     valueText: "87% 남음",
                     detailText: "초기화: 7월 29일 오전 2:06",
-                    remainingPercent: 87,
-                    showsError: false
+                    remainingPercent: 87
                 )
             ),
             .header("Pinned | 스레드 1개"),

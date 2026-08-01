@@ -666,8 +666,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             agentNickname: "QA Teammate"
         )
 
-        controller.apply(notification: .threadStarted(ThreadStartedNotification(thread: mainThread)))
-        controller.apply(notification: .threadStarted(ThreadStartedNotification(thread: subagentThread)))
+        applyNotification(.threadStarted(ThreadStartedNotification(thread: mainThread)))
+        applyNotification(.threadStarted(ThreadStartedNotification(thread: subagentThread)))
         renderMenu()
         debugLog("notification QA scheduled main=\(mainThreadID) subagent=\(subagentThreadID)")
 
@@ -680,8 +680,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func completeNotificationQAThread(threadID: String, turnID: String) {
-        controller.apply(
-            notification: .turnCompleted(
+        applyNotification(
+            .turnCompleted(
                 TurnCompletedNotification(
                     threadId: threadID,
                     turn: CodexTurn(id: turnID, status: .completed, error: nil)
@@ -872,7 +872,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case "thread/started":
             decodeAndApply(payload, as: ThreadStartedNotification.self) { [weak self] notification in
                 guard let self else { return }
-                controller.apply(notification: .threadStarted(notification))
+                applyNotification(.threadStarted(notification))
                 debugLog("received thread/started thread=\(shortThreadID(notification.thread.id))")
                 trackActivityThread(
                     notification.thread.id,
@@ -883,20 +883,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case "thread/status/changed":
             decodeAndApply(payload, as: ThreadStatusChangedNotification.self) { [weak self] notification in
                 guard let self else { return }
-                controller.apply(notification: .threadStatusChanged(notification))
+                applyNotification(.threadStatusChanged(notification))
                 trackActivityThread(notification.threadId)
             }
         case "thread/archived":
             decodeAndApply(payload, as: ThreadArchivedNotification.self) { [weak self] notification in
                 guard let self else { return }
-                controller.apply(notification: .threadArchived(notification))
+                applyNotification(.threadArchived(notification))
                 armFastThreadDiscoveryRefreshWindow()
                 requestThreadRefresh()
             }
         case "thread/unarchived":
             decodeAndApply(payload, as: ThreadUnarchivedNotification.self) { [weak self] notification in
                 guard let self else { return }
-                controller.apply(notification: .threadUnarchived(notification))
+                applyNotification(.threadUnarchived(notification))
                 trackActivityThread(
                     notification.threadId,
                     boostDiscovery: true,
@@ -906,13 +906,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case "thread/name/updated":
             decodeAndApply(payload, as: ThreadNameUpdatedNotification.self) { [weak self] notification in
                 guard let self else { return }
-                controller.apply(notification: .threadNameUpdated(notification))
+                applyNotification(.threadNameUpdated(notification))
                 trackActivityThread(notification.threadId)
             }
         case "turn/started":
             decodeAndApply(payload, as: TurnStartedNotification.self) { [weak self] notification in
                 guard let self else { return }
-                controller.apply(notification: .turnStarted(notification))
+                applyNotification(.turnStarted(notification))
                 trackActivityThread(
                     notification.threadId,
                     boostDiscovery: true,
@@ -922,13 +922,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case "item/started":
             decodeAndApply(payload, as: ItemStartedNotification.self) { [weak self] notification in
                 guard let self else { return }
-                controller.apply(notification: .itemStarted(notification))
+                applyNotification(.itemStarted(notification))
                 trackActivityThread(notification.threadId)
             }
         case "turn/completed":
             decodeAndApply(payload, as: TurnCompletedNotification.self) { [weak self] notification in
                 guard let self else { return }
-                controller.apply(notification: .turnCompleted(notification))
+                applyNotification(.turnCompleted(notification))
                 trackActivityThread(
                     notification.threadId,
                     requestThreadMetadataRefresh: true
@@ -946,7 +946,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case "error":
             decodeAndApply(payload, as: ErrorNotificationPayload.self) { [weak self] notification in
                 guard let self else { return }
-                controller.apply(notification: .error(notification))
+                applyNotification(.error(notification))
                 trackActivityThread(notification.threadId, requestThreadMetadataRefresh: true)
                 requestDesktopActivityRefresh()
 
@@ -962,7 +962,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case "serverRequest/resolved":
             decodeAndApply(payload, as: ServerRequestResolvedNotification.self) { [weak self] notification in
                 guard let self else { return }
-                controller.apply(notification: .serverRequestResolved(notification))
+                applyNotification(.serverRequestResolved(notification))
                 trackActivityThread(notification.threadId)
             }
         case "thread/closed":
@@ -1962,6 +1962,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    private func applyNotification(_ notification: AppStateStore.NotificationEvent) {
+        if controller.apply(notification: notification) {
+            persistThreadReadMarkers()
+        }
+    }
+
     private func persistThreadReadMarkers() {
         UserDefaults.standard.set(controller.persistedThreadReadMarkers, forKey: DefaultsKey.threadReadMarkers)
     }
@@ -1993,6 +1999,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func applyControllerEffects(_ effects: MenubarControllerEffects) {
         for diagnostic in effects.diagnostics {
             debugLog(diagnostic)
+        }
+
+        if effects.didChangeThreadReadMarkers {
+            persistThreadReadMarkers()
         }
 
         if effects.shouldBoostThreadDiscovery {

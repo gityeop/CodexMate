@@ -2,7 +2,7 @@ import XCTest
 @testable import CodexMate
 
 final class CodexDesktopConversationActivityReaderTests: XCTestCase {
-    func testLatestViewedAtByThreadIDParsesRecentConversationScopedResponseRoutedEvents() throws {
+    func testLatestViewedAtByThreadIDOnlyUsesExplicitThreadViewEvents() throws {
         let tempDirectoryURL = FileManager.default.temporaryDirectory
             .appending(path: UUID().uuidString)
         try FileManager.default.createDirectory(at: tempDirectoryURL, withIntermediateDirectories: true)
@@ -34,6 +34,8 @@ final class CodexDesktopConversationActivityReaderTests: XCTestCase {
         2026-03-11T12:21:00.000Z info [ElectronAppServerConnection] response_routed broadcastFallback=false conversationId=thread-7 durationMs=1 errorCode=null hadInternalHandler=false hadPending=true method=thread/archive originWebcontentsId=1 requestId=h targetDestroyed=false
         2026-03-11T12:21:30.000Z info [ElectronAppServerConnection] response_routed broadcastFallback=false conversationId=thread-8 durationMs=1 errorCode=null hadInternalHandler=false hadPending=true method=thread/archive originWebcontentsId=1 requestId=i targetDestroyed=false
         2026-03-11T12:22:00.000Z info [ElectronAppServerConnection] response_routed broadcastFallback=false conversationId=thread-8 durationMs=1 errorCode=null hadInternalHandler=false hadPending=true method=thread/unarchive originWebcontentsId=1 requestId=j targetDestroyed=false
+        2026-03-11T12:22:30.000Z info [electron-message-handler] thread_stream_view_activity_changed active=false conversationId=thread-9 rendererWindowFocused=true rendererWindowVisible=true
+        2026-03-11T12:22:31.000Z info [electron-message-handler] thread_stream_view_activity_changed active=true conversationId=thread-9 rendererWindowFocused=true rendererWindowVisible=true
         """.write(to: secondLogURL, atomically: true, encoding: .utf8)
 
         let reader = CodexDesktopConversationActivityReader(
@@ -47,10 +49,11 @@ final class CodexDesktopConversationActivityReaderTests: XCTestCase {
 
         XCTAssertEqual(snapshot.latestViewedAtByThreadID["thread-1"], date("2026-03-11T12:17:11.346Z"))
         XCTAssertEqual(snapshot.latestViewedAtByThreadID["thread-2"], date("2026-03-11T12:09:16.169Z"))
-        XCTAssertEqual(snapshot.latestViewedAtByThreadID["thread-3"], date("2026-03-11T12:19:13.511Z"))
-        XCTAssertEqual(snapshot.latestViewedAtByThreadID["thread-4"], date("2026-03-11T12:20:00.000Z"))
-        XCTAssertEqual(snapshot.latestViewedAtByThreadID["thread-5"], date("2026-03-11T12:20:01.000Z"))
+        XCTAssertNil(snapshot.latestViewedAtByThreadID["thread-3"])
+        XCTAssertNil(snapshot.latestViewedAtByThreadID["thread-4"])
+        XCTAssertNil(snapshot.latestViewedAtByThreadID["thread-5"])
         XCTAssertEqual(snapshot.latestViewedAtByThreadID["thread-6"], date("2026-03-11T12:20:02.000Z"))
+        XCTAssertEqual(snapshot.latestViewedAtByThreadID["thread-9"], date("2026-03-11T12:22:31.000Z"))
         XCTAssertEqual(snapshot.latestTurnStartedAtByThreadID["thread-3"], date("2026-03-11T12:19:13.511Z"))
         XCTAssertNil(snapshot.latestTurnCompletedAtByThreadID["thread-1"])
         XCTAssertNil(snapshot.latestTurnCompletedAtByThreadID["thread-2"])
@@ -222,6 +225,7 @@ final class CodexDesktopConversationActivityReaderTests: XCTestCase {
         2026-03-11T12:17:12.000Z info [ElectronAppServerConnection] response_routed broadcastFallback=false conversationId=thread-2 durationMs=157 errorCode=null hadInternalHandler=false hadPending=true method=turn/start originWebcontentsId=1 requestId=b targetDestroyed=false
         2026-03-11T12:17:13.000Z info [electron-message-handler] [desktop-notifications] show turn-complete conversationId=thread-2 turnId=turn-1
         2026-03-11T12:17:14.000Z info [ElectronAppServerConnection] response_routed broadcastFallback=false conversationId=thread-2 durationMs=157 errorCode=null hadInternalHandler=false hadPending=true method=thread/archive originWebcontentsId=1 requestId=c targetDestroyed=false
+        2026-03-11T12:17:15.000Z info [electron-message-handler] thread_stream_view_activity_changed active=true conversationId=thread-2 rendererWindowFocused=true rendererWindowVisible=true
         """
         if let handle = try? FileHandle(forWritingTo: logURL) {
             handle.seekToEndOfFile()
@@ -234,7 +238,7 @@ final class CodexDesktopConversationActivityReaderTests: XCTestCase {
         let secondSnapshot = reader.activitySnapshot(
             now: Date(timeIntervalSince1970: 1_773_195_200)
         )
-        XCTAssertEqual(secondSnapshot.latestViewedAtByThreadID["thread-2"], date("2026-03-11T12:17:14.000Z"))
+        XCTAssertEqual(secondSnapshot.latestViewedAtByThreadID["thread-2"], date("2026-03-11T12:17:15.000Z"))
         XCTAssertEqual(secondSnapshot.latestTurnStartedAtByThreadID["thread-2"], date("2026-03-11T12:17:12.000Z"))
         XCTAssertEqual(secondSnapshot.latestTurnCompletedAtByThreadID["thread-2"], date("2026-03-11T12:17:13.000Z"))
         XCTAssertEqual(secondSnapshot.latestArchiveRequestedAtByThreadID["thread-2"], date("2026-03-11T12:17:14.000Z"))

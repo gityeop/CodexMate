@@ -555,9 +555,61 @@ final class MenubarControllerIntegrationTests: XCTestCase {
         let threadSnapshot = snapshot.projectSections.first?.threads.first
 
         XCTAssertTrue(effects.shouldRequestThreadRefresh)
+        XCTAssertTrue(effects.didChangeThreadReadMarkers)
         XCTAssertEqual(threadSnapshot?.thread.displayStatus, .idle)
         XCTAssertTrue(threadSnapshot?.hasUnreadContent ?? false)
         XCTAssertTrue(snapshot.hasUnreadThreads)
+    }
+
+    func testCompletionHintArmsUnreadWhenThreadDisappearsDuringDesktopRead() async throws {
+        let completedAt = Date(timeIntervalSince1970: 200)
+        let desktopActivityLoader = SuspendedDesktopActivityLoader(
+            update: desktopUpdate(
+                latestCompleted: ["thread-a": completedAt]
+            )
+        )
+        let controller = MenubarController(
+            desktopActivityLoader: desktopActivityLoader,
+            recentThreadListing: FakeRecentThreadListing(
+                responses: [[thread(id: "thread-a", updatedAt: 100, cwd: "/tmp/A/work")]]
+            ),
+            threadMetadataReader: FakeThreadMetadataReader(results: []),
+            projectCatalogLoader: FakeProjectCatalogLoader(
+                results: [
+                    .success(
+                        CodexDesktopProjectCatalog(workspaceRoots: [
+                            .init(path: "/tmp/A", displayName: "A")
+                        ])
+                    )
+                ]
+            ),
+            initialThreadReadMarkers: [:],
+            configuration: MenubarControllerConfiguration(
+                initialFetchLimit: 32,
+                maxTrackedThreads: 256,
+                projectLimit: 5,
+                visibleThreadLimit: 8,
+                authoritativeListOmissionGraceCount: 2,
+                maxPendingDiscoveredThreads: 64,
+                pendingDiscoveredThreadTTL: 120,
+                threadReadMarkerRetentionSeconds: 30 * 24 * 60 * 60
+            )
+        )
+
+        try await controller.loadInitialThreads()
+        controller.setConnection(.connected(binaryPath: "/tmp/codex"))
+
+        let refreshTask = Task { @MainActor in
+            await controller.refreshDesktopActivity()
+        }
+        await desktopActivityLoader.waitUntilStarted()
+        controller.removeThreads(threadIDs: ["thread-a"])
+        await desktopActivityLoader.resumeLoad()
+
+        let effects = await refreshTask.value
+
+        XCTAssertTrue(effects.didChangeThreadReadMarkers)
+        XCTAssertEqual(controller.persistedThreadReadMarkers["thread-a"], 0)
     }
 
     func testConnectedRefreshDesktopActivityStillSeedsDiscoveredThreadFromBackfill() async throws {
@@ -2043,6 +2095,49 @@ private actor FakeDesktopActivityLoader: DesktopActivityLoading {
         }
 
         return updates.removeFirst()
+    }
+}
+
+private actor SuspendedDesktopActivityLoader: DesktopActivityLoading {
+    private let update: DesktopActivityUpdate
+    private var didStart = false
+    private var startWaiters: [CheckedContinuation<Void, Never>] = []
+    private var loadContinuation: CheckedContinuation<DesktopActivityUpdate, Never>?
+
+    init(update: DesktopActivityUpdate) {
+        self.update = update
+    }
+
+    func load(candidateSessionContexts: [String: ThreadSessionContext], now: Date) async -> DesktopActivityUpdate {
+        await withCheckedContinuation { continuation in
+            loadContinuation = continuation
+            didStart = true
+
+            let waiters = startWaiters
+            startWaiters.removeAll()
+            for waiter in waiters {
+                waiter.resume()
+            }
+        }
+    }
+
+    func waitUntilStarted() async {
+        if didStart {
+            return
+        }
+
+        await withCheckedContinuation { continuation in
+            startWaiters.append(continuation)
+        }
+    }
+
+    func resumeLoad() {
+        guard let loadContinuation else {
+            preconditionFailure("desktop activity load has not started")
+        }
+
+        self.loadContinuation = nil
+        loadContinuation.resume(returning: update)
     }
 }
 
