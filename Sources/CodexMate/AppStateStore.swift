@@ -610,8 +610,7 @@ struct AppStateStore {
         let expiredThreadIDs = threadsByID.compactMap { entry -> String? in
             let (threadID, row) = entry
             guard row.authoritativeListPresence == .pendingInclusion,
-                  !threadIDs.contains(threadID),
-                  !Self.shouldRetainThreadOutsidePendingWindow(row) else {
+                  !threadIDs.contains(threadID) else {
                 return nil
             }
 
@@ -1793,15 +1792,6 @@ struct AppStateStore {
 
     private static func shouldRetainThreadOutsideAuthoritativeList(_ row: ThreadRow) -> Bool {
         row.authoritativeListPresence == .pendingInclusion
-    }
-
-    private static func shouldRetainThreadOutsidePendingWindow(_ row: ThreadRow) -> Bool {
-        switch row.presentationStatus {
-        case .waitingForUser, .running, .failed:
-            return true
-        case .idle, .notLoaded:
-            return false
-        }
     }
 
     private func maxProjectsExcludingPriority(maxProjects: Int, priorityProjectIDs: Set<String>) -> Int {

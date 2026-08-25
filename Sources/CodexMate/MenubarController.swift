@@ -481,11 +481,16 @@ final class MenubarController {
         let attentionThreadIDs = Set(update.runtimeSnapshot?.waitingForInputThreadIDs ?? [])
             .union(update.runtimeSnapshot?.approvalThreadIDs ?? [])
             .union(Set(update.runtimeSnapshot?.failedThreads.keys.map { $0 } ?? []))
-        let discoveredThreadIDs = ThreadActivityRefreshPlanner.discoveredThreadIDsNeedingRefresh(
-            recentThreadIDs: recentThreadIDs,
+        let activityCandidateThreadIDs = ThreadActivityRefreshPlanner.discoveredThreadIDsNeedingRefresh(
+            recentThreadIDs: [],
             latestViewedAtByThreadID: update.latestTurnStartedAtByThreadID,
             recentActivityThreadIDs: update.runtimeSnapshot?.recentActivityThreadIDs ?? [],
             attentionThreadIDs: attentionThreadIDs,
+            now: activityObservedAt
+        ).union(update.runtimeSnapshot?.runningThreadIDs ?? [])
+        let discoveredThreadIDs = activityCandidateThreadIDs.subtracting(recentThreadIDs)
+        pendingDiscoveredThreads.refreshLifetime(
+            for: trackedPendingThreadIDs.intersection(activityCandidateThreadIDs),
             now: activityObservedAt
         )
         let newlyObservedThreadIDs = pendingDiscoveredThreads.observe(
@@ -848,16 +853,18 @@ final class MenubarController {
     }
 
     private func recordDiscoveredThreadRefreshResult(threads: [CodexThread]) -> MenubarControllerEffects {
-        guard pendingDiscoveredThreads.hasPendingThreads else {
+        let hadPendingThreads = pendingDiscoveredThreads.hasPendingThreads
+        let resolutionObservedAt = now()
+        let resolution = pendingDiscoveredThreads.resolve(with: Set(threads.map(\.id)), now: resolutionObservedAt)
+        guard hadPendingThreads else {
             return MenubarControllerEffects()
         }
 
-        let resolutionObservedAt = now()
-        let resolution = pendingDiscoveredThreads.resolve(with: Set(threads.map(\.id)), now: resolutionObservedAt)
         let diagnostic = "thread/list resolved=\(debugThreadIDs(resolution.resolvedThreadIDs)) "
             + "missing=\(debugThreadIDs(resolution.missingThreadIDs)) total=\(threads.count)"
+        let locallyTrackedThreadIDs = Set(state.recentThreads.map(\.id))
         let retryableMissingThreadIDs = pendingDiscoveredThreads.threadIDsReadyToRetry(
-            resolution.missingThreadIDs,
+            resolution.missingThreadIDs.subtracting(locallyTrackedThreadIDs),
             now: resolutionObservedAt
         )
 

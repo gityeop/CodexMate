@@ -390,6 +390,69 @@ final class MenubarControllerIntegrationTests: XCTestCase {
         XCTAssertEqual(afterRefreshSnapshot.projectSections.map(\.section.displayName), ["B", "A"])
     }
 
+    func testMissingDiscoveredThreadStopsRetryingAfterPendingLifetime() async throws {
+        var currentTime = Date(timeIntervalSince1970: 100)
+        let missingThreadUpdate = desktopUpdate(
+            runtimeSnapshot: CodexDesktopRuntimeSnapshot(
+                activeTurnCount: 0,
+                runningThreadIDs: [],
+                recentActivityThreadIDs: ["missing-thread"]
+            )
+        )
+        let controller = makeController(
+            desktopUpdates: [missingThreadUpdate, missingThreadUpdate],
+            recentThreadResponses: [[], []],
+            metadataResponses: [.success([]), .success([])],
+            now: { currentTime }
+        )
+
+        try await controller.loadInitialThreads()
+        let discoveryEffects = await controller.refreshDesktopActivity()
+        XCTAssertTrue(discoveryEffects.shouldRequestThreadRefresh)
+
+        _ = try await controller.refreshThreads()
+        XCTAssertTrue(controller.pendingDiscoveredThreads.hasPendingThreads)
+
+        currentTime = Date(timeIntervalSince1970: 221)
+        let repeatedEffects = await controller.refreshDesktopActivity()
+
+        XCTAssertFalse(repeatedEffects.shouldRequestThreadRefresh)
+        XCTAssertFalse(repeatedEffects.shouldBoostThreadDiscovery)
+        XCTAssertFalse(controller.pendingDiscoveredThreads.hasPendingThreads)
+    }
+
+    func testTrackedPendingThreadMissingFromAuthoritativeListDoesNotBoostRefresh() async throws {
+        var currentTime = Date(timeIntervalSince1970: 100)
+        let pendingThread = thread(
+            id: "pending-thread",
+            updatedAt: 100,
+            cwd: "/tmp/A/work",
+            status: .active(flags: [])
+        )
+        let controller = makeController(
+            desktopUpdates: [desktopUpdate()],
+            recentThreadResponses: [[], []],
+            metadataResponses: [.success([])],
+            now: { currentTime }
+        )
+
+        try await controller.loadInitialThreads()
+        controller.apply(notification: .threadStarted(
+            ThreadStartedNotification(thread: pendingThread)
+        ))
+
+        let refreshEffects = try await controller.refreshThreads()
+
+        XCTAssertFalse(refreshEffects.shouldBoostThreadDiscovery)
+        XCTAssertEqual(controller.recentThreads.map(\.id), ["pending-thread"])
+
+        currentTime = Date(timeIntervalSince1970: 221)
+        _ = await controller.refreshDesktopActivity()
+
+        XCTAssertFalse(controller.pendingDiscoveredThreads.hasPendingThreads)
+        XCTAssertTrue(controller.recentThreads.isEmpty)
+    }
+
     func testSnapshotPromotesRuntimeActiveProjectOrder() async throws {
         let controller = makeController(
             desktopUpdates: [

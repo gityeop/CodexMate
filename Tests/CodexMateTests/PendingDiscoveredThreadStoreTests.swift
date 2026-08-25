@@ -31,6 +31,30 @@ final class PendingDiscoveredThreadStoreTests: XCTestCase {
         XCTAssertFalse(store.hasPendingThreads)
     }
 
+    func testRepeatedObservationDoesNotExtendPendingLifetime() {
+        var store = PendingDiscoveredThreadStore(maxTrackedThreads: 4, ttl: 60)
+        _ = store.observe(["thread-1"], now: Date(timeIntervalSince1970: 100))
+
+        _ = store.observe(["thread-1"], now: Date(timeIntervalSince1970: 150))
+        store.prune(now: Date(timeIntervalSince1970: 161))
+
+        XCTAssertFalse(store.hasPendingThreads)
+    }
+
+    func testRejectSuppressesRepeatedObservationUntilThreadIsFetched() {
+        var store = PendingDiscoveredThreadStore(maxTrackedThreads: 4, ttl: 60)
+        let now = Date(timeIntervalSince1970: 100)
+        _ = store.observe(["thread-1"], now: now)
+
+        store.reject(["thread-1"], now: now)
+
+        XCTAssertEqual(store.observe(["thread-1"], now: now), [])
+        XCTAssertFalse(store.hasPendingThreads)
+
+        _ = store.resolve(with: ["thread-1"], now: now)
+        XCTAssertEqual(store.observe(["thread-1"], now: now), ["thread-1"])
+    }
+
     func testObserveTrimsToNewestBudget() {
         var store = PendingDiscoveredThreadStore(maxTrackedThreads: 2, ttl: 60)
         _ = store.observe(["thread-1"], now: Date(timeIntervalSince1970: 100))

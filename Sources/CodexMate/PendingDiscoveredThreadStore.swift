@@ -9,6 +9,7 @@ struct PendingDiscoveredThreadStore: Equatable {
     private(set) var observedAtByThreadID: [String: Date]
     private var retryAttemptCountByThreadID: [String: Int]
     private var lastRetryAtByThreadID: [String: Date]
+    private var rejectedAtByThreadID: [String: Date]
     private let maxTrackedThreads: Int
     private let ttl: TimeInterval
     private let retryBackoffIntervals: [TimeInterval]
@@ -22,6 +23,7 @@ struct PendingDiscoveredThreadStore: Equatable {
         self.observedAtByThreadID = observedAtByThreadID
         self.retryAttemptCountByThreadID = [:]
         self.lastRetryAtByThreadID = [:]
+        self.rejectedAtByThreadID = [:]
         self.maxTrackedThreads = max(1, maxTrackedThreads)
         self.ttl = max(1, ttl)
         let positiveRetryBackoffIntervals = retryBackoffIntervals.filter { $0 > 0 }
@@ -46,17 +48,34 @@ struct PendingDiscoveredThreadStore: Equatable {
         }
 
         var newThreadIDs: Set<String> = []
-        for threadID in threadIDs {
-            if observedAtByThreadID.updateValue(now, forKey: threadID) == nil {
-                newThreadIDs.insert(threadID)
-            }
+        for threadID in threadIDs where observedAtByThreadID[threadID] == nil
+            && rejectedAtByThreadID[threadID] == nil {
+            observedAtByThreadID[threadID] = now
+            newThreadIDs.insert(threadID)
         }
 
         trimToBudget()
         return newThreadIDs.intersection(pendingThreadIDs)
     }
 
+    mutating func refreshLifetime(for threadIDs: Set<String>, now: Date = Date()) {
+        for threadID in threadIDs where observedAtByThreadID[threadID] != nil {
+            observedAtByThreadID[threadID] = now
+        }
+    }
+
+    mutating func reject(_ threadIDs: Set<String>, now: Date = Date()) {
+        for threadID in threadIDs {
+            remove(threadID)
+            rejectedAtByThreadID[threadID] = now
+        }
+        trimRejectedToBudget()
+    }
+
     mutating func resolve(with fetchedThreadIDs: Set<String>, now: Date = Date()) -> PendingDiscoveredThreadResolution {
+        for threadID in fetchedThreadIDs {
+            rejectedAtByThreadID.removeValue(forKey: threadID)
+        }
         prune(now: now)
 
         let resolvedThreadIDs = pendingThreadIDs.intersection(fetchedThreadIDs)
@@ -105,8 +124,8 @@ struct PendingDiscoveredThreadStore: Equatable {
                 observedAt >= cutoff ? nil : threadID
             }
         )
-        for threadID in expiredThreadIDs {
-            remove(threadID)
+        if !expiredThreadIDs.isEmpty {
+            reject(expiredThreadIDs, now: now)
         }
         trimToBudget()
     }
@@ -137,6 +156,25 @@ struct PendingDiscoveredThreadStore: Equatable {
         observedAtByThreadID.removeValue(forKey: threadID)
         retryAttemptCountByThreadID.removeValue(forKey: threadID)
         lastRetryAtByThreadID.removeValue(forKey: threadID)
+    }
+
+    private mutating func trimRejectedToBudget() {
+        guard rejectedAtByThreadID.count > maxTrackedThreads else {
+            return
+        }
+
+        let keptThreadIDs = rejectedAtByThreadID
+            .sorted { lhs, rhs in
+                if lhs.value == rhs.value {
+                    return lhs.key < rhs.key
+                }
+
+                return lhs.value > rhs.value
+            }
+            .prefix(maxTrackedThreads)
+            .map(\.key)
+
+        rejectedAtByThreadID = rejectedAtByThreadID.filter { keptThreadIDs.contains($0.key) }
     }
 
     private func retryBackoffInterval(retryAttemptCount: Int) -> TimeInterval {

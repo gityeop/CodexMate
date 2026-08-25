@@ -205,6 +205,11 @@ struct CodexDesktopStateReader {
         }
     }
 
+    private final class SQLiteMetadataCache {
+        var threadProjectionByDatabasePath: [String: ThreadTableProjection] = [:]
+        var logQuerySourceByDatabasePath: [String: LogQuerySource] = [:]
+    }
+
     private let fileManager: FileManager
     private let now: () -> Date
     private let recentThreadUpdateInterval: TimeInterval
@@ -221,6 +226,7 @@ struct CodexDesktopStateReader {
     private let stateDatabaseURLCache = StateDatabaseURLCache()
     private let desktopLogCandidateCache = DesktopLogCandidateCache()
     private let desktopApprovalLogCache = DesktopApprovalLogCache()
+    private let sqliteMetadataCache = SQLiteMetadataCache()
 
     init(
         fileManager: FileManager = .default,
@@ -380,18 +386,7 @@ struct CodexDesktopStateReader {
             let projection = try threadTableProjection(in: databaseURL)
             return try runSQLite(
                 sql: """
-                SELECT json_object(
-                    'id', id,
-                    'preview', \(projection.previewExpression),
-                    'createdAt', created_at,
-                    'updatedAt', updated_at,
-                    'cwd', cwd,
-                    'name', title,
-                    'path', rollout_path,
-                    'source', source,
-                    'agentRole', \(projection.agentRoleExpression),
-                    'agentNickname', \(projection.agentNicknameExpression)
-                )
+                SELECT \(threadJSONExpression(projection: projection))
                 FROM threads
                 WHERE archived = 0
                   AND id IN (\(candidateList))
@@ -401,6 +396,10 @@ struct CodexDesktopStateReader {
                 databaseURL: databaseURL
             )
         }
+        return decodeThreads(from: output, includeSessionStatus: includeSessionStatus)
+    }
+
+    private func decodeThreads(from output: String, includeSessionStatus: Bool) -> [CodexThread] {
         var threads: [CodexThread] = []
 
         for line in output.split(separator: "\n") {
@@ -500,7 +499,7 @@ struct CodexDesktopStateReader {
             let projection = try threadTableProjection(in: databaseURL)
             return try runSQLite(
                 sql: """
-                SELECT id
+                SELECT \(threadJSONExpression(projection: projection))
                 FROM threads
                 WHERE archived = 0
                   AND (\(projection.meaningfulThreadPredicate))
@@ -510,19 +509,7 @@ struct CodexDesktopStateReader {
                 databaseURL: databaseURL
             )
         }
-        let recentThreadIDs = parseSQLiteLines(output.split(separator: "\n").map(String.init))
-        guard !recentThreadIDs.isEmpty else {
-            return []
-        }
-
-        let threadsByID = Dictionary(
-            uniqueKeysWithValues: try threads(
-                threadIDs: Set(recentThreadIDs),
-                includeSessionStatus: false
-            ).map { ($0.id, $0) }
-        )
-
-        return recentThreadIDs.compactMap { threadsByID[$0] }
+        return decodeThreads(from: output, includeSessionStatus: false)
     }
 
     private func withStateDatabase<Result>(_ operation: (URL) throws -> Result) throws -> Result {
@@ -757,17 +744,25 @@ struct CodexDesktopStateReader {
     }
 
     private func resolveLogQuerySource(stateDatabaseURL: URL) -> LogQuerySource {
+        let databasePath = stateDatabaseURL.standardizedFileURL.path
+        if let cachedSource = sqliteMetadataCache.logQuerySourceByDatabasePath[databasePath] {
+            return cachedSource
+        }
+
+        let source: LogQuerySource
         if let messageColumn = logMessageColumn(in: stateDatabaseURL) {
-            return .embedded(messageColumn: messageColumn)
+            source = .embedded(messageColumn: messageColumn)
+        } else if let logsDatabaseURL = locateLogsDatabaseCandidate(near: stateDatabaseURL),
+                  let messageColumn = logMessageColumn(in: logsDatabaseURL) {
+            source = .attached(databaseURL: logsDatabaseURL, messageColumn: messageColumn)
+        } else {
+            source = .unavailable
         }
 
-        guard let logsDatabaseURL = locateLogsDatabaseCandidate(near: stateDatabaseURL),
-              let messageColumn = logMessageColumn(in: logsDatabaseURL)
-        else {
-            return .unavailable
+        if source.isAvailable {
+            sqliteMetadataCache.logQuerySourceByDatabasePath[databasePath] = source
         }
-
-        return .attached(databaseURL: logsDatabaseURL, messageColumn: messageColumn)
+        return source
     }
 
     private func locateLogsDatabaseCandidate(near stateDatabaseURL: URL) -> URL? {
@@ -837,6 +832,11 @@ struct CodexDesktopStateReader {
     }
 
     private func threadTableProjection(in databaseURL: URL) throws -> ThreadTableProjection {
+        let databasePath = databaseURL.standardizedFileURL.path
+        if let cachedProjection = sqliteMetadataCache.threadProjectionByDatabasePath[databasePath] {
+            return cachedProjection
+        }
+
         let columns = try threadTableColumns(in: databaseURL)
         let previewExpression: String
 
@@ -871,12 +871,31 @@ struct CodexDesktopStateReader {
             meaningfulPredicates.append("tokens_used > 0")
         }
 
-        return ThreadTableProjection(
+        let projection = ThreadTableProjection(
             previewExpression: previewExpression,
             agentRoleExpression: columns.contains("agent_role") ? "agent_role" : "NULL",
             agentNicknameExpression: columns.contains("agent_nickname") ? "agent_nickname" : "NULL",
             meaningfulThreadPredicate: meaningfulPredicates.joined(separator: " OR ")
         )
+        sqliteMetadataCache.threadProjectionByDatabasePath[databasePath] = projection
+        return projection
+    }
+
+    private func threadJSONExpression(projection: ThreadTableProjection) -> String {
+        """
+        json_object(
+            'id', id,
+            'preview', \(projection.previewExpression),
+            'createdAt', created_at,
+            'updatedAt', updated_at,
+            'cwd', cwd,
+            'name', title,
+            'path', rollout_path,
+            'source', source,
+            'agentRole', \(projection.agentRoleExpression),
+            'agentNickname', \(projection.agentNicknameExpression)
+        )
+        """
     }
 
     private func threadTableColumns(in databaseURL: URL) throws -> Set<String> {
