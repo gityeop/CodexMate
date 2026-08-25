@@ -3,20 +3,20 @@
     <channel>
         <title>CodexMate</title>
         <item>
-            <title>0.0.54</title>
-            <pubDate>Sat, 01 Aug 2026 23:02:07 +0900</pubDate>
-            <link>https://github.com/gityeop/CodexMate/releases/tag/v0.0.54</link>
-            <sparkle:version>54</sparkle:version>
-            <sparkle:shortVersionString>0.0.54</sparkle:shortVersionString>
+            <title>0.0.55</title>
+            <pubDate>Wed, 26 Aug 2026 00:43:29 +0900</pubDate>
+            <link>https://github.com/gityeop/CodexMate/releases/tag/v0.0.55</link>
+            <sparkle:version>55</sparkle:version>
+            <sparkle:shortVersionString>0.0.55</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description sparkle:format="markdown"><![CDATA[# CodexMate 0.0.54
+            <description sparkle:format="markdown"><![CDATA[# CodexMate 0.0.55
 
-- Restores unread indicators when a task completes while the thread list is refreshing.
-- Clears unread state only after the thread is actually opened, avoiding background activity marking it as read.
-- Keeps weekly usage in a neutral loading state when rate-limit data is temporarily unavailable.
+- Reduces idle energy use by stopping repeated fast refreshes for threads that are no longer present.
+- Reuses SQLite query metadata and combines recent-thread reads to reduce background database work.
+- Keeps existing refresh timings, menus, status indicators, and notifications unchanged.
 ]]></description>
-            <enclosure url="https://github.com/gityeop/CodexMate/releases/latest/download/CodexMate-0.0.54.zip" length="4149425" type="application/octet-stream" sparkle:edSignature="fhvKxY61XbzApm9pfqc3g9mxiPJgTkUrcvh+WVD/LXL92dGt7WIZ/FruMdasPl7JtTECeRFb2DA3KP2DwxGFAw=="/>
+            <enclosure url="https://github.com/gityeop/CodexMate/releases/latest/download/CodexMate-0.0.55.zip" length="4154023" type="application/octet-stream" sparkle:edSignature="THldgEUVc1GdYsFaS5EqirPmZU6kDzzAJezb7uNOFnZf3vabSwTQPl0hPWXHbl3O/TeOAazKvcvSedLn8V5pCw=="/>
         </item>
     </channel>
 </rss>
