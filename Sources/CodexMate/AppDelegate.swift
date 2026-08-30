@@ -1152,7 +1152,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         guard ThreadNotificationPlanner.allowsNotifications(for: thread) else {
-            debugLog("User notification suppressed for subagent thread=\(notification.threadID) kind=\(String(describing: notification.kind))")
+            debugLog("User notification suppressed for ineligible thread=\(notification.threadID) kind=\(String(describing: notification.kind))")
             return
         }
 

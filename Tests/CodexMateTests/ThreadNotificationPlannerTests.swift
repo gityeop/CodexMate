@@ -114,6 +114,26 @@ final class ThreadNotificationPlannerTests: XCTestCase {
         )
     }
 
+    func testUnhydratedPlaceholderRowsNeverEmitNotifications() {
+        let main = row(id: "main", status: .idle)
+        var sideChat = row(id: "ephemeral-side-chat", status: .idle)
+        sideChat.cwd = ""
+        sideChat.listedStatus = .notLoaded
+        sideChat.authoritativeListPresence = .pendingInclusion
+
+        XCTAssertTrue(sideChat.hasUnhydratedPlaceholderMetadata)
+        XCTAssertEqual(
+            ThreadNotificationPlanner.notifications(
+                previousStatusByThreadID: [
+                    "main": .running,
+                    "ephemeral-side-chat": .running
+                ],
+                currentRows: [main, sideChat]
+            ),
+            [ThreadDesktopNotification(threadID: "main", kind: .completion)]
+        )
+    }
+
     func testGuardianSubagentNeverEmitsNotifications() {
         var store = AppStateStore()
         store.replaceRecentThreads(with: [

@@ -25,7 +25,7 @@ struct ThreadNotificationContent: Equatable {
 
 enum ThreadNotificationPlanner {
     static func allowsNotifications(for row: AppStateStore.ThreadRow) -> Bool {
-        !row.isSubagent
+        !row.isSubagent && !row.hasUnhydratedPlaceholderMetadata
     }
 
     static func statusByThreadID(from rows: [AppStateStore.ThreadRow]) -> [String: AppStateStore.ThreadStatus] {
