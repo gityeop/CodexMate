@@ -3,20 +3,20 @@
     <channel>
         <title>CodexMate</title>
         <item>
-            <title>0.0.55</title>
-            <pubDate>Wed, 26 Aug 2026 00:43:29 +0900</pubDate>
-            <link>https://github.com/gityeop/CodexMate/releases/tag/v0.0.55</link>
-            <sparkle:version>55</sparkle:version>
-            <sparkle:shortVersionString>0.0.55</sparkle:shortVersionString>
+            <title>0.0.56</title>
+            <pubDate>Sun, 30 Aug 2026 14:52:49 +0900</pubDate>
+            <link>https://github.com/gityeop/CodexMate/releases/tag/v0.0.56</link>
+            <sparkle:version>56</sparkle:version>
+            <sparkle:shortVersionString>0.0.56</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description sparkle:format="markdown"><![CDATA[# CodexMate 0.0.55
+            <description sparkle:format="markdown"><![CDATA[# CodexMate 0.0.56
 
-- Reduces idle energy use by stopping repeated fast refreshes for threads that are no longer present.
-- Reuses SQLite query metadata and combines recent-thread reads to reduce background database work.
-- Keeps existing refresh timings, menus, status indicators, and notifications unchanged.
+- Stops temporary side chats from appearing in CodexMate notifications.
+- Keeps notifications for regular tasks unchanged.
+- Adds regression coverage to prevent the issue from returning.
 ]]></description>
-            <enclosure url="https://github.com/gityeop/CodexMate/releases/latest/download/CodexMate-0.0.55.zip" length="4154023" type="application/octet-stream" sparkle:edSignature="THldgEUVc1GdYsFaS5EqirPmZU6kDzzAJezb7uNOFnZf3vabSwTQPl0hPWXHbl3O/TeOAazKvcvSedLn8V5pCw=="/>
+            <enclosure url="https://github.com/gityeop/CodexMate/releases/latest/download/CodexMate-0.0.56.zip" length="4154194" type="application/octet-stream" sparkle:edSignature="rrcQbu3gllGLQgYeX4t1CPPyLkBKNRJ7ZP2JBPw3G3Fs6epcIKdT6fZzqbeVC8sC+N5bbyFEsLjs6gxQRgDUAw=="/>
         </item>
     </channel>
 </rss>
