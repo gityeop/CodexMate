@@ -536,6 +536,16 @@ for database_path in candidate_databases():
 if MODE in ("archived", "present"):
     print(json.dumps({"threadIDs": sorted(thread_ids)}, ensure_ascii=False))
 else:
+    codex_home = os.environ.get("CODEX_HOME") or os.path.expanduser("~/.codex")
+    index_path = os.path.join(codex_home, "session_index.jsonl")
+    if os.path.exists(index_path):
+        with open(index_path, encoding="utf-8") as index_file:
+            for line in index_file:
+                if not line.strip():
+                    continue
+                entry = json.loads(line)
+                if entry["id"] in threads_by_id:
+                    threads_by_id[entry["id"]]["name"] = entry["thread_name"]
     threads = sorted(
         threads_by_id.values(),
         key=lambda thread: (-int(thread.get("updatedAt", 0)), thread.get("id", "")),

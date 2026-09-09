@@ -1398,6 +1398,38 @@ final class CodexDesktopStateReaderTests: XCTestCase {
         XCTAssertEqual(threads.first?.displayTitle, "Preview only title")
     }
 
+    func testThreadNamesUseLatestIndexEntryAndRefreshAfterRename() throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let databaseURL = directory.appending(path: "state.sqlite")
+        try createStateDatabase(at: databaseURL, sql: """
+        CREATE TABLE threads (
+            id TEXT PRIMARY KEY, first_user_message TEXT, title TEXT,
+            created_at INTEGER, updated_at INTEGER, cwd TEXT,
+            rollout_path TEXT, source TEXT, archived INTEGER
+        );
+        INSERT INTO threads VALUES ('renamed', 'First message', 'First message', 1, 2, '/tmp', NULL, 'vscode', 0);
+        """)
+        let indexURL = directory.appending(path: "session_index.jsonl")
+        let entries = """
+        {"id":"renamed","thread_name":"Original name"}
+        {"id":"renamed","thread_name":"실제 쓰레드 이름"}
+        """
+        try entries.write(to: indexURL, atomically: true, encoding: .utf8)
+        let reader = CodexDesktopStateReader(
+            stateDatabaseURLOverride: databaseURL,
+            codexDirectoryURLOverride: directory
+        )
+        XCTAssertEqual(try reader.recentThreads(limit: 1).first?.displayTitle, "실제 쓰레드 이름")
+        XCTAssertEqual(try reader.threads(threadIDs: ["renamed"]).first?.displayTitle, "실제 쓰레드 이름")
+        try (entries + "\n{\"id\":\"renamed\",\"thread_name\":\"변경된 이름\"}\n")
+            .write(to: indexURL, atomically: true, encoding: .utf8)
+        XCTAssertEqual(try reader.recentThreads(limit: 1).first?.displayTitle, "변경된 이름")
+        try "invalid json".write(to: indexURL, atomically: true, encoding: .utf8)
+        XCTAssertThrowsError(try reader.recentThreads(limit: 1))
+    }
+
     func testThreadsDoesNotUseSessionMetadataWhenStateRowIsMissing() throws {
         let tempDirectoryURL = FileManager.default.temporaryDirectory
             .appending(path: UUID().uuidString)

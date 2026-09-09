@@ -396,10 +396,30 @@ struct CodexDesktopStateReader {
                 databaseURL: databaseURL
             )
         }
-        return decodeThreads(from: output, includeSessionStatus: includeSessionStatus)
+        return try decodeThreads(from: output, includeSessionStatus: includeSessionStatus)
     }
 
-    private func decodeThreads(from output: String, includeSessionStatus: Bool) -> [CodexThread] {
+    private func threadNamesByID() throws -> [String: String] {
+        let indexURL = resolvedCodexDirectoryURL().appendingPathComponent("session_index.jsonl")
+        guard fileManager.fileExists(atPath: indexURL.path) else { return [:] }
+
+        struct Entry: Decodable {
+            let id: String
+            let thread_name: String
+        }
+
+        let contents = try String(contentsOf: indexURL, encoding: .utf8)
+        let decoder = JSONDecoder()
+        var names: [String: String] = [:]
+        for line in contents.split(whereSeparator: \.isNewline) {
+            let entry = try decoder.decode(Entry.self, from: Data(line.utf8))
+            names[entry.id] = entry.thread_name
+        }
+        return names
+    }
+
+    private func decodeThreads(from output: String, includeSessionStatus: Bool) throws -> [CodexThread] {
+        let namesByID = try threadNamesByID()
         var threads: [CodexThread] = []
 
         for line in output.split(separator: "\n") {
@@ -422,7 +442,7 @@ struct CodexDesktopStateReader {
                     updatedAt: updatedAt,
                     status: includeSessionStatus ? sessionBackedStatus(path: object["path"] as? String) : .notLoaded,
                     cwd: cwd,
-                    name: object["name"] as? String,
+                    name: namesByID[id] ?? object["name"] as? String,
                     path: object["path"] as? String,
                     source: object["source"] as? String,
                     agentRole: object["agentRole"] as? String,
@@ -509,7 +529,7 @@ struct CodexDesktopStateReader {
                 databaseURL: databaseURL
             )
         }
-        return decodeThreads(from: output, includeSessionStatus: false)
+        return try decodeThreads(from: output, includeSessionStatus: false)
     }
 
     private func withStateDatabase<Result>(_ operation: (URL) throws -> Result) throws -> Result {
