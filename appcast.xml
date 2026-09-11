@@ -3,19 +3,20 @@
     <channel>
         <title>CodexMate</title>
         <item>
-            <title>0.0.57</title>
-            <pubDate>Wed, 09 Sep 2026 13:13:34 +0900</pubDate>
-            <link>https://github.com/gityeop/CodexMate/releases/tag/v0.0.57</link>
-            <sparkle:version>57</sparkle:version>
-            <sparkle:shortVersionString>0.0.57</sparkle:shortVersionString>
+            <title>0.0.58</title>
+            <pubDate>Fri, 11 Sep 2026 11:31:38 +0900</pubDate>
+            <link>https://github.com/gityeop/CodexMate/releases/tag/v0.0.58</link>
+            <sparkle:version>58</sparkle:version>
+            <sparkle:shortVersionString>0.0.58</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description sparkle:format="markdown"><![CDATA[# CodexMate 0.0.57
+            <description sparkle:format="markdown"><![CDATA[# CodexMate 0.0.58
 
-- Displays the latest saved Codex thread names instead of initial message text for local and remote tasks.
-- Refreshes renamed threads when the task list reloads.
+- Adds a configurable “Next Chat Needing Attention” global shortcut to cycle through main chats waiting for input or approval, or with unread activity. Subagent threads are excluded.
+- Automatically focuses the shortcut recorder after clearing a shortcut, with a highlighted border and a visible recording prompt.
+- Keeps the recorder focused after deleting a shortcut with the keyboard so a replacement can be entered immediately.
 ]]></description>
-            <enclosure url="https://github.com/gityeop/CodexMate/releases/latest/download/CodexMate-0.0.57.zip" length="4162099" type="application/octet-stream" sparkle:edSignature="HD/udogNi7bIxpIggYelj4MQ2TlT7T/oDBWMo1YhcK0ZxLVOxBtiaMK4J01RJJR46ztmQ1bNb3AhHkSjqFjQCw=="/>
+            <enclosure url="https://github.com/gityeop/CodexMate/releases/latest/download/CodexMate-0.0.58.zip" length="4167493" type="application/octet-stream" sparkle:edSignature="y+/QwkxoaiZmONCNUgmiJKCys6EWNxS/laN9/GfPtiD9lO7SF80YgjVViz18Ye3T743YOw7Jkx66BObOBuWnDg=="/>
         </item>
     </channel>
 </rss>
