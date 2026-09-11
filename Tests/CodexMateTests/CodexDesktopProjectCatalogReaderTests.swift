@@ -2,6 +2,60 @@ import XCTest
 @testable import CodexMate
 
 final class CodexDesktopProjectCatalogReaderTests: XCTestCase {
+    func testLoadUsesLocalProjectsAndThreadAssignmentsForNotificationTitle() throws {
+        let codexDirectoryURL = FileManager.default.temporaryDirectory
+            .appending(path: UUID().uuidString, directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: codexDirectoryURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: codexDirectoryURL) }
+
+        try writeGlobalState(
+            to: codexDirectoryURL,
+            contents: """
+            {
+              "electron-saved-workspace-roots": ["/tmp/codextension"],
+              "electron-workspace-root-labels": null,
+              "local-projects": {
+                "client-project": {
+                  "id": "client-project",
+                  "name": "Standardpin",
+                  "rootPaths": ["/tmp/client-site"]
+                },
+                "app-project": {
+                  "id": "app-project",
+                  "name": "CodexMate",
+                  "rootPaths": ["/tmp/codextension"]
+                }
+              },
+              "thread-project-assignments": {
+                "client-thread": {"projectKind": "local", "projectId": "client-project"}
+              },
+              "thread-workspace-root-hints": {"client-thread": "/tmp/codextension"}
+            }
+            """
+        )
+
+        let catalog = try CodexDesktopProjectCatalogReader(
+            codexDirectoryURLOverride: codexDirectoryURL
+        ).load()
+
+        XCTAssertEqual(catalog.project(for: "/tmp/client-site").displayName, "Standardpin")
+        XCTAssertEqual(catalog.project(for: "/tmp/codextension").displayName, "CodexMate")
+
+        let project = catalog.project(forThreadID: "client-thread", cwd: "/tmp/.codex/worktrees/client-site")
+        XCTAssertEqual(project.id, "/tmp/client-site")
+        let content = ThreadNotificationContentBuilder.content(
+            body: "",
+            metadata: .init(
+                projectDisplayName: project.displayName,
+                threadTitle: "3️⃣ 병원 JCELL",
+                replySnippet: "수정 완료"
+            ),
+            kind: .completion
+        )
+        XCTAssertEqual(content.title, "Standardpin")
+        XCTAssertEqual(content.subtitle, "3️⃣ 병원 JCELL")
+    }
+
     func testLoadUsesProvidedCodexDirectory() throws {
         let tempDirectoryURL = FileManager.default.temporaryDirectory
             .appending(path: UUID().uuidString, directoryHint: .isDirectory)

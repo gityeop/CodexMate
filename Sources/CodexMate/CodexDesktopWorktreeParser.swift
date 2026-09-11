@@ -38,12 +38,29 @@ struct CodexDesktopWorktreeParser {
     func parse(_ data: Data) throws -> ParsedState {
         let state = try JSONDecoder().decode(GlobalStateFile.self, from: data)
         let normalizedLabels = normalizedLabelsByPath(from: state.workspaceRootLabels ?? [:])
-        let normalizedThreadWorkspaceRootHints = normalizedThreadWorkspaceRootHints(
+        var normalizedThreadWorkspaceRootHints = normalizedThreadWorkspaceRootHints(
             from: state.threadWorkspaceRootHints ?? [:]
         )
         let projectlessThreadIDs = Set((state.projectlessThreadIDs ?? []).filter { !$0.isEmpty })
         var seenPaths: Set<String> = []
         var roots: [CodexDesktopProjectCatalog.WorkspaceRoot] = []
+
+        let localProjects = state.localProjects ?? [:]
+        for projectID in localProjects.keys.sorted() {
+            let project = localProjects[projectID]!
+            for path in project.rootPaths {
+                let normalizedPath = CodexDesktopWorktreePath.normalize(path: path)
+                guard seenPaths.insert(normalizedPath).inserted else { continue }
+                roots.append(.init(path: normalizedPath, displayName: project.name))
+            }
+        }
+
+        for (threadID, assignment) in state.threadProjectAssignments ?? [:] {
+            guard assignment.projectKind == "local",
+                  let project = localProjects[assignment.projectId],
+                  let rootPath = project.rootPaths.first else { continue }
+            normalizedThreadWorkspaceRootHints[threadID] = CodexDesktopWorktreePath.normalize(path: rootPath)
+        }
 
         appendWorkspaceRoots(
             state.savedWorkspaceRoots ?? [],
@@ -153,6 +170,8 @@ private struct GlobalStateFile: Decodable {
     let threadWorkspaceRootHints: [String: String]?
     let projectlessThreadIDs: [String]?
     let remoteProjects: [RemoteProject]?
+    let localProjects: [String: LocalProject]?
+    let threadProjectAssignments: [String: ThreadProjectAssignment]?
 
     enum CodingKeys: String, CodingKey {
         case savedWorkspaceRoots = "electron-saved-workspace-roots"
@@ -160,7 +179,19 @@ private struct GlobalStateFile: Decodable {
         case threadWorkspaceRootHints = "thread-workspace-root-hints"
         case projectlessThreadIDs = "projectless-thread-ids"
         case remoteProjects = "remote-projects"
+        case localProjects = "local-projects"
+        case threadProjectAssignments = "thread-project-assignments"
     }
+}
+
+private struct LocalProject: Decodable {
+    let name: String
+    let rootPaths: [String]
+}
+
+private struct ThreadProjectAssignment: Decodable {
+    let projectKind: String
+    let projectId: String
 }
 
 private struct RemoteProject: Decodable {
