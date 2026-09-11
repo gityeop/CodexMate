@@ -3,20 +3,19 @@
     <channel>
         <title>CodexMate</title>
         <item>
-            <title>0.0.58</title>
-            <pubDate>Fri, 11 Sep 2026 11:31:38 +0900</pubDate>
-            <link>https://github.com/gityeop/CodexMate/releases/tag/v0.0.58</link>
-            <sparkle:version>58</sparkle:version>
-            <sparkle:shortVersionString>0.0.58</sparkle:shortVersionString>
+            <title>0.0.59</title>
+            <pubDate>Fri, 11 Sep 2026 23:15:10 +0900</pubDate>
+            <link>https://github.com/gityeop/CodexMate/releases/tag/v0.0.59</link>
+            <sparkle:version>59</sparkle:version>
+            <sparkle:shortVersionString>0.0.59</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description sparkle:format="markdown"><![CDATA[# CodexMate 0.0.58
+            <description sparkle:format="markdown"><![CDATA[# CodexMate 0.0.59
 
-- Adds a configurable “Next Chat Needing Attention” global shortcut to cycle through main chats waiting for input or approval, or with unread activity. Subagent threads are excluded.
-- Automatically focuses the shortcut recorder after clearing a shortcut, with a highlighted border and a visible recording prompt.
-- Keeps the recorder focused after deleting a shortcut with the keyboard so a replacement can be entered immediately.
+- Fixes notifications showing “Unknown Project” for projects stored in Codex’s new local project format.
+- Uses saved project names and current task-to-project assignments, including tasks running in worktrees.
 ]]></description>
-            <enclosure url="https://github.com/gityeop/CodexMate/releases/latest/download/CodexMate-0.0.58.zip" length="4167493" type="application/octet-stream" sparkle:edSignature="y+/QwkxoaiZmONCNUgmiJKCys6EWNxS/laN9/GfPtiD9lO7SF80YgjVViz18Ye3T743YOw7Jkx66BObOBuWnDg=="/>
+            <enclosure url="https://github.com/gityeop/CodexMate/releases/latest/download/CodexMate-0.0.59.zip" length="4174399" type="application/octet-stream" sparkle:edSignature="8Xqe4i66h1PZBZulyoGoTuPXdYJ8wkmHO8gRsmOHcTKR8osR8KlpQUyN2cu54cUKHWadMpBMEsnBK6BaqTtIDA=="/>
         </item>
     </channel>
 </rss>
