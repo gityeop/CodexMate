@@ -86,12 +86,8 @@ final class SettingsViewModel: ObservableObject {
         }
     }
 
-    var shortcutName: KeyboardShortcuts.Name {
-        .toggleMenuBarDropdown
-    }
-
-    var shortcut: KeyboardShortcuts.Shortcut? {
-        KeyboardShortcuts.getShortcut(for: shortcutName)
+    func shortcut(for name: KeyboardShortcuts.Name) -> KeyboardShortcuts.Shortcut? {
+        KeyboardShortcuts.getShortcut(for: name)
     }
 
     var projectLimitRange: ClosedRange<Int> {
@@ -201,8 +197,8 @@ final class SettingsViewModel: ObservableObject {
         updaterService.checkForUpdates()
     }
 
-    func setShortcut(_ shortcut: KeyboardShortcuts.Shortcut?) {
-        KeyboardShortcuts.setShortcut(shortcut, for: shortcutName)
+    func setShortcut(_ shortcut: KeyboardShortcuts.Shortcut?, for name: KeyboardShortcuts.Name) {
+        KeyboardShortcuts.setShortcut(shortcut, for: name)
         objectWillChange.send()
     }
 

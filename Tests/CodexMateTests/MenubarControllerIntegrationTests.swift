@@ -3,6 +3,95 @@ import XCTest
 
 @MainActor
 final class MenubarControllerIntegrationTests: XCTestCase {
+    func testNextAttentionThreadCyclesOnlyMainThreadsWhenSubagentsNeedAttention() async throws {
+        let controller = makeController(recentThreadResponses: [[
+            thread(id: "main-a", updatedAt: 400, cwd: "/tmp/A", status: .active(flags: [.waitingOnUserInput])),
+            thread(id: "main-b", updatedAt: 200, cwd: "/tmp/A", status: .active(flags: [.waitingOnApproval])),
+            subagentThread(id: "waiting-child", updatedAt: 600, cwd: "/tmp/A", parentThreadID: "main-a", status: .active(flags: [.waitingOnUserInput])),
+            subagentThread(id: "approval-child", updatedAt: 500, cwd: "/tmp/A", parentThreadID: "main-a", status: .active(flags: [.waitingOnApproval])),
+            subagentThread(id: "unread-child", updatedAt: 300, cwd: "/tmp/A", parentThreadID: "main-a")
+        ]])
+        try await controller.loadInitialThreads()
+        _ = controller.prepareSnapshot()
+        controller.apply(notification: .turnCompleted(
+            TurnCompletedNotification(
+                threadId: "unread-child",
+                turn: CodexTurn(id: "child-turn", status: .completed, error: nil)
+            )
+        ))
+        let childSnapshots = controller.prepareSnapshot().snapshot.projectSections.flatMap(\.allThreads)
+            .filter { $0.thread.isSubagent }
+        XCTAssertEqual(Set(childSnapshots.map(\.id)), ["waiting-child", "approval-child", "unread-child"])
+        XCTAssertTrue(childSnapshots.first(where: { $0.id == "unread-child" })?.hasUnreadContent == true)
+
+        XCTAssertEqual(controller.nextAttentionThreadID(), "main-a")
+        _ = controller.markThreadRead("main-a")
+        XCTAssertEqual(controller.nextAttentionThreadID(), "main-b")
+        _ = controller.markThreadRead("main-b")
+        XCTAssertEqual(controller.nextAttentionThreadID(), "main-a")
+
+        controller.removeThreads(threadIDs: ["main-a", "main-b"])
+        XCTAssertNil(controller.nextAttentionThreadID())
+    }
+
+    func testNextAttentionThreadCyclesWaitingChatsAndSkipsReadAndRunningChats() async throws {
+        let controller = makeController(recentThreadResponses: [[
+            thread(id: "waiting", updatedAt: 400, cwd: "/tmp/A", status: .active(flags: [.waitingOnUserInput])),
+            thread(id: "running", updatedAt: 300, cwd: "/tmp/A", status: .active(flags: [])),
+            thread(id: "approval", updatedAt: 200, cwd: "/tmp/A", status: .active(flags: [.waitingOnApproval])),
+            thread(id: "read", updatedAt: 100, cwd: "/tmp/A")
+        ]])
+        try await controller.loadInitialThreads()
+        _ = controller.prepareSnapshot()
+
+        XCTAssertEqual(controller.nextAttentionThreadID(), "waiting")
+        _ = controller.markThreadRead("waiting")
+        XCTAssertEqual(controller.nextAttentionThreadID(), "approval")
+        _ = controller.markThreadRead("approval")
+        XCTAssertEqual(controller.nextAttentionThreadID(), "waiting")
+    }
+
+    func testNextAttentionThreadFindsUnreadCompletionAndStopsAfterReadingIt() async throws {
+        let controller = makeController(
+            desktopUpdates: [desktopUpdate(latestCompleted: ["completed": Date(timeIntervalSince1970: 200)])],
+            recentThreadResponses: [[thread(id: "completed", updatedAt: 100, cwd: "/tmp/A")]]
+        )
+        try await controller.loadInitialThreads()
+        _ = controller.prepareSnapshot()
+        XCTAssertNil(controller.nextAttentionThreadID())
+
+        _ = await controller.refreshDesktopActivity()
+        XCTAssertEqual(controller.nextAttentionThreadID(), "completed")
+        XCTAssertTrue(controller.markThreadRead("completed"))
+        XCTAssertNil(controller.nextAttentionThreadID())
+    }
+
+    func testNextAttentionThreadUsesMostRecentlyViewedDesktopChat() async throws {
+        let controller = makeController(
+            desktopUpdates: [desktopUpdate(
+                runtimeSnapshot: CodexDesktopRuntimeSnapshot(
+                    activeTurnCount: 0,
+                    runningThreadIDs: [],
+                    waitingForInputThreadIDs: ["waiting"],
+                    approvalThreadIDs: ["approval"]
+                ),
+                latestViewed: ["waiting": Date(timeIntervalSince1970: 500)]
+            )],
+            recentThreadResponses: [[
+                thread(id: "waiting", updatedAt: 400, cwd: "/tmp/A", status: .active(flags: [.waitingOnUserInput])),
+                thread(id: "approval", updatedAt: 200, cwd: "/tmp/A", status: .active(flags: [.waitingOnApproval]))
+            ]]
+        )
+        try await controller.loadInitialThreads()
+        _ = await controller.refreshDesktopActivity()
+
+        XCTAssertEqual(controller.nextAttentionThreadID(), "approval")
+        controller.removeThreads(threadIDs: ["approval"])
+        XCTAssertNil(controller.nextAttentionThreadID())
+        controller.removeThreads(threadIDs: ["waiting"])
+        XCTAssertNil(controller.nextAttentionThreadID())
+    }
+
     func testLiveTurnStartedThreadHydratesFromMetadataIntoProject() async throws {
         let controller = makeController(
             recentThreadResponses: [
@@ -1852,6 +1941,7 @@ final class MenubarControllerIntegrationTests: XCTestCase {
         XCTAssertEqual(menuSnapshot.projectSections.first?.threads.map(\.id), ["visible-thread"])
         XCTAssertFalse(menuSnapshot.hasUnreadThreads)
         XCTAssertFalse(statusSnapshot.hasUnreadThreads)
+        XCTAssertEqual(controller.nextAttentionThreadID(), "unread-thread")
         XCTAssertEqual(
             MenubarStatusPresentation.statusItemSprite(
                 overallStatus: statusSnapshot.overallStatus,

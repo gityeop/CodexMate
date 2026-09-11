@@ -1,5 +1,6 @@
 import AppKit
 import Carbon.HIToolbox
+import KeyboardShortcuts
 import XCTest
 @testable import CodexMate
 
@@ -8,6 +9,60 @@ final class SettingsWindowControllerTests: XCTestCase {
     override func setUpWithError() throws {
         try super.setUpWithError()
         try HeadlessAppKitTestSupport.skipIfNeeded()
+    }
+
+    func testClearButtonFocusesRecorderAndShowsRecordingState() throws {
+        let control = ShortcutRecorderControl(frame: NSRect(x: 0, y: 0, width: 300, height: 28))
+        let window = NSWindow(contentRect: control.frame, styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = control
+        control.recorder.placeholderLabel = "Click and press shortcut"
+        control.recorder.recordingLabel = "Press a shortcut now"
+        control.recorder.shortcut = KeyboardShortcuts.Shortcut(.c, modifiers: [.command, .option])
+        var changes: [KeyboardShortcuts.Shortcut?] = []
+        control.onChange = {
+            changes.append($0)
+            control.recorder.shortcut = $0
+        }
+        window.makeKeyAndOrderFront(nil)
+        defer { window.close() }
+        window.makeFirstResponder(nil)
+
+        control.clearButton.performClick(nil)
+
+        XCTAssertEqual(changes.count, 1)
+        XCTAssertNil(changes[0])
+        XCTAssertTrue(window.firstResponder === control.recorder)
+        XCTAssertEqual(control.recorder.stringValue, "Press a shortcut now")
+        XCTAssertEqual(control.recorder.layer?.borderWidth, 2)
+        XCTAssertFalse(control.clearButton.isEnabled)
+
+        control.recorder.keyDown(with: try makeKeyEvent(
+            keyCode: UInt16(kVK_ANSI_N), modifierFlags: [.control, .option], characters: "n"
+        ))
+
+        XCTAssertEqual(changes.last!, KeyboardShortcuts.Shortcut(.n, modifiers: [.control, .option]))
+        XCTAssertFalse(window.firstResponder === control.recorder)
+        XCTAssertEqual(control.recorder.layer?.borderWidth, 0)
+        XCTAssertTrue(control.clearButton.isEnabled)
+    }
+
+    func testDeleteKeyKeepsRecorderFocusedForReplacementShortcut() throws {
+        let control = ShortcutRecorderControl(frame: NSRect(x: 0, y: 0, width: 300, height: 28))
+        let window = NSWindow(contentRect: control.frame, styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = control
+        control.recorder.recordingLabel = "Press a shortcut now"
+        control.recorder.shortcut = KeyboardShortcuts.Shortcut(.c, modifiers: [.command])
+        window.makeKeyAndOrderFront(nil)
+        defer { window.close() }
+        window.makeFirstResponder(control.recorder)
+
+        control.recorder.keyDown(with: try makeKeyEvent(keyCode: UInt16(kVK_Delete), characters: "\u{7f}"))
+
+        XCTAssertNil(control.recorder.shortcut)
+        XCTAssertTrue(window.firstResponder === control.recorder)
+        XCTAssertEqual(control.recorder.layer?.borderWidth, 2)
     }
 
     func testVisibilityCallbackTracksShowAndClose() throws {

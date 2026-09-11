@@ -269,6 +269,7 @@ final class MenubarController {
     private(set) var projectCatalog = CodexDesktopProjectCatalog.empty
     private(set) var threadReadMarkers: ThreadReadMarkerStore
     private(set) var pendingDiscoveredThreads: PendingDiscoveredThreadStore
+    private var latestViewedThread: (id: String, viewedAt: Date)?
 
     init(
         desktopActivityLoader: DesktopActivityLoading,
@@ -771,10 +772,36 @@ final class MenubarController {
             return false
         }
 
+        latestViewedThread = (threadID, now())
         return threadReadMarkers.markRead(
             threadID: threadID,
             lastTerminalActivityAt: thread.lastTerminalActivityAt
         )
+    }
+
+    func nextAttentionThreadID() -> String? {
+        let snapshot = MenubarSnapshotSelector.makeSnapshot(
+            state: state,
+            projectCatalog: projectCatalog,
+            threadReadMarkers: threadReadMarkers,
+            projectLimit: .max,
+            visibleThreadLimit: .max,
+            now: now()
+        )
+        let attentionThreadIDs = Set(snapshot.projectSections.flatMap(\.allThreads).filter {
+            !$0.thread.isSubagent && ($0.thread.presentationStatus == .waitingForUser || $0.hasUnreadContent)
+        }.map(\.id))
+        let threads = state.recentThreads
+        let currentThreadID = latestViewedThread?.id
+        let startIndex = threads.firstIndex(where: { $0.id == currentThreadID }).map { $0 + 1 } ?? 0
+
+        for offset in 0..<threads.count {
+            let threadID = threads[(startIndex + offset) % threads.count].id
+            if threadID != currentThreadID, attentionThreadIDs.contains(threadID) {
+                return threadID
+            }
+        }
+        return nil
     }
 
     func seedThreadReadMarkers(for threadIDs: Set<String>) -> Bool {
@@ -908,6 +935,11 @@ final class MenubarController {
 
     private func synchronizeThreadReadMarkers(from latestViewedAtByThreadID: [String: Date]) -> Bool {
         guard !latestViewedAtByThreadID.isEmpty else { return false }
+
+        if let latestViewed = latestViewedAtByThreadID.max(by: { $0.value < $1.value }),
+           latestViewed.value > (latestViewedThread?.viewedAt ?? .distantPast) {
+            latestViewedThread = (latestViewed.key, latestViewed.value)
+        }
 
         var didChange = false
         for thread in state.recentThreads {

@@ -612,6 +612,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.menuToggleController.toggleMenu()
             }
         }
+        KeyboardShortcuts.onKeyUp(for: .nextAttentionThread) { [weak self] in
+            Task { @MainActor [weak self] in
+                self?.openNextAttentionThread()
+            }
+        }
+    }
+
+    private func openNextAttentionThread() {
+        guard let threadID = controller.nextAttentionThreadID() else { return }
+        openThread(threadID: threadID)
     }
 
     private func requestNotificationPermission() {

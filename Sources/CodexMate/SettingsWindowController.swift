@@ -158,25 +158,8 @@ private struct SettingsView: View {
             }
 
             Section(viewModel.text("settings.shortcutSection")) {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text(viewModel.text("settings.shortcutLabel"))
-                    HStack(spacing: 12) {
-                        ShortcutRecorderField(
-                            shortcut: viewModel.shortcut,
-                            placeholder: viewModel.text("settings.shortcutRecordPlaceholder"),
-                            onChange: { viewModel.setShortcut($0) }
-                        )
-                        .frame(width: 220, height: 28)
-
-                        Button {
-                            viewModel.setShortcut(nil)
-                        } label: {
-                            Text(verbatim: viewModel.text("settings.shortcutClear"))
-                        }
-                        .disabled(viewModel.shortcut == nil)
-                    }
-                    helpText(viewModel.text("settings.shortcutHelp"))
-                }
+                shortcutRow(.toggleMenuBarDropdown, label: "settings.shortcutLabel", help: "settings.shortcutHelp")
+                shortcutRow(.nextAttentionThread, label: "settings.nextAttentionThreadLabel", help: "settings.nextAttentionThreadHelp")
             }
 
             Section(viewModel.text("settings.updatesSection")) {
@@ -215,6 +198,21 @@ private struct SettingsView: View {
         .formStyle(.grouped)
         .padding(20)
         .frame(minWidth: 520, minHeight: 500)
+    }
+
+    private func shortcutRow(_ name: KeyboardShortcuts.Name, label: String, help: String) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(viewModel.text(label))
+            ShortcutRecorderField(
+                shortcut: viewModel.shortcut(for: name),
+                placeholder: viewModel.text("settings.shortcutRecordPlaceholder"),
+                recordingLabel: viewModel.text("settings.shortcutRecording"),
+                clearLabel: viewModel.text("settings.shortcutClear"),
+                onChange: { viewModel.setShortcut($0, for: name) }
+            )
+            .frame(width: 300, height: 28)
+            helpText(viewModel.text(help))
+        }
     }
 
     private var languageBinding: Binding<AppLanguage> {
@@ -313,22 +311,61 @@ private struct SettingsView: View {
 private struct ShortcutRecorderField: NSViewRepresentable {
     let shortcut: KeyboardShortcuts.Shortcut?
     let placeholder: String
+    let recordingLabel: String
+    let clearLabel: String
     let onChange: (KeyboardShortcuts.Shortcut?) -> Void
 
-    func makeNSView(context: Context) -> ShortcutRecorderTextField {
-        let textField = ShortcutRecorderTextField(frame: .zero)
-        textField.onChange = onChange
-        return textField
+    func makeNSView(context: Context) -> ShortcutRecorderControl {
+        ShortcutRecorderControl(frame: .zero)
     }
 
-    func updateNSView(_ nsView: ShortcutRecorderTextField, context: Context) {
-        nsView.shortcut = shortcut
-        nsView.placeholderLabel = placeholder
+    func updateNSView(_ nsView: ShortcutRecorderControl, context: Context) {
+        nsView.recorder.shortcut = shortcut
+        nsView.recorder.placeholderLabel = placeholder
+        nsView.recorder.recordingLabel = recordingLabel
+        nsView.clearButton.title = clearLabel
+        nsView.clearButton.isEnabled = shortcut != nil
         nsView.onChange = onChange
     }
 }
 
-private final class ShortcutRecorderTextField: NSTextField {
+final class ShortcutRecorderControl: NSStackView {
+    let recorder = ShortcutRecorderTextField(frame: .zero)
+    let clearButton = NSButton(title: "", target: nil, action: nil)
+    var onChange: ((KeyboardShortcuts.Shortcut?) -> Void)?
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        orientation = .horizontal
+        alignment = .centerY
+        spacing = 12
+        addArrangedSubview(recorder)
+        addArrangedSubview(clearButton)
+        recorder.widthAnchor.constraint(equalToConstant: 220).isActive = true
+        recorder.heightAnchor.constraint(equalToConstant: 28).isActive = true
+        recorder.onChange = { [weak self] shortcut in
+            self?.clearButton.isEnabled = shortcut != nil
+            self?.onChange?(shortcut)
+        }
+        clearButton.bezelStyle = .rounded
+        clearButton.target = self
+        clearButton.action = #selector(clearShortcut)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    @objc private func clearShortcut() {
+        recorder.shortcut = nil
+        clearButton.isEnabled = false
+        onChange?(nil)
+        window?.makeFirstResponder(recorder)
+    }
+}
+
+final class ShortcutRecorderTextField: NSTextField {
     var shortcut: KeyboardShortcuts.Shortcut? {
         didSet {
             guard !isRecording else { return }
@@ -340,6 +377,10 @@ private final class ShortcutRecorderTextField: NSTextField {
         didSet {
             refreshDisplay()
         }
+    }
+
+    var recordingLabel: String = "" {
+        didSet { refreshDisplay() }
     }
 
     var onChange: ((KeyboardShortcuts.Shortcut?) -> Void)?
@@ -362,7 +403,9 @@ private final class ShortcutRecorderTextField: NSTextField {
         alignment = .center
         font = .systemFont(ofSize: NSFont.systemFontSize)
         lineBreakMode = .byTruncatingTail
-        focusRingType = .default
+        focusRingType = .none
+        wantsLayer = true
+        layer?.cornerRadius = 6
         refreshDisplay()
     }
 
@@ -400,8 +443,8 @@ private final class ShortcutRecorderTextField: NSTextField {
         }
 
         if modifiers.isEmpty, let specialKey = event.specialKey, Self.clearKeys.contains(specialKey) {
+            shortcut = nil
             onChange?(nil)
-            window?.makeFirstResponder(nil)
             return
         }
 
@@ -421,9 +464,12 @@ private final class ShortcutRecorderTextField: NSTextField {
     }
 
     private func refreshDisplay() {
+        layer?.borderWidth = isRecording ? 2 : 0
+        layer?.borderColor = NSColor.keyboardFocusIndicatorColor.cgColor
+        backgroundColor = isRecording ? NSColor.controlAccentColor.withAlphaComponent(0.1) : .textBackgroundColor
         if isRecording {
-            stringValue = placeholderLabel
-            textColor = .secondaryLabelColor
+            stringValue = recordingLabel
+            textColor = .labelColor
             return
         }
 
