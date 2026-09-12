@@ -369,6 +369,7 @@ def status_for_session(path):
     unresolved_user_input = set()
     unresolved_approval = set()
     waiting_for_plan_reply = False
+    waiting_for_async_input = False
     latest_completion_seen = False
 
     try:
@@ -393,7 +394,9 @@ def status_for_session(path):
                     unresolved_user_input.clear()
                     unresolved_approval.clear()
                     waiting_for_plan_reply = False
+                    waiting_for_async_input = False
                 elif payload_type == "task_complete":
+                    waiting_for_async_input = False
                     turn_id = payload.get("turn_id")
                     latest_completion_seen = True
                     if turn_id:
@@ -403,6 +406,7 @@ def status_for_session(path):
                     unresolved_user_input.clear()
                     unresolved_approval.clear()
                 elif payload_type == "turn_aborted":
+                    waiting_for_async_input = False
                     turn_id = payload.get("turn_id")
                     latest_completion_seen = True
                     if turn_id:
@@ -422,10 +426,15 @@ def status_for_session(path):
             elif event_type == "response_item":
                 if payload_type == "message" and payload.get("role") == "user":
                     waiting_for_plan_reply = False
-                elif payload_type == "function_call":
+                    waiting_for_async_input = False
+                elif payload_type == "message" and payload.get("role") == "assistant":
+                    waiting_for_async_input = False
+                elif payload_type in ("function_call", "custom_tool_call"):
                     waiting_for_plan_reply = False
                     call_id = payload.get("call_id")
                     name = payload.get("name")
+                    if call_id and name:
+                        waiting_for_async_input = name == "request_user_input_async"
                     if call_id and name == "request_user_input":
                         unresolved_user_input.add(call_id)
                     elif call_id and name in ("request_approval", "requestApproval"):
@@ -439,7 +448,7 @@ def status_for_session(path):
     except Exception:
         return {"type": "notLoaded"}
 
-    if waiting_for_plan_reply or unresolved_user_input:
+    if waiting_for_plan_reply or waiting_for_async_input or unresolved_user_input:
         return {"type": "active", "activeFlags": ["waitingOnUserInput"]}
     if unresolved_approval:
         return {"type": "active", "activeFlags": ["waitingOnApproval"]}

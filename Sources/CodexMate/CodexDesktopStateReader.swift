@@ -90,6 +90,7 @@ struct CodexDesktopStateReader {
         case execApprovalRequest(callID: String)
         case execCommandResolution(callID: String)
         case userMessage
+        case assistantMessage
         case functionCall(name: String, callID: String, arguments: Any?)
         case functionCallOutput(callID: String)
     }
@@ -100,11 +101,12 @@ struct CodexDesktopStateReader {
         var activeTaskIDs: Set<String> = []
         var collaborationModeKindByTurnID: [String: String] = [:]
         var waitingForPlanReply = false
+        var waitingForAsyncInput = false
         var latestTaskCompletedAt: Date?
 
         var state: SessionPendingState {
             SessionPendingState(
-                waitingForInput: waitingForPlanReply || !unresolvedRequestUserInputCallIDs.isEmpty,
+                waitingForInput: waitingForPlanReply || waitingForAsyncInput || !unresolvedRequestUserInputCallIDs.isEmpty,
                 needsApproval: !unresolvedApprovalCallIDs.isEmpty,
                 hasActiveTask: !activeTaskIDs.isEmpty,
                 latestTaskCompletedAt: latestTaskCompletedAt
@@ -118,6 +120,7 @@ struct CodexDesktopStateReader {
                 unresolvedRequestUserInputCallIDs.removeAll()
                 unresolvedApprovalCallIDs.removeAll()
                 waitingForPlanReply = false
+                waitingForAsyncInput = false
                 latestTaskCompletedAt = nil
                 collaborationModeKindByTurnID = [:]
                 if let collaborationModeKind {
@@ -131,6 +134,7 @@ struct CodexDesktopStateReader {
                 unresolvedApprovalCallIDs.removeAll()
                 collaborationModeKindByTurnID.removeValue(forKey: turnID)
                 waitingForPlanReply = collaborationModeKind == "plan"
+                waitingForAsyncInput = false
             case let .turnAborted(turnID, completedAt):
                 latestTaskCompletedAt = CodexDesktopStateReader.latestDate(latestTaskCompletedAt, completedAt)
                 activeTaskIDs.remove(turnID)
@@ -138,20 +142,27 @@ struct CodexDesktopStateReader {
                 unresolvedApprovalCallIDs.removeAll()
                 collaborationModeKindByTurnID.removeValue(forKey: turnID)
                 waitingForPlanReply = false
+                waitingForAsyncInput = false
             case let .execApprovalRequest(callID):
                 unresolvedApprovalCallIDs.insert(callID)
             case let .execCommandResolution(callID):
                 unresolvedApprovalCallIDs.remove(callID)
             case .userMessage:
                 waitingForPlanReply = false
+                waitingForAsyncInput = false
+            case .assistantMessage:
+                waitingForAsyncInput = false
             case let .functionCall(name, callID, _):
                 waitingForPlanReply = false
+                waitingForAsyncInput = name == "request_user_input_async"
                 if name == "request_user_input" {
                     unresolvedRequestUserInputCallIDs.insert(callID)
                 } else if name == "request_approval" || name == "requestApproval" {
                     unresolvedApprovalCallIDs.insert(callID)
                 }
             case let .functionCallOutput(callID):
+                // Async input returns {"accepted":true} before the user replies.
+                // Only a reply, subsequent work, or a turn boundary clears that wait.
                 waitingForPlanReply = false
                 unresolvedRequestUserInputCallIDs.remove(callID)
                 unresolvedApprovalCallIDs.remove(callID)
@@ -327,6 +338,8 @@ struct CodexDesktopStateReader {
             databaseRunningThreadIDs = []
         }
         let runningThreadIDs = databaseRunningThreadIDs.union(pendingStates.runningThreadIDs)
+            .subtracting(pendingStates.waitingForInputThreadIDs)
+            .subtracting(pendingStates.approvalThreadIDs)
 
         return CodexDesktopRuntimeSnapshot(
             activeTurnCount: activeTurnCount,
@@ -1584,6 +1597,7 @@ struct CodexDesktopStateReader {
         var unresolvedApprovalCallIDs: Set<String> = []
         var pendingCompletedTurnIDForPlanLookup: String?
         var waitingForPlanReply = false
+        var waitingForAsyncInput: Bool?
         var sawLaterPlanReplyClearer = false
         var latestTaskCompletedAt: Date?
 
@@ -1604,6 +1618,7 @@ struct CodexDesktopStateReader {
                         activeTaskIDs: activeTurnID.map { [$0] } ?? [],
                         collaborationModeKindByTurnID: collaborationModeKindByTurnID,
                         waitingForPlanReply: waitingForPlanReply,
+                        waitingForAsyncInput: waitingForAsyncInput == true,
                         latestTaskCompletedAt: latestTaskCompletedAt
                     )
                 ),
@@ -1652,8 +1667,14 @@ struct CodexDesktopStateReader {
                 unresolvedApprovalCallIDs.remove(callID)
             case .userMessage:
                 sawLaterPlanReplyClearer = true
+                if waitingForAsyncInput == nil { waitingForAsyncInput = false }
+            case .assistantMessage:
+                if waitingForAsyncInput == nil { waitingForAsyncInput = false }
             case let .functionCall(name, callID, _):
                 sawLaterPlanReplyClearer = true
+                if waitingForAsyncInput == nil {
+                    waitingForAsyncInput = name == "request_user_input_async"
+                }
                 if name == "request_user_input" {
                     if !resolvedRequestUserInputCallIDs.contains(callID) {
                         unresolvedRequestUserInputCallIDs.insert(callID)
@@ -1955,11 +1976,12 @@ struct CodexDesktopStateReader {
         case "response_item":
             switch payloadType {
             case "message":
-                guard payload["role"] as? String == "user" else {
-                    return nil
+                switch payload["role"] as? String {
+                case "user": return .userMessage
+                case "assistant": return .assistantMessage
+                default: return nil
                 }
-                return .userMessage
-            case "function_call":
+            case "function_call", "custom_tool_call":
                 guard let name = payload["name"] as? String,
                       let callID = payload["call_id"] as? String
                 else {

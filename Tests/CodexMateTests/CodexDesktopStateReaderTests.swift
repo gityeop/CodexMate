@@ -2,6 +2,52 @@ import XCTest
 @testable import CodexMate
 
 final class CodexDesktopStateReaderTests: XCTestCase {
+    func testAsyncQuestionOverridesDatabaseActivityUntilWorkResumes() throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let databaseURL = directory.appending(path: "state.sqlite")
+        try createStateDatabase(at: databaseURL, sql: """
+        CREATE TABLE threads (
+            id TEXT PRIMARY KEY, first_user_message TEXT, title TEXT,
+            created_at INTEGER, updated_at INTEGER, cwd TEXT, rollout_path TEXT, archived INTEGER
+        );
+        CREATE TABLE logs (
+            id INTEGER PRIMARY KEY, process_uuid TEXT, target TEXT, message TEXT,
+            ts INTEGER, ts_nanos INTEGER, thread_id TEXT
+        );
+        INSERT INTO threads VALUES ('thread-1', 'Preview', 'Thread 1', 150, 195, '/tmp/project', NULL, 0);
+        INSERT INTO logs VALUES (1, 'process-1', 'codex_app_server::outgoing_message',
+            'app-server event: turn/started', 195, 0, 'thread-1');
+        """)
+        let sessionURL = directory.appending(path: "session.jsonl")
+        try """
+        {"type":"event_msg","payload":{"type":"task_started","turn_id":"turn-1","collaboration_mode_kind":"default"}}
+        {"type":"response_item","payload":{"type":"function_call","name":"request_user_input_async","call_id":"question-1","arguments":"{}"}}
+        {"type":"response_item","payload":{"type":"function_call_output","call_id":"question-1","output":"{\\"accepted\\":true}"}}
+
+        """.write(to: sessionURL, atomically: true, encoding: .utf8)
+        let reader = CodexDesktopStateReader(
+            now: { Date(timeIntervalSince1970: 200) },
+            stateDatabaseURLOverride: databaseURL,
+            desktopLogsDirectoryURLOverride: directory
+        )
+
+        let waiting = try reader.snapshot(candidateSessionPaths: ["thread-1": sessionURL.path])
+        XCTAssertEqual(waiting.activeTurnCount, 1)
+        XCTAssertEqual(waiting.waitingForInputThreadIDs, ["thread-1"])
+        XCTAssertEqual(waiting.runningThreadIDs, [])
+
+        try appendSessionLine(
+            #"{"type":"response_item","payload":{"type":"custom_tool_call","name":"exec","call_id":"work-1","input":"text('continuing');"}}"#,
+            to: sessionURL
+        )
+        let resumed = try reader.snapshot(candidateSessionPaths: ["thread-1": sessionURL.path])
+        XCTAssertEqual(resumed.waitingForInputThreadIDs, [])
+        XCTAssertEqual(resumed.runningThreadIDs, ["thread-1"])
+        XCTAssertEqual(resumed.sessionBackedRunningThreadIDs, ["thread-1"])
+    }
+
     func testSnapshotIncludesRecentActivityThreadIDsWithoutKnownCandidates() throws {
         let tempDirectoryURL = FileManager.default.temporaryDirectory
             .appending(path: UUID().uuidString)
