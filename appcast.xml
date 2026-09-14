@@ -3,20 +3,20 @@
     <channel>
         <title>CodexMate</title>
         <item>
-            <title>0.0.60</title>
-            <pubDate>Sat, 12 Sep 2026 22:03:59 +0900</pubDate>
-            <link>https://github.com/gityeop/CodexMate/releases/tag/v0.0.60</link>
-            <sparkle:version>60</sparkle:version>
-            <sparkle:shortVersionString>0.0.60</sparkle:shortVersionString>
+            <title>0.0.61</title>
+            <pubDate>Mon, 14 Sep 2026 10:30:40 +0900</pubDate>
+            <link>https://github.com/gityeop/CodexMate/releases/tag/v0.0.61</link>
+            <sparkle:version>61</sparkle:version>
+            <sparkle:shortVersionString>0.0.61</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description sparkle:format="markdown"><![CDATA[# CodexMate 0.0.60
+            <description sparkle:format="markdown"><![CDATA[# CodexMate 0.0.61
 
-- Detects asynchronous questions outside Plan mode and shows the waiting-for-input indicator until you reply or the task resumes.
-- Returns to the running indicator when Codex continues automatically, instead of leaving the task marked as waiting.
-- Prevents recent activity records from overriding a current input or approval request. Applies to local and remote task status tracking.
+- Fixes completed research and general answers in Plan mode incorrectly remaining marked as waiting for user input.
+- Keeps the waiting indicator when the final answer contains a proposed plan that needs your review.
+- Applies the fix to local and remote tasks, including status refreshes after restarting CodexMate.
 ]]></description>
-            <enclosure url="https://github.com/gityeop/CodexMate/releases/latest/download/CodexMate-0.0.60.zip" length="4174855" type="application/octet-stream" sparkle:edSignature="rwtkUw5iUkuMx9Ub2Z5wOn30aglHyYrTs/Pyh9UayCXnQN5IBsZ48FztE616x46/yvtRd2RJTMv5pXQrZkrkDg=="/>
+            <enclosure url="https://github.com/gityeop/CodexMate/releases/latest/download/CodexMate-0.0.61.zip" length="4176181" type="application/octet-stream" sparkle:edSignature="4WISj6nCil2ODNTgjGt7OxNyoXpEZQxXYlNvDG84vcWUXL0kTWIezBlZGmYAXBhTWDab53QGvIxCx1SrlF1WCQ=="/>
         </item>
     </channel>
 </rss>
