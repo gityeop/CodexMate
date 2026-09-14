@@ -1518,8 +1518,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         renderCurrentStatusItem()
 
         var hoverTooltipContentsByThreadID: [String: MenubarStatusPresentation.ThreadTooltipContent] = [:]
+        let weeklyUsageItem = makeWeeklyUsageMenuItem()
         menu.removeAllItems()
-        menu.addItem(makeWeeklyUsageMenuItem())
+        menu.addItem(weeklyUsageItem)
         for item in visibleThreadMenuItems(
             snapshot: snapshot,
             menuSections: menuSections,
@@ -1756,6 +1757,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             remainingPercent: remainingPercent,
             resetsAt: currentWeeklyUsage?.resetsAt,
             errorMessage: currentWeeklyUsageErrorMessage,
+            pinsToMenu: currentEffectiveDisplayMode == .menuBar,
             language: preferences.language
         )
         let item = NSMenuItem(
@@ -1767,6 +1769,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let intrinsicSize = indicatorView.intrinsicContentSize
         indicatorView.frame = NSRect(origin: .zero, size: intrinsicSize)
+        indicatorView.updatePinnedMenuHeader(replacing: menu.items.first?.view as? WeeklyUsageIndicatorView)
         item.view = indicatorView
         return item
     }
@@ -3252,6 +3255,7 @@ extension AppDelegate: NSMenuDelegate {
         guard menu == self.menu else { return }
 
         updateHoverTooltip(for: item)
+        (menu.items.first?.view as? WeeklyUsageIndicatorView)?.revealMenuItem(item)
     }
 
     func menuDidClose(_ menu: NSMenu) {
