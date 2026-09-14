@@ -567,9 +567,10 @@ final class CodexDesktopStateReaderTests: XCTestCase {
         )
     }
 
-    func testParseSessionPendingStateTreatsCompletedPlanTurnAsWaitingForUser() {
+    func testParseSessionPendingStateTreatsCompletedProposedPlanAsWaitingForUser() {
         let contents = """
         {"timestamp":"2026-04-11T13:37:39.449Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-1","collaboration_mode_kind":"plan"}}
+        {"type":"response_item","payload":{"type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"<proposed_plan>Prepare the release.</proposed_plan>"}]}}
         {"timestamp":"2026-04-11T13:40:09.000Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-1"}}
         """
 
@@ -589,6 +590,7 @@ final class CodexDesktopStateReaderTests: XCTestCase {
     func testParseSessionPendingStateClearsCompletedPlanWaitAfterUserReplies() {
         let contents = """
         {"timestamp":"2026-04-11T13:37:39.449Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-1","collaboration_mode_kind":"plan"}}
+        {"type":"response_item","payload":{"type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"<proposed_plan>Prepare the release.</proposed_plan>"}]}}
         {"timestamp":"2026-04-11T13:40:09.000Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-1"}}
         {"timestamp":"2026-04-11T13:40:10.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"continue"}]}}
         """
@@ -737,6 +739,7 @@ final class CodexDesktopStateReaderTests: XCTestCase {
         let sessionURL = tempDirectoryURL.appending(path: "thread-1.jsonl")
         try """
         {"timestamp":"2026-04-11T13:37:39.449Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-1","collaboration_mode_kind":"plan"}}
+        {"type":"response_item","payload":{"type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"<proposed_plan>Prepare the release.</proposed_plan>"}]}}
         {"timestamp":"2026-04-11T13:40:09.000Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-1"}}
         """.write(to: sessionURL, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes(
@@ -944,6 +947,9 @@ final class CodexDesktopStateReaderTests: XCTestCase {
             contentsOf: (0..<5000).map { index in
                 #"{"timestamp":"2026-04-12T03:05:00.000Z","type":"response_item","payload":{"type":"message","role":"assistant","content":"line-\#(index)"}}"#
             }
+        )
+        lines.append(
+            #"{"type":"response_item","payload":{"type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"<proposed_plan>Prepare the release.</proposed_plan>"}]}}"#
         )
         lines.append(
             #"{"timestamp":"2026-04-12T03:10:00.000Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-1"}}"#

@@ -47,6 +47,36 @@ final class AsyncUserInputStatusTests: XCTestCase {
         ])
     }
 
+    func testCompletedPlanModeWaitsOnlyForAnActualProposedPlan() throws {
+        let planStarted = #"{"type":"event_msg","payload":{"type":"task_started","turn_id":"turn-1","collaboration_mode_kind":"plan"}}"#
+        let answers: [(String, Bool)] = [
+            ("Here are the Reddit rule findings.", false),
+            ("<proposed_plan>Prepare the release post.</proposed_plan>", true),
+        ]
+        for (answer, waiting) in answers {
+            try assertTransitions([
+                (planStarted, false, true),
+                (question, true, true),
+                (accepted, true, true),
+                (#"{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Please investigate it yourself."}]}}"#, false, true),
+                (#"{"type":"response_item","payload":{"type":"custom_tool_call","name":"exec","call_id":"work-1","input":"text('research');"}}"#, false, true),
+                (#"{"type":"response_item","payload":{"type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"\#(answer)"}]}}"#, false, true),
+                (#"{"type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-1","completed_at":2000000006}}"#, waiting, false),
+            ])
+        }
+    }
+
+    func testGeneralAnswerAfterEarlierPlanCompletesWithoutWaiting() throws {
+        try assertTransitions([
+            (#"{"type":"event_msg","payload":{"type":"task_started","turn_id":"turn-1","collaboration_mode_kind":"plan"}}"#, false, true),
+            (#"{"type":"response_item","payload":{"type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"<proposed_plan>Prepare a post.</proposed_plan>"}]}}"#, false, true),
+            (#"{"type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-1","completed_at":2000000002}}"#, true, false),
+            (#"{"type":"event_msg","payload":{"type":"task_started","turn_id":"turn-2","collaboration_mode_kind":"plan"}}"#, false, true),
+            (#"{"type":"response_item","payload":{"type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"The rule has a developer flair exception."}]}}"#, false, true),
+            (#"{"type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-2","completed_at":2000000005}}"#, false, false),
+        ])
+    }
+
     // Check a full replay, a fresh launch's reverse scan, and live incremental reads
     // at every boundary, including the exact acceptance-before-work sequence.
     private func assertTransitions(
@@ -81,6 +111,9 @@ final class AsyncUserInputStatusTests: XCTestCase {
             XCTAssertEqual(CodexDesktopStateReader().sessionPendingState(forSessionFileAt: sessionURL), replay, "Cold: \(step.line)", file: file, line: line)
 
             let running: Set<String> = replay.hasActiveTask && !replay.waitingForInput ? ["thread-1"] : []
+            if let completedAt = replay.latestTaskCompletedAt {
+                store.apply(desktopCompletionHints: ["thread-1": completedAt])
+            }
             store.apply(connectedDesktopSnapshot: CodexDesktopRuntimeSnapshot(
                 activeTurnCount: replay.hasActiveTask ? 1 : 0,
                 runningThreadIDs: running,
@@ -88,9 +121,6 @@ final class AsyncUserInputStatusTests: XCTestCase {
                 waitingForInputThreadIDs: replay.waitingForInput ? ["thread-1"] : [],
                 latestTurnCompletedAtByThreadID: replay.latestTaskCompletedAt.map { ["thread-1": $0] } ?? [:]
             ), observedAt: Date(timeIntervalSince1970: 2_000_000_000 + Double(index)))
-            if let completedAt = replay.latestTaskCompletedAt {
-                store.apply(desktopCompletionHints: ["thread-1": completedAt])
-            }
             let icon = step.waiting ? "💬" : step.active ? "⏳" : "✅"
             XCTAssertEqual(store.recentThreads.first?.displayStatus.icon, icon, "Row: \(step.line)", file: file, line: line)
             XCTAssertEqual(MenubarStatusPresentation.statusItemIcon(

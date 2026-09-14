@@ -370,6 +370,7 @@ def status_for_session(path):
     unresolved_approval = set()
     waiting_for_plan_reply = False
     waiting_for_async_input = False
+    latest_assistant_message_is_proposed_plan = False
     latest_completion_seen = False
 
     try:
@@ -395,13 +396,14 @@ def status_for_session(path):
                     unresolved_approval.clear()
                     waiting_for_plan_reply = False
                     waiting_for_async_input = False
+                    latest_assistant_message_is_proposed_plan = False
                 elif payload_type == "task_complete":
                     waiting_for_async_input = False
                     turn_id = payload.get("turn_id")
                     latest_completion_seen = True
                     if turn_id:
                         active_turn_ids.discard(turn_id)
-                        waiting_for_plan_reply = mode_by_turn_id.get(turn_id) == "plan"
+                        waiting_for_plan_reply = mode_by_turn_id.get(turn_id) == "plan" and latest_assistant_message_is_proposed_plan
                         mode_by_turn_id.pop(turn_id, None)
                     unresolved_user_input.clear()
                     unresolved_approval.clear()
@@ -429,6 +431,13 @@ def status_for_session(path):
                     waiting_for_async_input = False
                 elif payload_type == "message" and payload.get("role") == "assistant":
                     waiting_for_async_input = False
+                    content = payload.get("content") or []
+                    text = "".join(part.get("text", "") for part in content if isinstance(part, dict))
+                    latest_assistant_message_is_proposed_plan = (
+                        payload.get("phase") == "final_answer"
+                        and "<proposed_plan>" in text
+                        and "</proposed_plan>" in text
+                    )
                 elif payload_type in ("function_call", "custom_tool_call"):
                     waiting_for_plan_reply = False
                     call_id = payload.get("call_id")

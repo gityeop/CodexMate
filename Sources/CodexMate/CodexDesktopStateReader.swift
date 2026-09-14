@@ -90,7 +90,7 @@ struct CodexDesktopStateReader {
         case execApprovalRequest(callID: String)
         case execCommandResolution(callID: String)
         case userMessage
-        case assistantMessage
+        case assistantMessage(isProposedPlan: Bool)
         case functionCall(name: String, callID: String, arguments: Any?)
         case functionCallOutput(callID: String)
     }
@@ -102,6 +102,7 @@ struct CodexDesktopStateReader {
         var collaborationModeKindByTurnID: [String: String] = [:]
         var waitingForPlanReply = false
         var waitingForAsyncInput = false
+        var latestAssistantMessageIsProposedPlan = false
         var latestTaskCompletedAt: Date?
 
         var state: SessionPendingState {
@@ -121,6 +122,7 @@ struct CodexDesktopStateReader {
                 unresolvedApprovalCallIDs.removeAll()
                 waitingForPlanReply = false
                 waitingForAsyncInput = false
+                latestAssistantMessageIsProposedPlan = false
                 latestTaskCompletedAt = nil
                 collaborationModeKindByTurnID = [:]
                 if let collaborationModeKind {
@@ -133,7 +135,7 @@ struct CodexDesktopStateReader {
                 unresolvedRequestUserInputCallIDs.removeAll()
                 unresolvedApprovalCallIDs.removeAll()
                 collaborationModeKindByTurnID.removeValue(forKey: turnID)
-                waitingForPlanReply = collaborationModeKind == "plan"
+                waitingForPlanReply = collaborationModeKind == "plan" && latestAssistantMessageIsProposedPlan
                 waitingForAsyncInput = false
             case let .turnAborted(turnID, completedAt):
                 latestTaskCompletedAt = CodexDesktopStateReader.latestDate(latestTaskCompletedAt, completedAt)
@@ -150,8 +152,9 @@ struct CodexDesktopStateReader {
             case .userMessage:
                 waitingForPlanReply = false
                 waitingForAsyncInput = false
-            case .assistantMessage:
+            case let .assistantMessage(isProposedPlan):
                 waitingForAsyncInput = false
+                latestAssistantMessageIsProposedPlan = isProposedPlan
             case let .functionCall(name, callID, _):
                 waitingForPlanReply = false
                 waitingForAsyncInput = name == "request_user_input_async"
@@ -1598,6 +1601,7 @@ struct CodexDesktopStateReader {
         var pendingCompletedTurnIDForPlanLookup: String?
         var waitingForPlanReply = false
         var waitingForAsyncInput: Bool?
+        var latestAssistantMessageIsProposedPlan: Bool?
         var sawLaterPlanReplyClearer = false
         var latestTaskCompletedAt: Date?
 
@@ -1619,6 +1623,7 @@ struct CodexDesktopStateReader {
                         collaborationModeKindByTurnID: collaborationModeKindByTurnID,
                         waitingForPlanReply: waitingForPlanReply,
                         waitingForAsyncInput: waitingForAsyncInput == true,
+                        latestAssistantMessageIsProposedPlan: latestAssistantMessageIsProposedPlan == true,
                         latestTaskCompletedAt: latestTaskCompletedAt
                     )
                 ),
@@ -1632,10 +1637,16 @@ struct CodexDesktopStateReader {
             }
 
             if let pendingCompletedTurnIDForPlanLookup {
-                if case let .taskStarted(turnID, collaborationModeKind) = event,
-                   turnID == pendingCompletedTurnIDForPlanLookup {
-                    waitingForPlanReply = collaborationModeKind == "plan"
+                switch event {
+                case let .assistantMessage(isProposedPlan):
+                    if latestAssistantMessageIsProposedPlan == nil {
+                        latestAssistantMessageIsProposedPlan = isProposedPlan
+                    }
+                case let .taskStarted(turnID, collaborationModeKind) where turnID == pendingCompletedTurnIDForPlanLookup:
+                    waitingForPlanReply = collaborationModeKind == "plan" && latestAssistantMessageIsProposedPlan == true
                     return finalResult()
+                default:
+                    break
                 }
 
                 return nil
@@ -1668,8 +1679,11 @@ struct CodexDesktopStateReader {
             case .userMessage:
                 sawLaterPlanReplyClearer = true
                 if waitingForAsyncInput == nil { waitingForAsyncInput = false }
-            case .assistantMessage:
+            case let .assistantMessage(isProposedPlan):
                 if waitingForAsyncInput == nil { waitingForAsyncInput = false }
+                if latestAssistantMessageIsProposedPlan == nil {
+                    latestAssistantMessageIsProposedPlan = isProposedPlan
+                }
             case let .functionCall(name, callID, _):
                 sawLaterPlanReplyClearer = true
                 if waitingForAsyncInput == nil {
@@ -1978,7 +1992,15 @@ struct CodexDesktopStateReader {
             case "message":
                 switch payload["role"] as? String {
                 case "user": return .userMessage
-                case "assistant": return .assistantMessage
+                case "assistant":
+                    let text = (payload["content"] as? [[String: Any]])?
+                        .compactMap { $0["text"] as? String }
+                        .joined() ?? ""
+                    return .assistantMessage(isProposedPlan:
+                        payload["phase"] as? String == "final_answer"
+                            && text.contains("<proposed_plan>")
+                            && text.contains("</proposed_plan>")
+                    )
                 default: return nil
                 }
             case "function_call", "custom_tool_call":
