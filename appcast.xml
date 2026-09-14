@@ -3,20 +3,20 @@
     <channel>
         <title>CodexMate</title>
         <item>
-            <title>0.0.61</title>
-            <pubDate>Mon, 14 Sep 2026 10:30:40 +0900</pubDate>
-            <link>https://github.com/gityeop/CodexMate/releases/tag/v0.0.61</link>
-            <sparkle:version>61</sparkle:version>
-            <sparkle:shortVersionString>0.0.61</sparkle:shortVersionString>
+            <title>0.0.62</title>
+            <pubDate>Tue, 15 Sep 2026 02:52:23 +0900</pubDate>
+            <link>https://github.com/gityeop/CodexMate/releases/tag/v0.0.62</link>
+            <sparkle:version>62</sparkle:version>
+            <sparkle:shortVersionString>0.0.62</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description sparkle:format="markdown"><![CDATA[# CodexMate 0.0.61
+            <description sparkle:format="markdown"><![CDATA[# CodexMate 0.0.62
 
-- Fixes completed research and general answers in Plan mode incorrectly remaining marked as waiting for user input.
-- Keeps the waiting indicator when the final answer contains a proposed plan that needs your review.
-- Applies the fix to local and remote tasks, including status refreshes after restarting CodexMate.
+- Keeps weekly usage visible at the top of the menu while you scroll through tasks, with separate space for the task list.
+- Fixes clipped remaining-usage text and keeps the header position and spacing consistent when scroll arrows appear.
+- Adds a little more space above weekly usage and keeps the last task fully visible during keyboard navigation.
 ]]></description>
-            <enclosure url="https://github.com/gityeop/CodexMate/releases/latest/download/CodexMate-0.0.61.zip" length="4176181" type="application/octet-stream" sparkle:edSignature="4WISj6nCil2ODNTgjGt7OxNyoXpEZQxXYlNvDG84vcWUXL0kTWIezBlZGmYAXBhTWDab53QGvIxCx1SrlF1WCQ=="/>
+            <enclosure url="https://github.com/gityeop/CodexMate/releases/latest/download/CodexMate-0.0.62.zip" length="4182711" type="application/octet-stream" sparkle:edSignature="i5eM4EdZaOIHAHpBI1fKaOnEiVE1BAWH5legnkB1UQSxvj1PyzmFVkwXGShrhekPJ/pY8DulHgco63yNqcCLAQ=="/>
         </item>
     </channel>
 </rss>
