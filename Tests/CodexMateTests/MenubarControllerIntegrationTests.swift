@@ -92,6 +92,52 @@ final class MenubarControllerIntegrationTests: XCTestCase {
         XCTAssertNil(controller.nextAttentionThreadID())
     }
 
+    func testNextAttentionThreadReturnsCurrentDesktopChatWhenItCompletesAfterLastView() async throws {
+        let controller = makeController(
+            desktopUpdates: [desktopUpdate(
+                latestViewed: ["current": Date(timeIntervalSince1970: 150)],
+                latestCompleted: ["current": Date(timeIntervalSince1970: 200)]
+            )],
+            recentThreadResponses: [[thread(id: "current", updatedAt: 100, cwd: "/tmp/A")]]
+        )
+        try await controller.loadInitialThreads()
+        _ = controller.prepareSnapshot()
+        _ = await controller.refreshDesktopActivity()
+
+        let current = controller.prepareSnapshot().snapshot.projectSections.flatMap(\.allThreads)
+            .first(where: { $0.id == "current" })
+        XCTAssertEqual(current?.hasUnreadContent, true)
+        XCTAssertEqual(controller.nextAttentionThreadID(), "current")
+
+        XCTAssertTrue(controller.markThreadRead("current"))
+        XCTAssertNil(controller.nextAttentionThreadID())
+    }
+
+    func testNextAttentionThreadVisitsOtherUnreadChatBeforeWrappingToCurrentChat() async throws {
+        let controller = makeController(
+            desktopUpdates: [desktopUpdate(
+                latestViewed: ["current": Date(timeIntervalSince1970: 150)],
+                latestCompleted: [
+                    "current": Date(timeIntervalSince1970: 400),
+                    "other": Date(timeIntervalSince1970: 200)
+                ]
+            )],
+            recentThreadResponses: [[
+                thread(id: "current", updatedAt: 300, cwd: "/tmp/A"),
+                thread(id: "other", updatedAt: 100, cwd: "/tmp/A")
+            ]]
+        )
+        try await controller.loadInitialThreads()
+        _ = controller.prepareSnapshot()
+        _ = await controller.refreshDesktopActivity()
+
+        XCTAssertEqual(controller.nextAttentionThreadID(), "other")
+        XCTAssertTrue(controller.markThreadRead("other"))
+        XCTAssertEqual(controller.nextAttentionThreadID(), "current")
+        XCTAssertTrue(controller.markThreadRead("current"))
+        XCTAssertNil(controller.nextAttentionThreadID())
+    }
+
     func testLiveTurnStartedThreadHydratesFromMetadataIntoProject() async throws {
         let controller = makeController(
             recentThreadResponses: [

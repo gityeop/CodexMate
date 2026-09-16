@@ -788,16 +788,17 @@ final class MenubarController {
             visibleThreadLimit: .max,
             now: now()
         )
+        let currentThreadID = latestViewedThread?.id
         let attentionThreadIDs = Set(snapshot.projectSections.flatMap(\.allThreads).filter {
             !$0.thread.isSubagent && ($0.thread.presentationStatus == .waitingForUser || $0.hasUnreadContent)
+                && ($0.id != currentThreadID || $0.hasUnreadContent)
         }.map(\.id))
         let threads = state.recentThreads
-        let currentThreadID = latestViewedThread?.id
         let startIndex = threads.firstIndex(where: { $0.id == currentThreadID }).map { $0 + 1 } ?? 0
 
         for offset in 0..<threads.count {
             let threadID = threads[(startIndex + offset) % threads.count].id
-            if threadID != currentThreadID, attentionThreadIDs.contains(threadID) {
+            if attentionThreadIDs.contains(threadID) {
                 return threadID
             }
         }
