@@ -3,20 +3,19 @@
     <channel>
         <title>CodexMate</title>
         <item>
-            <title>0.0.62</title>
-            <pubDate>Tue, 15 Sep 2026 02:52:23 +0900</pubDate>
-            <link>https://github.com/gityeop/CodexMate/releases/tag/v0.0.62</link>
-            <sparkle:version>62</sparkle:version>
-            <sparkle:shortVersionString>0.0.62</sparkle:shortVersionString>
+            <title>0.0.63</title>
+            <pubDate>Wed, 16 Sep 2026 22:12:57 +0900</pubDate>
+            <link>https://github.com/gityeop/CodexMate/releases/tag/v0.0.63</link>
+            <sparkle:version>63</sparkle:version>
+            <sparkle:shortVersionString>0.0.63</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description sparkle:format="markdown"><![CDATA[# CodexMate 0.0.62
+            <description sparkle:format="markdown"><![CDATA[# CodexMate 0.0.63
 
-- Keeps weekly usage visible at the top of the menu while you scroll through tasks, with separate space for the task list.
-- Fixes clipped remaining-usage text and keeps the header position and spacing consistent when scroll arrows appear.
-- Adds a little more space above weekly usage and keeps the last task fully visible during keyboard navigation.
+- Fixes the Next Chat Needing Attention shortcut doing nothing when the currently open chat is the only unread chat and you are using another app.
+- Keeps the existing navigation order, visiting other chats that need attention before returning to the current unread chat.
 ]]></description>
-            <enclosure url="https://github.com/gityeop/CodexMate/releases/latest/download/CodexMate-0.0.62.zip" length="4182711" type="application/octet-stream" sparkle:edSignature="i5eM4EdZaOIHAHpBI1fKaOnEiVE1BAWH5legnkB1UQSxvj1PyzmFVkwXGShrhekPJ/pY8DulHgco63yNqcCLAQ=="/>
+            <enclosure url="https://github.com/gityeop/CodexMate/releases/latest/download/CodexMate-0.0.63.zip" length="4182831" type="application/octet-stream" sparkle:edSignature="AUbvj+SZxqwPClFocbJoQ5mz8zqQeKqZS2RQMmeLAYmv/HsPKhs/ZKsh1gT7qUxtOtZu4sv5ZSMyAGRqfJx7Dw=="/>
         </item>
     </channel>
 </rss>
