@@ -20,6 +20,7 @@ final class ProjectGraphStore: ObservableObject {
     @Published private(set) var language: AppLanguage = .system
     @Published var selectedCommitID: String?
     @Published var projectQuery = ""
+    @Published private var projectCatalog = CodexDesktopProjectCatalog.empty
 
     private let reader = GitRepositoryReader()
     private let defaults: UserDefaults
@@ -45,11 +46,24 @@ final class ProjectGraphStore: ObservableObject {
     }
 
     var linkedThreads: [AppStateStore.ThreadRow] {
-        guard let path = isNonGitProject ? projectPath : worktreePath else { return [] }
+        guard let projectPath, let path = isNonGitProject ? projectPath : worktreePath else { return [] }
         let root = URL(fileURLWithPath: path).resolvingSymlinksInPath().path
         return threads.filter { thread in
+            guard !thread.isSubagent, !projectCatalog.projectlessThreadIDs.contains(thread.id) else { return false }
+            let assignedProjectID = projectCatalog.threadWorkspaceRootHints[thread.id].map { _ in
+                projectCatalog.project(forThreadID: thread.id, cwd: thread.cwd).id
+            }
+            if let assignedProjectID, assignedProjectID != projectPath { return false }
+
             let cwd = URL(fileURLWithPath: thread.cwd).resolvingSymlinksInPath().path
-            return !thread.isSubagent && !thread.cwd.isEmpty && CodexDesktopWorktreePath.matches(root: root, path: cwd)
+            if !thread.cwd.isEmpty, CodexDesktopWorktreePath.matches(root: root, path: cwd) { return true }
+
+            // Project-assigned chats without a checkout belong to the original project view.
+            guard assignedProjectID == projectPath, isNonGitProject || selectedWorktree?.isMain == true else { return false }
+            return snapshot?.worktrees.contains { worktree in
+                let worktreeRoot = URL(fileURLWithPath: worktree.path).resolvingSymlinksInPath().path
+                return !thread.cwd.isEmpty && CodexDesktopWorktreePath.matches(root: worktreeRoot, path: cwd)
+            } != true
         }.sorted { $0.activityUpdatedAt > $1.activityUpdatedAt }
     }
 
@@ -62,6 +76,7 @@ final class ProjectGraphStore: ObservableObject {
     }
 
     func update(catalog: CodexDesktopProjectCatalog, threads: [AppStateStore.ThreadRow], language: AppLanguage, sourceError: String?) {
+        if projectCatalog != catalog { projectCatalog = catalog }
         let projects = catalog.workspaceRoots.sorted { $0.displayName.localizedStandardCompare($1.displayName) == .orderedAscending }
         if self.projects != projects { self.projects = projects }
         if self.threads != threads { self.threads = threads }
