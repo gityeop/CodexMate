@@ -52,6 +52,7 @@ private struct MatePopUp<Selection: Hashable>: NSViewRepresentable {
         button.invalidateIntrinsicContentSize()
     }
 
+    @MainActor
     final class Coordinator: NSObject {
         var parent: MatePopUp
         init(parent: MatePopUp) { self.parent = parent }
