@@ -13,8 +13,8 @@ MACOS_DIR="$CONTENTS_DIR/MacOS"
 RESOURCES_DIR="$CONTENTS_DIR/Resources"
 FRAMEWORKS_DIR="$CONTENTS_DIR/Frameworks"
 PLIST_TEMPLATE="$ROOT_DIR/Packaging/CodexMate-Info.plist.template"
-APP_ICON_SOURCE="${APP_ICON_SOURCE:-$ROOT_DIR/Packaging/$APP_NAME.png}"
-APP_ICON_FILE="${APP_ICON_FILE:-$APP_NAME.icns}"
+APP_ICON_SOURCE="${APP_ICON_SOURCE:-$ROOT_DIR/Packaging/$APP_NAME.icon}"
+APP_ICON_INFO_PLIST="$DIST_DIR/app-icon-info.plist"
 APPLE_KEYCHAIN_PATH="${APPLE_KEYCHAIN_PATH:-}"
 APPLE_KEYCHAIN_PASSWORD="${APPLE_KEYCHAIN_PASSWORD:-}"
 APPLE_KEYCHAIN_UNLOCK_TIMEOUT="${APPLE_KEYCHAIN_UNLOCK_TIMEOUT:-21600}"
@@ -177,32 +177,25 @@ prepare_signing_keychain() {
 
 create_app_icon() {
   local source="$1"
-  local icon_file="$2"
-  local iconset_dir="$DIST_DIR/${APP_NAME}.iconset"
-  local icns_path="$RESOURCES_DIR/$icon_file"
-  local size doubled
+  local icon_name="${source:t:r}"
 
-  if [[ ! -f "$source" ]]; then
+  if [[ ! -f "$source/icon.json" ]]; then
     echo "App icon source not found at $source" >&2
     exit 1
   fi
 
-  if ! command -v iconutil >/dev/null 2>&1; then
-    echo "iconutil is required to package the app icon." >&2
-    exit 1
-  fi
-
-  rm -rf "$iconset_dir"
-  mkdir -p "$iconset_dir"
-
-  for size in 16 32 128 256 512; do
-    doubled=$((size * 2))
-    sips -z "$size" "$size" "$source" --out "$iconset_dir/icon_${size}x${size}.png" >/dev/null
-    sips -z "$doubled" "$doubled" "$source" --out "$iconset_dir/icon_${size}x${size}@2x.png" >/dev/null
-  done
-
-  iconutil -c icns "$iconset_dir" -o "$icns_path"
-  rm -rf "$iconset_dir"
+  xcrun actool "$source" \
+    --compile "$RESOURCES_DIR" \
+    --output-format human-readable-text \
+    --notices --warnings --errors \
+    --output-partial-info-plist "$APP_ICON_INFO_PLIST" \
+    --app-icon "$icon_name" \
+    --include-all-app-icons \
+    --enable-on-demand-resources NO \
+    --development-region en \
+    --target-device mac \
+    --minimum-deployment-target 13.0 \
+    --platform macosx
 }
 
 SPARKLE_FEED_URL="${SPARKLE_FEED_URL:-$(default_sparkle_feed_url)}"
@@ -267,7 +260,7 @@ for required_bundle in "${REQUIRED_RESOURCE_BUNDLES[@]}"; do
   fi
 done
 
-create_app_icon "$APP_ICON_SOURCE" "$APP_ICON_FILE"
+create_app_icon "$APP_ICON_SOURCE"
 
 SPARKLE_FRAMEWORK_PATH="$(find "$ROOT_DIR/.build" -path '*Sparkle.framework' -type d -print -quit)"
 if [[ -n "$SPARKLE_FRAMEWORK_PATH" ]]; then
@@ -281,8 +274,8 @@ sed \
   -e "s#__APP_VERSION__#$APP_VERSION#g" \
   -e "s#__SPARKLE_FEED_URL__#$SPARKLE_FEED_URL#g" \
   -e "s#__SPARKLE_PUBLIC_KEY__#$SPARKLE_PUBLIC_KEY#g" \
-  -e "s#__ICON_FILE__#$APP_ICON_FILE#g" \
   "$PLIST_TEMPLATE" > "$CONTENTS_DIR/Info.plist"
+/usr/libexec/PlistBuddy -c "Merge '$APP_ICON_INFO_PLIST'" "$CONTENTS_DIR/Info.plist"
 
 SIGN_IDENTITY="${APPLE_SIGN_IDENTITY:--}"
 

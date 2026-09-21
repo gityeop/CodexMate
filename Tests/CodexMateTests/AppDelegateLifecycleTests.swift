@@ -27,7 +27,8 @@ final class AppDelegateLifecycleTests: XCTestCase {
         let settingsItem = NSMenuItem(title: "Settings", action: nil, keyEquivalent: "")
         settingsItem.representedObject = "settings"
         let quitItem = NSMenuItem(title: "Quit", action: nil, keyEquivalent: "")
-        [weeklyUsageItem, oldThreadItem, .separator(), settingsItem, quitItem].forEach(menu.addItem)
+        let graphItem = NSMenuItem(title: "Open Git Graph", action: nil, keyEquivalent: "")
+        [weeklyUsageItem, oldThreadItem, .separator(), settingsItem, graphItem, quitItem].forEach(menu.addItem)
 
         let updatedThreadItem = NSMenuItem(title: "Updated thread", action: nil, keyEquivalent: "")
         AppDelegate.replaceOpenMenuBarThreadItems(
@@ -42,7 +43,8 @@ final class AppDelegateLifecycleTests: XCTestCase {
         XCTAssertTrue(menu.items[1] === updatedThreadItem)
         XCTAssertTrue(menu.items[2].isSeparatorItem)
         XCTAssertTrue(menu.items[3] === settingsItem)
-        XCTAssertTrue(menu.items[4] === quitItem)
+        XCTAssertTrue(menu.items[4] === graphItem)
+        XCTAssertTrue(menu.items[5] === quitItem)
         XCTAssertFalse(menu.items.contains(where: { $0 === oldThreadItem }))
     }
 }

@@ -2,7 +2,7 @@
 
 > Codex keeps getting better, but human attention is still the bottleneck. CodexMate was built to reduce that bottleneck, so you can keep multiple projects moving without constantly checking, waiting, and context-switching.
 
-CodexMate is a macOS menu bar companion for Codex Desktop. It helps you stay on top of recent threads, approvals, completions, and failures so your attention only returns when work actually needs you.
+CodexMate is a macOS companion for Codex Desktop, with a project Git Graph window and lightweight menu bar or notch status. It helps you locate parallel work and stay on top of recent threads, approvals, completions, and failures.
 
 짧게 말하면, CodexMate는 AI가 아니라 인간의 주의력이 병목이 되는 순간을 줄이기 위한 Codex Desktop 메뉴바 동반 앱입니다.
 
@@ -32,6 +32,9 @@ CodexMate adds a lightweight layer on top of Codex Desktop. Instead of repeatedl
 
 ## Key Features
 
+- Inspect a project's worktrees, branches, and commit graph in a dedicated Mac window.
+- See uncommitted files and open recent Codex chats linked to each worktree.
+- Keep menu bar or notch status active after closing the main window; reopen it from the Dock or with Command-1.
 - See recent Codex threads without keeping every project in the foreground.
 - Spot running, waiting, and completed work faster from the menu bar.
 - Notice approvals, completions, and failures without hovering over Codex Desktop all day.

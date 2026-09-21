@@ -1,0 +1,12 @@
+Generated with the built-in image_gen tool.
+
+Use case: logo-brand
+Asset type: final 1024x1024 full-bleed square artwork for the CodexMate macOS app icon.
+Primary request: Faithfully redraw and polish the ORIGINAL attached logo. The character is a SQUASHED SLIME, a flattened soft gelatinous blob, NOT an animal. Keep its original personality and composition.
+Input image 1: original CodexMate logo, reference for the squashed slime silhouette, terminal expression, icy colors, and speech bubble. Do not preserve its baked-in rounded tile or glossy rim.
+Subject: one very wide, low, compressed icy-white/light-blue slime resting in a puddle-like shape. Its whole body is a single squishy irregular lump, broader at the bottom, with a nearly flat base, slumped uneven upper surface, softly bulging sides and small irregular pixel-step folds. The upper ridge has low broad asymmetrical deformations from being squashed, NOT two pointed symmetrical ears; no deep V-shaped head/ear silhouette. Keep the character looking flattened and a little weary, like the reference. Width approximately 74% of canvas; height only about 29% of canvas. Body sits at x=13%..87%, y=50%..79%.
+Face: a blue terminal greater-than > mark on the left and a blue slightly tilted short underscore on the right, positioned across the middle of the flattened blob, closely matching the original face. No mouth or extra facial details.
+A small white pixel-art speech bubble floats above the right side at x=62%..83%, y=20%..39%, with three evenly spaced blue square dots and a small downward tail.
+Style: polished restrained pixel art with clean deliberate stair-step contours, an icy-white face area, a little pale-blue translucent-jelly shading at the bottom/right, and a tiny white highlight on the slime's upper-left. Preserve the soft squashed character instead of making a rigid geometric cat face. No strong outlines, no noisy specks, no blur.
+Background: completely opaque blue full-bleed square, gently graded from #4098F5 at top to #2467DE at bottom. Blue reaches ALL FOUR straight edges and ALL FOUR corners; absolutely no outer transparency or inset margin.
+Constraints: exactly one final square image. No cat, no ears, no animal, no whiskers, no limbs, no horns. No app name, text, cursor, hand or watermark. No rounded-square tile inside the canvas, no squircle, border, gray frame, black surround, baked outer glass rim or cast shadow. macOS will supply the outer rounded mask later.

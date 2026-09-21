@@ -89,17 +89,11 @@ private struct SettingsView: View {
     var body: some View {
         Form {
             Section(viewModel.text("settings.generalSection")) {
-                Picker(viewModel.text("settings.languageLabel"), selection: languageBinding) {
-                    ForEach(viewModel.languageOptions) { language in
-                        Text(viewModel.label(for: language)).tag(language)
-                    }
-                }
+                MateMenuPicker(title: viewModel.text("settings.languageLabel"), selection: languageBinding,
+                               options: viewModel.languageOptions, label: { viewModel.label(for: $0) })
 
-                Picker(viewModel.text("settings.displayModeLabel"), selection: displayModeBinding) {
-                    ForEach(viewModel.displayModeOptions) { displayMode in
-                        Text(viewModel.label(for: displayMode)).tag(displayMode)
-                    }
-                }
+                MateMenuPicker(title: viewModel.text("settings.displayModeLabel"), selection: displayModeBinding,
+                               options: viewModel.displayModeOptions, label: { viewModel.label(for: $0) })
 
                 if let message = viewModel.displayModeMessage {
                     helpText(message)
@@ -112,11 +106,8 @@ private struct SettingsView: View {
                     )
                 }
 
-                Picker(viewModel.text("settings.threadListViewModeLabel"), selection: threadListViewModeBinding) {
-                    ForEach(viewModel.threadListViewModeOptions) { threadListViewMode in
-                        Text(viewModel.label(for: threadListViewMode)).tag(threadListViewMode)
-                    }
-                }
+                MateMenuPicker(title: viewModel.text("settings.threadListViewModeLabel"), selection: threadListViewModeBinding,
+                               options: viewModel.threadListViewModeOptions, label: { viewModel.label(for: $0) })
 
                 if viewModel.showsProjectThreadListSettings {
                     Stepper(
@@ -196,12 +187,18 @@ private struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .padding(20)
+        .scrollContentBackground(.hidden)
+        .font(MateUI.font)
+        .controlSize(.regular)
+        .buttonStyle(MateButtonStyle())
+        .tint(.accentColor)
+        .padding(MateUI.sectionSpacing)
+        .background(MateUI.panel)
         .frame(minWidth: 520, minHeight: 500)
     }
 
     private func shortcutRow(_ name: KeyboardShortcuts.Name, label: String, help: String) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: MateUI.spacing) {
             Text(viewModel.text(label))
             ShortcutRecorderField(
                 shortcut: viewModel.shortcut(for: name),
@@ -210,7 +207,7 @@ private struct SettingsView: View {
                 clearLabel: viewModel.text("settings.shortcutClear"),
                 onChange: { viewModel.setShortcut($0, for: name) }
             )
-            .frame(width: 300, height: 28)
+            .frame(width: 300, height: MateUI.controlHeight)
             helpText(viewModel.text(help))
         }
     }
@@ -323,7 +320,9 @@ private struct ShortcutRecorderField: NSViewRepresentable {
         nsView.recorder.shortcut = shortcut
         nsView.recorder.placeholderLabel = placeholder
         nsView.recorder.recordingLabel = recordingLabel
+        nsView.recorder.setAccessibilityLabel(placeholder)
         nsView.clearButton.title = clearLabel
+        nsView.clearButton.toolTip = clearLabel
         nsView.clearButton.isEnabled = shortcut != nil
         nsView.onChange = onChange
     }
@@ -338,16 +337,18 @@ final class ShortcutRecorderControl: NSStackView {
         super.init(frame: frameRect)
         orientation = .horizontal
         alignment = .centerY
-        spacing = 12
+        spacing = MateUI.spacing
         addArrangedSubview(recorder)
         addArrangedSubview(clearButton)
         recorder.widthAnchor.constraint(equalToConstant: 220).isActive = true
-        recorder.heightAnchor.constraint(equalToConstant: 28).isActive = true
+        recorder.heightAnchor.constraint(equalToConstant: MateUI.controlHeight).isActive = true
+        clearButton.heightAnchor.constraint(equalToConstant: MateUI.controlHeight).isActive = true
         recorder.onChange = { [weak self] shortcut in
             self?.clearButton.isEnabled = shortcut != nil
             self?.onChange?(shortcut)
         }
         clearButton.bezelStyle = .rounded
+        clearButton.font = .systemFont(ofSize: 13)
         clearButton.target = self
         clearButton.action = #selector(clearShortcut)
     }
@@ -395,17 +396,17 @@ final class ShortcutRecorderTextField: NSTextField {
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
+        cell = CenteredShortcutCell(textCell: "")
         isEditable = false
         isSelectable = false
-        isBezeled = true
-        bezelStyle = .roundedBezel
-        drawsBackground = true
+        isBezeled = false
+        drawsBackground = false
         alignment = .center
-        font = .systemFont(ofSize: NSFont.systemFontSize)
+        font = .systemFont(ofSize: 13)
         lineBreakMode = .byTruncatingTail
         focusRingType = .none
         wantsLayer = true
-        layer?.cornerRadius = 6
+        layer?.cornerRadius = MateUI.cornerRadius
         refreshDisplay()
     }
 
@@ -464,9 +465,11 @@ final class ShortcutRecorderTextField: NSTextField {
     }
 
     private func refreshDisplay() {
-        layer?.borderWidth = isRecording ? 2 : 0
-        layer?.borderColor = NSColor.keyboardFocusIndicatorColor.cgColor
-        backgroundColor = isRecording ? NSColor.controlAccentColor.withAlphaComponent(0.1) : .textBackgroundColor
+        layer?.borderWidth = 1
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            layer?.borderColor = (isRecording ? NSColor.controlAccentColor : MateUI.borderColor).cgColor
+            layer?.backgroundColor = MateUI.controlColor.cgColor
+        }
         if isRecording {
             stringValue = recordingLabel
             textColor = .labelColor
@@ -482,6 +485,11 @@ final class ShortcutRecorderTextField: NSTextField {
         }
     }
 
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        refreshDisplay()
+    }
+
     private func normalizedModifiers(_ modifierFlags: NSEvent.ModifierFlags) -> NSEvent.ModifierFlags {
         modifierFlags
             .intersection(.deviceIndependentFlagsMask)
@@ -495,4 +503,14 @@ final class ShortcutRecorderTextField: NSTextField {
         .f21, .f22, .f23, .f24, .f25, .f26, .f27, .f28, .f29, .f30,
         .f31, .f32, .f33, .f34, .f35,
     ]
+}
+
+private final class CenteredShortcutCell: NSTextFieldCell {
+    override func drawingRect(forBounds rect: NSRect) -> NSRect {
+        var drawing = super.drawingRect(forBounds: rect)
+        let textHeight = cellSize(forBounds: rect).height
+        drawing.origin.y += max(0, (drawing.height - textHeight) / 2)
+        drawing.size.height = min(drawing.height, textHeight)
+        return drawing
+    }
 }

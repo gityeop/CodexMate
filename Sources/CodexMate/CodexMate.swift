@@ -80,10 +80,10 @@ struct CodexMate {
 
     @MainActor
     static func main() {
-        let regularAppMode = LaunchEnvironment.regularAppModeEnabled()
         let openSettingsOnLaunch = LaunchEnvironment.openSettingsOnLaunchEnabled()
         let promoMockupDisplayMode = LaunchEnvironment.promoMockupDisplayMode()
         let promoMockupEnabled = promoMockupDisplayMode != nil || LaunchEnvironment.promoMockupEnabled()
+        let regularAppMode = !promoMockupEnabled || LaunchEnvironment.regularAppModeEnabled()
         DebugTraceLogger.log(
             "main start regularAppMode=\(regularAppMode) openSettingsOnLaunch=\(openSettingsOnLaunch) promoMockup=\(promoMockupEnabled) promoMockupDisplayMode=\((promoMockupDisplayMode ?? .menuBar).rawValue) os=\(ProcessInfo.processInfo.operatingSystemVersionString)"
         )
@@ -95,6 +95,11 @@ struct CodexMate {
         )
         DebugTraceLogger.log("main createdAppDelegate")
         let application = NSApplication.shared
+        #if DEBUG
+        // App-scoped appearance for UI verification, without changing macOS preferences.
+        if CommandLine.arguments.contains("--appearance-light") { application.appearance = NSAppearance(named: .aqua) }
+        if CommandLine.arguments.contains("--appearance-dark") { application.appearance = NSAppearance(named: .darkAqua) }
+        #endif
         DebugTraceLogger.log("main acquiredNSApplication")
         application.delegate = appDelegate
         application.setActivationPolicy(regularAppMode ? .regular : .accessory)

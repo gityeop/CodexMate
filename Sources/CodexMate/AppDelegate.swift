@@ -113,6 +113,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let notchStatusOverlay = NotchStatusOverlayController()
     private let relativeDateFormatter = RelativeDateTimeFormatter()
     private let preferences = AppPreferencesStore()
+    private let projectGraphStore = ProjectGraphStore()
+    private lazy var projectGraphWindowController = ProjectGraphWindowController(
+        store: projectGraphStore,
+        openThread: { [weak self] id in self?.openThread(threadID: id) },
+        openSettings: { [weak self] in self?.openSettingsAction() }
+    )
     private let strings = AppStrings.shared
     private let codexHomeStore = CodexHomeStore()
     private lazy var desktopActivityService = DesktopActivityService(
@@ -308,6 +314,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         isInitialThreadBootstrapInProgress = true
         renderMenu()
 
+        openMainWindowAction()
+
         if shouldOpenSettingsOnLaunch() {
             openSettingsAction()
         }
@@ -352,6 +360,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         false
+    }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        openMainWindowAction()
+        return true
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
@@ -527,6 +540,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         appMenu.addItem(quitItem)
 
         appMenuItem.submenu = appMenu
+
+        let editMenuItem = NSMenuItem(title: "Edit", action: nil, keyEquivalent: "")
+        let editMenu = NSMenu(title: "Edit")
+        editMenu.addItem(withTitle: "Undo", action: Selector(("undo:")), keyEquivalent: "z")
+        let redoItem = editMenu.addItem(withTitle: "Redo", action: Selector(("redo:")), keyEquivalent: "z")
+        redoItem.keyEquivalentModifierMask = [.command, .shift]
+        editMenu.addItem(.separator())
+        editMenu.addItem(withTitle: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
+        editMenu.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+        editMenu.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+        editMenu.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+        editMenuItem.submenu = editMenu
+        mainMenu.addItem(editMenuItem)
+
+        let windowMenuItem = NSMenuItem(title: strings.text("graph.window", language: preferences.language), action: nil, keyEquivalent: "")
+        let windowMenu = NSMenu(title: windowMenuItem.title)
+        let graphItem = NSMenuItem(title: strings.text("graph.open", language: preferences.language), action: #selector(openMainWindowAction), keyEquivalent: "1")
+        graphItem.target = self
+        windowMenu.addItem(graphItem)
+        windowMenu.addItem(.separator())
+        windowMenu.addItem(withTitle: strings.text("graph.closeWindow", language: preferences.language), action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
+        windowMenu.addItem(withTitle: strings.text("graph.minimize", language: preferences.language), action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
+        windowMenuItem.submenu = windowMenu
+        mainMenu.addItem(windowMenuItem)
+        NSApp.windowsMenu = windowMenu
         return mainMenu
     }
 
@@ -1490,6 +1528,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func renderMenu() {
+        let sourceError: String?
+        if case let .failed(message) = controller.connection { sourceError = message }
+        else { sourceError = nil }
+        projectGraphStore.update(catalog: controller.projectCatalog, threads: controller.recentThreads,
+                                 language: preferences.language, sourceError: sourceError)
         hoverTooltipWorkItem?.cancel()
         hoverTooltipWorkItem = nil
 
@@ -1557,6 +1600,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settingsItem.keyEquivalent = ","
         settingsItem.keyEquivalentModifierMask = [.command]
         menu.addItem(settingsItem)
+        menu.addItem(makeActionItem(title: strings.text("graph.open", language: preferences.language), action: #selector(openMainWindowAction)))
         menu.addItem(
             makeActionItem(
                 title: strings.text("menu.quit", language: preferences.language),
@@ -2900,6 +2944,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func toggleStatusPanelAction() {
         debugLog("toggleStatusPanelAction event=\(debugEventSummary(NSApp.currentEvent))")
         menuToggleController.toggleMenu()
+    }
+
+    @objc
+    private func openMainWindowAction() {
+        closeMenu()
+        projectGraphWindowController.showWindow(nil)
     }
 
     @objc
