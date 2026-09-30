@@ -407,7 +407,7 @@ struct CodexDesktopStateReader {
                 WHERE archived = 0
                   AND id IN (\(candidateList))
                   AND (\(projection.meaningfulThreadPredicate))
-                ORDER BY updated_at DESC;
+                ORDER BY recency_at DESC;
                 """,
                 databaseURL: databaseURL
             )
@@ -539,7 +539,7 @@ struct CodexDesktopStateReader {
                 FROM threads
                 WHERE archived = 0
                   AND (\(projection.meaningfulThreadPredicate))
-                ORDER BY updated_at DESC
+                ORDER BY recency_at DESC
                 LIMIT \(limit);
                 """,
                 databaseURL: databaseURL
@@ -663,9 +663,9 @@ struct CodexDesktopStateReader {
                 SELECT id
                 FROM threads
                 WHERE archived = 0
-                  AND updated_at >= \(threadUpdateCutoff)
+                  AND recency_at >= \(threadUpdateCutoff)
                   AND (\(projection.meaningfulThreadPredicate))
-                ORDER BY updated_at DESC
+                ORDER BY recency_at DESC
                 LIMIT \(recentActivityThreadLimit);
                 """
             )
@@ -918,12 +918,13 @@ struct CodexDesktopStateReader {
     }
 
     private func threadJSONExpression(projection: ThreadTableProjection) -> String {
+        // recency_at tracks conversation activity; updated_at also advances when a thread is reopened.
         """
         json_object(
             'id', id,
             'preview', \(projection.previewExpression),
             'createdAt', created_at,
-            'updatedAt', updated_at,
+            'updatedAt', recency_at,
             'cwd', cwd,
             'name', title,
             'path', rollout_path,

@@ -2,6 +2,65 @@ import XCTest
 @testable import CodexMate
 
 final class CodexDesktopStateReaderTests: XCTestCase {
+    func testReopeningThreadKeepsCompletionTimeAndActivityOrder() throws {
+        let directoryURL = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+
+        let databaseURL = directoryURL.appending(path: "state.sqlite")
+        try createStateDatabase(at: databaseURL, sql: """
+            CREATE TABLE threads (
+                id TEXT PRIMARY KEY,
+                first_user_message TEXT NOT NULL,
+                title TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                recency_at INTEGER NOT NULL,
+                cwd TEXT NOT NULL,
+                rollout_path TEXT,
+                source TEXT NOT NULL DEFAULT 'vscode',
+                archived INTEGER NOT NULL DEFAULT 0
+            );
+            INSERT INTO threads (id, first_user_message, title, created_at, updated_at, recency_at, cwd)
+            VALUES
+                ('older', 'Older task', 'Older task', 90, 120, 100, '/tmp/project'),
+                ('newer', 'Newer task', 'Newer task', 170, 185, 180, '/tmp/project');
+            """)
+
+        let reader = CodexDesktopStateReader(
+            now: { Date(timeIntervalSince1970: 200) },
+            recentThreadUpdateInterval: 10,
+            stateDatabaseURLOverride: databaseURL
+        )
+        let completionHints = [
+            "older": Date(timeIntervalSince1970: 120),
+            "newer": Date(timeIntervalSince1970: 185),
+        ]
+        var store = AppStateStore()
+        store.replaceRecentThreads(with: try reader.recentThreads(limit: 2))
+        store.apply(desktopCompletionHints: completionHints)
+        let beforeActivityDates = store.recentThreads.map(\.activityUpdatedAt)
+
+        // Opening a completed thread applies settings without starting a new turn.
+        try createStateDatabase(at: databaseURL, sql: "UPDATE threads SET updated_at = 199 WHERE id = 'older';")
+
+        XCTAssertEqual(try reader.recentThreads(limit: 1).map(\.id), ["newer"])
+        XCTAssertEqual(try reader.threads(threadIDs: ["older", "newer"]).map(\.id), ["newer", "older"])
+        XCTAssertEqual(try reader.threads(threadIDs: ["older"]).first?.updatedAt, 100)
+        XCTAssertTrue(try reader.snapshot(candidates: []).recentActivityThreadIDs.isEmpty)
+
+        store.replaceRecentThreads(with: try reader.recentThreads(limit: 2))
+        store.apply(desktopCompletionHints: completionHints)
+        XCTAssertEqual(store.recentThreads.map(\.id), ["newer", "older"])
+        XCTAssertEqual(store.recentThreads.map(\.activityUpdatedAt), beforeActivityDates)
+        XCTAssertEqual(store.recentThreads.last?.activityUpdatedAt, completionHints["older"])
+
+        // A real new conversation activity still advances the thread.
+        try createStateDatabase(at: databaseURL, sql: "UPDATE threads SET recency_at = 200 WHERE id = 'older';")
+        XCTAssertEqual(try reader.recentThreads(limit: 1).map(\.id), ["older"])
+        XCTAssertEqual(try reader.snapshot(candidates: []).recentActivityThreadIDs, ["older"])
+    }
+
     func testAsyncQuestionOverridesDatabaseActivityUntilWorkResumes() throws {
         let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -10,7 +69,7 @@ final class CodexDesktopStateReaderTests: XCTestCase {
         try createStateDatabase(at: databaseURL, sql: """
         CREATE TABLE threads (
             id TEXT PRIMARY KEY, first_user_message TEXT, title TEXT,
-            created_at INTEGER, updated_at INTEGER, cwd TEXT, rollout_path TEXT, archived INTEGER
+            created_at INTEGER, recency_at INTEGER, cwd TEXT, rollout_path TEXT, archived INTEGER
         );
         CREATE TABLE logs (
             id INTEGER PRIMARY KEY, process_uuid TEXT, target TEXT, message TEXT,
@@ -63,7 +122,7 @@ final class CodexDesktopStateReaderTests: XCTestCase {
                 first_user_message TEXT NOT NULL DEFAULT '',
                 title TEXT NOT NULL DEFAULT '',
                 created_at INTEGER NOT NULL,
-                updated_at INTEGER NOT NULL,
+                recency_at INTEGER NOT NULL,
                 cwd TEXT NOT NULL,
                 rollout_path TEXT,
                 archived INTEGER NOT NULL DEFAULT 0
@@ -77,7 +136,7 @@ final class CodexDesktopStateReaderTests: XCTestCase {
                 ts_nanos INTEGER NOT NULL DEFAULT 0,
                 thread_id TEXT
             );
-            INSERT INTO threads (id, first_user_message, title, created_at, updated_at, cwd, rollout_path, archived)
+            INSERT INTO threads (id, first_user_message, title, created_at, recency_at, cwd, rollout_path, archived)
             VALUES ('thread-1', 'Preview', 'Thread 1', 150, 195, '/tmp/project', NULL, 0);
             """
         )
@@ -110,12 +169,12 @@ final class CodexDesktopStateReaderTests: XCTestCase {
                 first_user_message TEXT NOT NULL DEFAULT '',
                 title TEXT NOT NULL DEFAULT '',
                 created_at INTEGER NOT NULL,
-                updated_at INTEGER NOT NULL,
+                recency_at INTEGER NOT NULL,
                 cwd TEXT NOT NULL,
                 rollout_path TEXT,
                 archived INTEGER NOT NULL DEFAULT 0
             );
-            INSERT INTO threads (id, first_user_message, title, created_at, updated_at, cwd, rollout_path, archived)
+            INSERT INTO threads (id, first_user_message, title, created_at, recency_at, cwd, rollout_path, archived)
             VALUES ('thread-1', 'Preview', 'Thread 1', 150, 195, '/tmp/project', NULL, 0);
             """
         )
@@ -148,12 +207,12 @@ final class CodexDesktopStateReaderTests: XCTestCase {
                 first_user_message TEXT NOT NULL DEFAULT '',
                 title TEXT NOT NULL DEFAULT '',
                 created_at INTEGER NOT NULL,
-                updated_at INTEGER NOT NULL,
+                recency_at INTEGER NOT NULL,
                 cwd TEXT NOT NULL,
                 rollout_path TEXT,
                 archived INTEGER NOT NULL DEFAULT 0
             );
-            INSERT INTO threads (id, first_user_message, title, created_at, updated_at, cwd, rollout_path, archived)
+            INSERT INTO threads (id, first_user_message, title, created_at, recency_at, cwd, rollout_path, archived)
             VALUES ('thread-1', 'Preview', 'Thread 1', 100, 150, '/tmp/project', NULL, 0);
             """
         )
@@ -212,7 +271,7 @@ final class CodexDesktopStateReaderTests: XCTestCase {
                 first_user_message TEXT NOT NULL DEFAULT '',
                 title TEXT NOT NULL DEFAULT '',
                 created_at INTEGER NOT NULL,
-                updated_at INTEGER NOT NULL,
+                recency_at INTEGER NOT NULL,
                 cwd TEXT NOT NULL,
                 rollout_path TEXT,
                 archived INTEGER NOT NULL DEFAULT 0
@@ -226,7 +285,7 @@ final class CodexDesktopStateReaderTests: XCTestCase {
                 ts_nanos INTEGER NOT NULL DEFAULT 0,
                 thread_id TEXT
             );
-            INSERT INTO threads (id, first_user_message, title, created_at, updated_at, cwd, rollout_path, archived)
+            INSERT INTO threads (id, first_user_message, title, created_at, recency_at, cwd, rollout_path, archived)
             VALUES ('thread-1', 'Preview', 'Thread 1', 150, 195, '/tmp/project', NULL, 0);
             INSERT INTO logs (process_uuid, target, message, ts, ts_nanos, thread_id)
             VALUES
@@ -265,7 +324,7 @@ final class CodexDesktopStateReaderTests: XCTestCase {
                 first_user_message TEXT NOT NULL DEFAULT '',
                 title TEXT NOT NULL DEFAULT '',
                 created_at INTEGER NOT NULL,
-                updated_at INTEGER NOT NULL,
+                recency_at INTEGER NOT NULL,
                 cwd TEXT NOT NULL,
                 rollout_path TEXT,
                 archived INTEGER NOT NULL DEFAULT 0
@@ -279,7 +338,7 @@ final class CodexDesktopStateReaderTests: XCTestCase {
                 ts_nanos INTEGER NOT NULL DEFAULT 0,
                 thread_id TEXT
             );
-            INSERT INTO threads (id, first_user_message, title, created_at, updated_at, cwd, rollout_path, archived)
+            INSERT INTO threads (id, first_user_message, title, created_at, recency_at, cwd, rollout_path, archived)
             VALUES ('thread-1', 'Preview', 'Thread 1', 1777713420, 1777713424, '/tmp/project', NULL, 0);
             """
         )
@@ -322,7 +381,7 @@ final class CodexDesktopStateReaderTests: XCTestCase {
                 first_user_message TEXT NOT NULL DEFAULT '',
                 title TEXT NOT NULL DEFAULT '',
                 created_at INTEGER NOT NULL,
-                updated_at INTEGER NOT NULL,
+                recency_at INTEGER NOT NULL,
                 cwd TEXT NOT NULL,
                 rollout_path TEXT,
                 archived INTEGER NOT NULL DEFAULT 0
@@ -336,7 +395,7 @@ final class CodexDesktopStateReaderTests: XCTestCase {
                 ts_nanos INTEGER NOT NULL DEFAULT 0,
                 thread_id TEXT
             );
-            INSERT INTO threads (id, first_user_message, title, created_at, updated_at, cwd, rollout_path, archived)
+            INSERT INTO threads (id, first_user_message, title, created_at, recency_at, cwd, rollout_path, archived)
             VALUES ('thread-1', 'Preview', 'Thread 1', 150, 170, '/tmp/project', NULL, 0);
             """
         )
@@ -369,7 +428,7 @@ final class CodexDesktopStateReaderTests: XCTestCase {
                 first_user_message TEXT NOT NULL DEFAULT '',
                 title TEXT NOT NULL DEFAULT '',
                 created_at INTEGER NOT NULL,
-                updated_at INTEGER NOT NULL,
+                recency_at INTEGER NOT NULL,
                 cwd TEXT NOT NULL,
                 rollout_path TEXT,
                 archived INTEGER NOT NULL DEFAULT 0
@@ -383,7 +442,7 @@ final class CodexDesktopStateReaderTests: XCTestCase {
                 ts_nanos INTEGER NOT NULL DEFAULT 0,
                 thread_id TEXT
             );
-            INSERT INTO threads (id, first_user_message, title, created_at, updated_at, cwd, rollout_path, archived)
+            INSERT INTO threads (id, first_user_message, title, created_at, recency_at, cwd, rollout_path, archived)
             VALUES
             \(values);
             """
@@ -662,7 +721,7 @@ final class CodexDesktopStateReaderTests: XCTestCase {
                 first_user_message TEXT NOT NULL DEFAULT '',
                 title TEXT NOT NULL DEFAULT '',
                 created_at INTEGER NOT NULL,
-                updated_at INTEGER NOT NULL,
+                recency_at INTEGER NOT NULL,
                 cwd TEXT NOT NULL,
                 rollout_path TEXT,
                 archived INTEGER NOT NULL DEFAULT 0
@@ -676,7 +735,7 @@ final class CodexDesktopStateReaderTests: XCTestCase {
                 ts_nanos INTEGER NOT NULL DEFAULT 0,
                 thread_id TEXT
             );
-            INSERT INTO threads (id, first_user_message, title, created_at, updated_at, cwd, rollout_path, archived)
+            INSERT INTO threads (id, first_user_message, title, created_at, recency_at, cwd, rollout_path, archived)
             VALUES ('thread-1', 'Preview', 'Thread 1', 150, 150, '/tmp/project', NULL, 0);
             """
         )
@@ -717,7 +776,7 @@ final class CodexDesktopStateReaderTests: XCTestCase {
                 first_user_message TEXT NOT NULL DEFAULT '',
                 title TEXT NOT NULL DEFAULT '',
                 created_at INTEGER NOT NULL,
-                updated_at INTEGER NOT NULL,
+                recency_at INTEGER NOT NULL,
                 cwd TEXT NOT NULL,
                 rollout_path TEXT,
                 archived INTEGER NOT NULL DEFAULT 0
@@ -731,7 +790,7 @@ final class CodexDesktopStateReaderTests: XCTestCase {
                 ts_nanos INTEGER NOT NULL DEFAULT 0,
                 thread_id TEXT
             );
-            INSERT INTO threads (id, first_user_message, title, created_at, updated_at, cwd, rollout_path, archived)
+            INSERT INTO threads (id, first_user_message, title, created_at, recency_at, cwd, rollout_path, archived)
             VALUES ('thread-1', 'Preview', 'Thread 1', 150, 200, '/tmp/project', NULL, 0);
             """
         )
@@ -785,7 +844,7 @@ final class CodexDesktopStateReaderTests: XCTestCase {
                 first_user_message TEXT NOT NULL DEFAULT '',
                 title TEXT NOT NULL DEFAULT '',
                 created_at INTEGER NOT NULL,
-                updated_at INTEGER NOT NULL,
+                recency_at INTEGER NOT NULL,
                 cwd TEXT NOT NULL,
                 rollout_path TEXT,
                 archived INTEGER NOT NULL DEFAULT 0
@@ -799,7 +858,7 @@ final class CodexDesktopStateReaderTests: XCTestCase {
                 ts_nanos INTEGER NOT NULL DEFAULT 0,
                 thread_id TEXT
             );
-            INSERT INTO threads (id, first_user_message, title, created_at, updated_at, cwd, rollout_path, archived)
+            INSERT INTO threads (id, first_user_message, title, created_at, recency_at, cwd, rollout_path, archived)
             VALUES ('thread-1', 'Preview', 'Thread 1', 150, 150, '/tmp/project', NULL, 0);
             """
         )
@@ -852,7 +911,7 @@ final class CodexDesktopStateReaderTests: XCTestCase {
                 first_user_message TEXT NOT NULL DEFAULT '',
                 title TEXT NOT NULL DEFAULT '',
                 created_at INTEGER NOT NULL,
-                updated_at INTEGER NOT NULL,
+                recency_at INTEGER NOT NULL,
                 cwd TEXT NOT NULL,
                 rollout_path TEXT,
                 archived INTEGER NOT NULL DEFAULT 0
@@ -866,7 +925,7 @@ final class CodexDesktopStateReaderTests: XCTestCase {
                 ts_nanos INTEGER NOT NULL DEFAULT 0,
                 thread_id TEXT
             );
-            INSERT INTO threads (id, first_user_message, title, created_at, updated_at, cwd, rollout_path, archived)
+            INSERT INTO threads (id, first_user_message, title, created_at, recency_at, cwd, rollout_path, archived)
             VALUES ('thread-1', 'Preview', 'Thread 1', 150, 200, '/tmp/project', NULL, 0);
             """
         )
@@ -1100,7 +1159,7 @@ final class CodexDesktopStateReaderTests: XCTestCase {
                 first_user_message TEXT NOT NULL DEFAULT '',
                 title TEXT NOT NULL DEFAULT '',
                 created_at INTEGER NOT NULL,
-                updated_at INTEGER NOT NULL,
+                recency_at INTEGER NOT NULL,
                 cwd TEXT NOT NULL,
                 rollout_path TEXT,
                 archived INTEGER NOT NULL DEFAULT 0
@@ -1114,7 +1173,7 @@ final class CodexDesktopStateReaderTests: XCTestCase {
                 ts_nanos INTEGER NOT NULL DEFAULT 0,
                 thread_id TEXT
             );
-            INSERT INTO threads (id, first_user_message, title, created_at, updated_at, cwd, rollout_path, archived)
+            INSERT INTO threads (id, first_user_message, title, created_at, recency_at, cwd, rollout_path, archived)
             VALUES ('thread-1', 'Preview', 'Thread 1', 150, 150, '/tmp/project', NULL, 0);
             """
         )
@@ -1164,7 +1223,7 @@ final class CodexDesktopStateReaderTests: XCTestCase {
                 first_user_message TEXT NOT NULL DEFAULT '',
                 title TEXT NOT NULL DEFAULT '',
                 created_at INTEGER NOT NULL,
-                updated_at INTEGER NOT NULL,
+                recency_at INTEGER NOT NULL,
                 cwd TEXT NOT NULL,
                 rollout_path TEXT,
                 archived INTEGER NOT NULL DEFAULT 0
@@ -1178,7 +1237,7 @@ final class CodexDesktopStateReaderTests: XCTestCase {
                 ts_nanos INTEGER NOT NULL DEFAULT 0,
                 thread_id TEXT
             );
-            INSERT INTO threads (id, first_user_message, title, created_at, updated_at, cwd, rollout_path, archived)
+            INSERT INTO threads (id, first_user_message, title, created_at, recency_at, cwd, rollout_path, archived)
             VALUES ('thread-1', 'Preview', 'Thread 1', 150, 150, '/tmp/project', NULL, 0);
             """
         )
@@ -1229,7 +1288,7 @@ final class CodexDesktopStateReaderTests: XCTestCase {
                 first_user_message TEXT NOT NULL DEFAULT '',
                 title TEXT NOT NULL DEFAULT '',
                 created_at INTEGER NOT NULL,
-                updated_at INTEGER NOT NULL,
+                recency_at INTEGER NOT NULL,
                 cwd TEXT NOT NULL,
                 rollout_path TEXT,
                 archived INTEGER NOT NULL DEFAULT 0
@@ -1243,7 +1302,7 @@ final class CodexDesktopStateReaderTests: XCTestCase {
                 ts_nanos INTEGER NOT NULL DEFAULT 0,
                 thread_id TEXT
             );
-            INSERT INTO threads (id, first_user_message, title, created_at, updated_at, cwd, rollout_path, archived)
+            INSERT INTO threads (id, first_user_message, title, created_at, recency_at, cwd, rollout_path, archived)
             VALUES ('thread-1', 'Preview', 'Thread 1', 150, 150, '/tmp/project', NULL, 0);
             """
         )
@@ -1306,7 +1365,7 @@ final class CodexDesktopStateReaderTests: XCTestCase {
                 first_user_message TEXT NOT NULL DEFAULT '',
                 title TEXT NOT NULL DEFAULT '',
                 created_at INTEGER NOT NULL,
-                updated_at INTEGER NOT NULL,
+                recency_at INTEGER NOT NULL,
                 cwd TEXT NOT NULL,
                 rollout_path TEXT,
                 source TEXT NOT NULL DEFAULT 'vscode',
@@ -1319,7 +1378,7 @@ final class CodexDesktopStateReaderTests: XCTestCase {
                 first_user_message,
                 title,
                 created_at,
-                updated_at,
+                recency_at,
                 cwd,
                 rollout_path,
                 source,
@@ -1365,7 +1424,7 @@ final class CodexDesktopStateReaderTests: XCTestCase {
                 first_user_message TEXT NOT NULL DEFAULT '',
                 title TEXT NOT NULL DEFAULT '',
                 created_at INTEGER NOT NULL,
-                updated_at INTEGER NOT NULL,
+                recency_at INTEGER NOT NULL,
                 cwd TEXT NOT NULL,
                 rollout_path TEXT,
                 source TEXT NOT NULL DEFAULT 'vscode',
@@ -1378,7 +1437,7 @@ final class CodexDesktopStateReaderTests: XCTestCase {
                 first_user_message,
                 title,
                 created_at,
-                updated_at,
+                recency_at,
                 cwd,
                 rollout_path,
                 source,
@@ -1415,7 +1474,7 @@ final class CodexDesktopStateReaderTests: XCTestCase {
                 title TEXT NOT NULL DEFAULT '',
                 preview TEXT NOT NULL DEFAULT '',
                 created_at INTEGER NOT NULL,
-                updated_at INTEGER NOT NULL,
+                recency_at INTEGER NOT NULL,
                 cwd TEXT NOT NULL,
                 rollout_path TEXT,
                 source TEXT NOT NULL DEFAULT 'vscode',
@@ -1429,7 +1488,7 @@ final class CodexDesktopStateReaderTests: XCTestCase {
                 title,
                 preview,
                 created_at,
-                updated_at,
+                recency_at,
                 cwd,
                 rollout_path,
                 source,
@@ -1458,7 +1517,7 @@ final class CodexDesktopStateReaderTests: XCTestCase {
         try createStateDatabase(at: databaseURL, sql: """
         CREATE TABLE threads (
             id TEXT PRIMARY KEY, first_user_message TEXT, title TEXT,
-            created_at INTEGER, updated_at INTEGER, cwd TEXT,
+            created_at INTEGER, recency_at INTEGER, cwd TEXT,
             rollout_path TEXT, source TEXT, archived INTEGER
         );
         INSERT INTO threads VALUES ('renamed', 'First message', 'First message', 1, 2, '/tmp', NULL, 'vscode', 0);
@@ -1497,7 +1556,7 @@ final class CodexDesktopStateReaderTests: XCTestCase {
                 first_user_message TEXT NOT NULL DEFAULT '',
                 title TEXT NOT NULL DEFAULT '',
                 created_at INTEGER NOT NULL,
-                updated_at INTEGER NOT NULL,
+                recency_at INTEGER NOT NULL,
                 cwd TEXT NOT NULL,
                 rollout_path TEXT,
                 source TEXT NOT NULL DEFAULT 'vscode',
@@ -1558,7 +1617,7 @@ final class CodexDesktopStateReaderTests: XCTestCase {
                 first_user_message TEXT NOT NULL DEFAULT '',
                 title TEXT NOT NULL DEFAULT '',
                 created_at INTEGER NOT NULL,
-                updated_at INTEGER NOT NULL,
+                recency_at INTEGER NOT NULL,
                 cwd TEXT NOT NULL,
                 rollout_path TEXT,
                 source TEXT NOT NULL DEFAULT 'vscode',
@@ -1571,7 +1630,7 @@ final class CodexDesktopStateReaderTests: XCTestCase {
                 first_user_message,
                 title,
                 created_at,
-                updated_at,
+                recency_at,
                 cwd,
                 rollout_path,
                 source,
@@ -1621,7 +1680,7 @@ final class CodexDesktopStateReaderTests: XCTestCase {
                 first_user_message TEXT NOT NULL DEFAULT '',
                 title TEXT NOT NULL DEFAULT '',
                 created_at INTEGER NOT NULL,
-                updated_at INTEGER NOT NULL,
+                recency_at INTEGER NOT NULL,
                 cwd TEXT NOT NULL,
                 rollout_path TEXT,
                 source TEXT NOT NULL DEFAULT 'vscode',
@@ -1634,7 +1693,7 @@ final class CodexDesktopStateReaderTests: XCTestCase {
                 first_user_message,
                 title,
                 created_at,
-                updated_at,
+                recency_at,
                 cwd,
                 rollout_path,
                 source,
@@ -1678,12 +1737,12 @@ final class CodexDesktopStateReaderTests: XCTestCase {
                 first_user_message TEXT NOT NULL DEFAULT '',
                 title TEXT NOT NULL DEFAULT '',
                 created_at INTEGER NOT NULL,
-                updated_at INTEGER NOT NULL,
+                recency_at INTEGER NOT NULL,
                 cwd TEXT NOT NULL,
                 rollout_path TEXT,
                 archived INTEGER NOT NULL DEFAULT 0
             );
-            INSERT INTO threads (id, first_user_message, title, created_at, updated_at, cwd, rollout_path, archived)
+            INSERT INTO threads (id, first_user_message, title, created_at, recency_at, cwd, rollout_path, archived)
             VALUES
                 ('thread-live', 'Live', 'Live', 100, 150, '/tmp/live', NULL, 0),
                 ('thread-archived', 'Archived', 'Archived', 100, 200, '/tmp/archived', NULL, 1);
@@ -1713,12 +1772,12 @@ final class CodexDesktopStateReaderTests: XCTestCase {
                 first_user_message TEXT NOT NULL DEFAULT '',
                 title TEXT NOT NULL DEFAULT '',
                 created_at INTEGER NOT NULL,
-                updated_at INTEGER NOT NULL,
+                recency_at INTEGER NOT NULL,
                 cwd TEXT NOT NULL,
                 rollout_path TEXT,
                 archived INTEGER NOT NULL DEFAULT 0
             );
-            INSERT INTO threads (id, first_user_message, title, created_at, updated_at, cwd, rollout_path, archived)
+            INSERT INTO threads (id, first_user_message, title, created_at, recency_at, cwd, rollout_path, archived)
             VALUES
                 ('thread-live', 'Live', 'Live', 100, 150, '/tmp/live', NULL, 0),
                 ('thread-archived', 'Archived', 'Archived', 100, 200, '/tmp/archived', NULL, 1);
@@ -1786,7 +1845,7 @@ final class CodexDesktopStateReaderTests: XCTestCase {
                 title TEXT NOT NULL DEFAULT '',
                 preview TEXT NOT NULL DEFAULT '',
                 created_at INTEGER NOT NULL,
-                updated_at INTEGER NOT NULL,
+                recency_at INTEGER NOT NULL,
                 cwd TEXT NOT NULL,
                 rollout_path TEXT,
                 source TEXT NOT NULL DEFAULT 'vscode',
@@ -1800,7 +1859,7 @@ final class CodexDesktopStateReaderTests: XCTestCase {
                 title,
                 preview,
                 created_at,
-                updated_at,
+                recency_at,
                 cwd,
                 rollout_path,
                 source,
@@ -1847,7 +1906,7 @@ final class CodexDesktopStateReaderTests: XCTestCase {
                 first_user_message TEXT NOT NULL DEFAULT '',
                 title TEXT NOT NULL DEFAULT '',
                 created_at INTEGER NOT NULL,
-                updated_at INTEGER NOT NULL,
+                recency_at INTEGER NOT NULL,
                 cwd TEXT NOT NULL,
                 rollout_path TEXT,
                 archived INTEGER NOT NULL DEFAULT 0
@@ -1861,7 +1920,7 @@ final class CodexDesktopStateReaderTests: XCTestCase {
                 ts_nanos INTEGER NOT NULL DEFAULT 0,
                 thread_id TEXT
             );
-            INSERT INTO threads (id, first_user_message, title, created_at, updated_at, cwd, rollout_path, archived)
+            INSERT INTO threads (id, first_user_message, title, created_at, recency_at, cwd, rollout_path, archived)
             VALUES ('thread-1', 'Preview', 'Thread 1', 150, 150, '/tmp/project', NULL, 0);
             """
         )
@@ -1900,7 +1959,7 @@ final class CodexDesktopStateReaderTests: XCTestCase {
                 first_user_message TEXT NOT NULL DEFAULT '',
                 title TEXT NOT NULL DEFAULT '',
                 created_at INTEGER NOT NULL,
-                updated_at INTEGER NOT NULL,
+                recency_at INTEGER NOT NULL,
                 cwd TEXT NOT NULL,
                 rollout_path TEXT,
                 archived INTEGER NOT NULL DEFAULT 0
@@ -1914,7 +1973,7 @@ final class CodexDesktopStateReaderTests: XCTestCase {
                 ts_nanos INTEGER NOT NULL DEFAULT 0,
                 thread_id TEXT
             );
-            INSERT INTO threads (id, first_user_message, title, created_at, updated_at, cwd, rollout_path, archived)
+            INSERT INTO threads (id, first_user_message, title, created_at, recency_at, cwd, rollout_path, archived)
             VALUES ('thread-1', 'Preview', 'Thread 1', 150, 195, '/tmp/project', NULL, 0);
             """
         )
@@ -1963,13 +2022,13 @@ final class CodexDesktopStateReaderTests: XCTestCase {
                 first_user_message TEXT NOT NULL DEFAULT '',
                 title TEXT NOT NULL DEFAULT '',
                 created_at INTEGER NOT NULL,
-                updated_at INTEGER NOT NULL,
+                recency_at INTEGER NOT NULL,
                 cwd TEXT NOT NULL,
                 rollout_path TEXT,
                 source TEXT NOT NULL DEFAULT 'vscode',
                 archived INTEGER NOT NULL DEFAULT 0
             );
-            INSERT INTO threads (id, first_user_message, title, created_at, updated_at, cwd, rollout_path, source, archived)
+            INSERT INTO threads (id, first_user_message, title, created_at, recency_at, cwd, rollout_path, source, archived)
             VALUES ('root-thread', 'Root Preview', 'Root Thread', 100, 300, '/tmp/root', NULL, 'vscode', 0);
             """
         )
@@ -1983,13 +2042,13 @@ final class CodexDesktopStateReaderTests: XCTestCase {
                 first_user_message TEXT NOT NULL DEFAULT '',
                 title TEXT NOT NULL DEFAULT '',
                 created_at INTEGER NOT NULL,
-                updated_at INTEGER NOT NULL,
+                recency_at INTEGER NOT NULL,
                 cwd TEXT NOT NULL,
                 rollout_path TEXT,
                 source TEXT NOT NULL DEFAULT 'vscode',
                 archived INTEGER NOT NULL DEFAULT 0
             );
-            INSERT INTO threads (id, first_user_message, title, created_at, updated_at, cwd, rollout_path, source, archived)
+            INSERT INTO threads (id, first_user_message, title, created_at, recency_at, cwd, rollout_path, source, archived)
             VALUES ('sqlite-thread', 'SQLite Preview', 'SQLite Thread', 100, 200, '/tmp/sqlite', NULL, 'vscode', 0);
             """
         )
@@ -2027,7 +2086,7 @@ final class CodexDesktopStateReaderTests: XCTestCase {
                 first_user_message TEXT NOT NULL DEFAULT '',
                 title TEXT NOT NULL DEFAULT '',
                 created_at INTEGER NOT NULL,
-                updated_at INTEGER NOT NULL,
+                recency_at INTEGER NOT NULL,
                 cwd TEXT NOT NULL,
                 rollout_path TEXT,
                 source TEXT NOT NULL DEFAULT 'vscode',
@@ -2040,7 +2099,7 @@ final class CodexDesktopStateReaderTests: XCTestCase {
                 first_user_message,
                 title,
                 created_at,
-                updated_at,
+                recency_at,
                 cwd,
                 rollout_path,
                 source,
@@ -2071,7 +2130,7 @@ final class CodexDesktopStateReaderTests: XCTestCase {
                 first_user_message TEXT NOT NULL DEFAULT '',
                 title TEXT NOT NULL DEFAULT '',
                 created_at INTEGER NOT NULL,
-                updated_at INTEGER NOT NULL,
+                recency_at INTEGER NOT NULL,
                 cwd TEXT NOT NULL,
                 rollout_path TEXT,
                 source TEXT NOT NULL DEFAULT 'vscode',
@@ -2084,7 +2143,7 @@ final class CodexDesktopStateReaderTests: XCTestCase {
                 first_user_message,
                 title,
                 created_at,
-                updated_at,
+                recency_at,
                 cwd,
                 rollout_path,
                 source,

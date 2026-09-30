@@ -31,7 +31,7 @@ final class DesktopActivityServiceTests: XCTestCase {
                 first_user_message TEXT NOT NULL DEFAULT '',
                 title TEXT NOT NULL DEFAULT '',
                 created_at INTEGER NOT NULL,
-                updated_at INTEGER NOT NULL,
+                recency_at INTEGER NOT NULL,
                 cwd TEXT NOT NULL,
                 rollout_path TEXT,
                 archived INTEGER NOT NULL DEFAULT 0
@@ -45,7 +45,7 @@ final class DesktopActivityServiceTests: XCTestCase {
                 ts_nanos INTEGER NOT NULL DEFAULT 0,
                 thread_id TEXT
             );
-            INSERT INTO threads (id, first_user_message, title, created_at, updated_at, cwd, rollout_path, archived)
+            INSERT INTO threads (id, first_user_message, title, created_at, recency_at, cwd, rollout_path, archived)
             VALUES ('thread-1', 'Preview', 'Thread 1', 90, 100, '/tmp/project', NULL, 0);
             INSERT INTO logs (process_uuid, target, message, ts, ts_nanos, thread_id)
             VALUES ('process-1', 'codex_app_server::outgoing_message', 'app-server event: turn/started', 195, 0, NULL);
@@ -89,7 +89,7 @@ final class DesktopActivityServiceTests: XCTestCase {
                 first_user_message TEXT NOT NULL DEFAULT '',
                 title TEXT NOT NULL DEFAULT '',
                 created_at INTEGER NOT NULL,
-                updated_at INTEGER NOT NULL,
+                recency_at INTEGER NOT NULL,
                 cwd TEXT NOT NULL,
                 rollout_path TEXT,
                 archived INTEGER NOT NULL DEFAULT 0
@@ -103,7 +103,7 @@ final class DesktopActivityServiceTests: XCTestCase {
                 ts_nanos INTEGER NOT NULL DEFAULT 0,
                 thread_id TEXT
             );
-            INSERT INTO threads (id, first_user_message, title, created_at, updated_at, cwd, rollout_path, archived)
+            INSERT INTO threads (id, first_user_message, title, created_at, recency_at, cwd, rollout_path, archived)
             VALUES ('thread-1', 'Preview', 'Thread 1', 150, 195, '/tmp/project', NULL, 0);
             INSERT INTO logs (process_uuid, target, message, ts, ts_nanos, thread_id)
             VALUES ('process-1', 'codex_app_server::outgoing_message', 'app-server event: turn/completed', 198, 0, 'thread-1');
@@ -166,7 +166,7 @@ final class DesktopActivityServiceTests: XCTestCase {
                 first_user_message TEXT NOT NULL DEFAULT '',
                 title TEXT NOT NULL DEFAULT '',
                 created_at INTEGER NOT NULL,
-                updated_at INTEGER NOT NULL,
+                recency_at INTEGER NOT NULL,
                 cwd TEXT NOT NULL,
                 rollout_path TEXT,
                 archived INTEGER NOT NULL DEFAULT 0
@@ -180,7 +180,7 @@ final class DesktopActivityServiceTests: XCTestCase {
                 ts_nanos INTEGER NOT NULL DEFAULT 0,
                 thread_id TEXT
             );
-            INSERT INTO threads (id, first_user_message, title, created_at, updated_at, cwd, rollout_path, archived)
+            INSERT INTO threads (id, first_user_message, title, created_at, recency_at, cwd, rollout_path, archived)
             VALUES ('thread-1', 'Preview', 'Thread 1', \(Int(startedAt.timeIntervalSince1970)), \(Int(completedAt.timeIntervalSince1970)), '/tmp/project', NULL, 0);
             """
         )
@@ -230,7 +230,7 @@ final class DesktopActivityServiceTests: XCTestCase {
                 first_user_message TEXT NOT NULL DEFAULT '',
                 title TEXT NOT NULL DEFAULT '',
                 created_at INTEGER NOT NULL,
-                updated_at INTEGER NOT NULL,
+                recency_at INTEGER NOT NULL,
                 cwd TEXT NOT NULL,
                 rollout_path TEXT,
                 archived INTEGER NOT NULL DEFAULT 0
@@ -244,7 +244,7 @@ final class DesktopActivityServiceTests: XCTestCase {
                 ts_nanos INTEGER NOT NULL DEFAULT 0,
                 thread_id TEXT
             );
-            INSERT INTO threads (id, first_user_message, title, created_at, updated_at, cwd, rollout_path, archived)
+            INSERT INTO threads (id, first_user_message, title, created_at, recency_at, cwd, rollout_path, archived)
             VALUES ('thread-1', 'Preview', 'Thread 1', 90, 120, '/tmp/project', NULL, 0);
             """
         )
@@ -323,7 +323,7 @@ final class DesktopActivityServiceTests: XCTestCase {
                 first_user_message TEXT NOT NULL DEFAULT '',
                 title TEXT NOT NULL DEFAULT '',
                 created_at INTEGER NOT NULL,
-                updated_at INTEGER NOT NULL,
+                recency_at INTEGER NOT NULL,
                 cwd TEXT NOT NULL,
                 rollout_path TEXT,
                 archived INTEGER NOT NULL DEFAULT 0
@@ -337,7 +337,7 @@ final class DesktopActivityServiceTests: XCTestCase {
                 ts_nanos INTEGER NOT NULL DEFAULT 0,
                 thread_id TEXT
             );
-            INSERT INTO threads (id, first_user_message, title, created_at, updated_at, cwd, rollout_path, archived)
+            INSERT INTO threads (id, first_user_message, title, created_at, recency_at, cwd, rollout_path, archived)
             VALUES ('thread-1', 'Preview', 'Thread 1', 150, 195, '/tmp/project', NULL, 0);
             """
         )
