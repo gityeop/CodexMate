@@ -3,18 +3,19 @@
     <channel>
         <title>CodexMate</title>
         <item>
-            <title>0.0.66</title>
-            <pubDate>Thu, 01 Oct 2026 04:38:23 +0900</pubDate>
-            <link>https://github.com/gityeop/CodexMate/releases/tag/v0.0.66</link>
-            <sparkle:version>66</sparkle:version>
-            <sparkle:shortVersionString>0.0.66</sparkle:shortVersionString>
+            <title>0.0.67</title>
+            <pubDate>Thu, 01 Oct 2026 14:09:07 +0900</pubDate>
+            <link>https://github.com/gityeop/CodexMate/releases/tag/v0.0.67</link>
+            <sparkle:version>67</sparkle:version>
+            <sparkle:shortVersionString>0.0.67</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description sparkle:format="markdown"><![CDATA[# CodexMate 0.0.66
+            <description sparkle:format="markdown"><![CDATA[# CodexMate 0.0.67
 
-- Keeps conversation times and recent thread order tied to actual conversation activity, so reopening a completed chat no longer makes it appear newly updated.
+- Restores weekly usage reporting when Codex is bundled inside the ChatGPT app.
+- Shows an unavailable status when usage cannot be read, while keeping technical error details in the diagnostic log.
 ]]></description>
-            <enclosure url="https://github.com/gityeop/CodexMate/releases/latest/download/CodexMate-0.0.66.zip" length="5460501" type="application/octet-stream" sparkle:edSignature="NBLszjhugQ789n5YJi9TpapXSRp1h4aHKpaRdyVWgdUy3Nqlf4E5eYkwYDU51fHL2gh4WyxKLZ9KPuIUd1iHDA=="/>
+            <enclosure url="https://github.com/gityeop/CodexMate/releases/latest/download/CodexMate-0.0.67.zip" length="5460696" type="application/octet-stream" sparkle:edSignature="upuTw/O2KHK1loBU8VHub17FiuokQM4uFJi94YgMb5Z5AG6GzK5O9HGvkGyV/cBqgq94sM5pYurVdPEfjaTtBg=="/>
         </item>
     </channel>
 </rss>
