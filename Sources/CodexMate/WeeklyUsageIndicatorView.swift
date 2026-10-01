@@ -27,6 +27,7 @@ final class WeeklyUsageIndicatorView: NSView {
     private let language: AppLanguage
     private let resetDateFormatter: DateFormatter
     private let pinsToMenu: Bool
+    private let errorMessage: String?
     private weak var menuTableView: NSTableView?
     private(set) var menuHeaderView: NSView?
     private let titleLabel = NSTextField(labelWithString: "")
@@ -41,6 +42,10 @@ final class WeeklyUsageIndicatorView: NSView {
     }
 
     var valueText: String {
+        if errorMessage != nil {
+            return strings.text("menu.weeklyUsage.unavailable", language: language)
+        }
+
         guard let remainingPercent else {
             return strings.text("menu.weeklyUsage.loading", language: language)
         }
@@ -115,6 +120,7 @@ final class WeeklyUsageIndicatorView: NSView {
         self.language = language
         self.strings = strings
         self.pinsToMenu = pinsToMenu
+        self.errorMessage = errorMessage
 
         let resetDateFormatter = DateFormatter()
         resetDateFormatter.locale = Locale(identifier: language.localeIdentifier)
@@ -222,6 +228,7 @@ final class WeeklyUsageIndicatorView: NSView {
         WeeklyUsageIndicatorView(
             remainingPercent: remainingPercent,
             resetsAt: resetsAt,
+            errorMessage: errorMessage,
             language: language,
             strings: strings,
             timeZone: resetDateFormatter.timeZone
