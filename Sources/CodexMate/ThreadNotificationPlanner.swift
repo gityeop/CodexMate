@@ -148,8 +148,20 @@ enum ThreadNotificationContentBuilder {
 
     private static func assistantMessageText(fromJSONLine line: String) -> String? {
         guard let data = line.data(using: .utf8),
-              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              object["type"] as? String == "response_item",
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return nil
+        }
+
+        // Claude Code transcripts store replies as top-level assistant records.
+        if object["type"] as? String == "assistant" {
+            guard (object["isSidechain"] as? Bool) != true,
+                  let message = object["message"] as? [String: Any] else {
+                return nil
+            }
+            return messageContentText(message["content"])
+        }
+
+        guard object["type"] as? String == "response_item",
               let payload = object["payload"] as? [String: Any],
               payload["type"] as? String == "message",
               payload["role"] as? String == "assistant" else {

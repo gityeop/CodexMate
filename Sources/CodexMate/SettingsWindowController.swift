@@ -183,6 +183,10 @@ private struct SettingsView: View {
                     viewModel.text("settings.notifications.failed"),
                     isOn: failureNotificationsBinding
                 )
+                Toggle(
+                    viewModel.text("settings.notifications.claude"),
+                    isOn: claudeNotificationsBinding
+                )
                 helpText(viewModel.text("settings.notifications.help"))
             }
         }
@@ -286,6 +290,13 @@ private struct SettingsView: View {
         Binding(
             get: { viewModel.preferences.completionNotificationsEnabled },
             set: { viewModel.preferences.completionNotificationsEnabled = $0 }
+        )
+    }
+
+    private var claudeNotificationsBinding: Binding<Bool> {
+        Binding(
+            get: { viewModel.preferences.claudeNotificationsEnabled },
+            set: { viewModel.preferences.claudeNotificationsEnabled = $0 }
         )
     }
 

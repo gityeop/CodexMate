@@ -846,6 +846,13 @@ private final class NotchWeeklyUsageIndicatorView: NSView {
             lineBreakMode: .byTruncatingTail
         )
         detailLabel.isHidden = presentation.detailText == nil
+        if let legend = WeeklyUsageIndicatorView.segmentLegend(
+            for: presentation,
+            font: NSFont.systemFont(ofSize: 12, weight: .semibold),
+            textColor: valueColor
+        ) {
+            valueLabel.attributedStringValue = legend
+        }
 
         setAccessibilityElement(true)
         setAccessibilityRole(.staticText)
@@ -906,6 +913,11 @@ private final class NotchWeeklyUsageIndicatorView: NSView {
             xRadius: barRect.height / 2,
             yRadius: barRect.height / 2
         ).fill()
+
+        if !presentation.barSegments.isEmpty {
+            WeeklyUsageIndicatorView.drawSegments(presentation.barSegments, in: barRect)
+            return
+        }
 
         guard let remainingPercent = presentation.remainingPercent,
               remainingPercent > 0 else {

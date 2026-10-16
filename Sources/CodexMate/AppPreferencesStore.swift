@@ -21,6 +21,7 @@ final class AppPreferencesStore: ObservableObject {
         static let attentionNotificationsEnabled = "attentionNotificationsEnabled"
         static let completionNotificationsEnabled = "completionNotificationsEnabled"
         static let failureNotificationsEnabled = "failureNotificationsEnabled"
+        static let claudeNotificationsEnabled = "claudeNotificationsEnabled"
         static let notchStatusContentEnabled = "notchStatusContentEnabled"
         static let projectLimit = "projectLimit"
         static let threadsPerProjectLimit = "threadsPerProjectLimit"
@@ -62,6 +63,13 @@ final class AppPreferencesStore: ObservableObject {
     @Published var failureNotificationsEnabled: Bool {
         didSet {
             defaults.set(failureNotificationsEnabled, forKey: DefaultsKey.failureNotificationsEnabled)
+        }
+    }
+
+    /// Claude Desktop already notifies, so Claude Code sessions only alert here when opted in.
+    @Published var claudeNotificationsEnabled: Bool {
+        didSet {
+            defaults.set(claudeNotificationsEnabled, forKey: DefaultsKey.claudeNotificationsEnabled)
         }
     }
 
@@ -140,6 +148,7 @@ final class AppPreferencesStore: ObservableObject {
         } else {
             failureNotificationsEnabled = defaults.bool(forKey: DefaultsKey.failureNotificationsEnabled)
         }
+        claudeNotificationsEnabled = defaults.bool(forKey: DefaultsKey.claudeNotificationsEnabled)
         if defaults.object(forKey: DefaultsKey.notchStatusContentEnabled) == nil {
             notchStatusContentEnabled = true
         } else {

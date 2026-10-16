@@ -319,6 +319,36 @@ final class MenubarController {
         state.recentThreads
     }
 
+    /// Rows from other agents (Claude Code) shown alongside Codex threads. They live outside
+    /// `AppStateStore` so Codex list pruning never removes them.
+    private(set) var externalThreads: [AppStateStore.ThreadRow] = []
+
+    /// Codex threads and external rows in one recency order.
+    var allRecentThreads: [AppStateStore.ThreadRow] {
+        MenubarSnapshotSelector.mergedRecentThreads(state.recentThreads, externalThreads)
+    }
+
+    /// Replaces the external rows and marks any of them read that the user viewed after their
+    /// latest turn ended. Returns true when read markers changed.
+    @discardableResult
+    func setExternalThreads(
+        _ threads: [AppStateStore.ThreadRow],
+        viewedAtByThreadID: [String: Date] = [:]
+    ) -> Bool {
+        externalThreads = threads
+        var didChange = false
+        for thread in threads {
+            if threadReadMarkers.markReadIfViewedAfterLastTerminalActivity(
+                threadID: thread.id,
+                lastTerminalActivityAt: thread.lastTerminalActivityAt,
+                viewedAt: viewedAtByThreadID[thread.id]
+            ) {
+                didChange = true
+            }
+        }
+        return didChange
+    }
+
     var visibleRecentThreads: [AppStateStore.ThreadRow] {
         state.visibleRecentThreads
     }
@@ -343,6 +373,7 @@ final class MenubarController {
             state: state,
             projectCatalog: projectCatalog,
             threadReadMarkers: threadReadMarkers,
+            additionalThreads: externalThreads,
             threadListViewMode: threadListViewMode,
             pinnedThreadIDs: pinnedThreadIDs,
             projectLimit: effectiveProjectLimit,
@@ -722,6 +753,7 @@ final class MenubarController {
             state: state,
             projectCatalog: projectCatalog,
             threadReadMarkers: threadReadMarkers,
+            additionalThreads: externalThreads,
             threadListViewMode: threadListViewMode,
             pinnedThreadIDs: pinnedThreadIDs,
             projectLimit: effectiveProjectLimit,
@@ -741,6 +773,7 @@ final class MenubarController {
                 state: state,
                 projectCatalog: projectCatalog,
                 threadReadMarkers: threadReadMarkers,
+                additionalThreads: externalThreads,
                 threadListViewMode: threadListViewMode,
                 pinnedThreadIDs: pinnedThreadIDs,
                 projectLimit: effectiveProjectLimit,
@@ -768,7 +801,7 @@ final class MenubarController {
     }
 
     func markThreadRead(_ threadID: String) -> Bool {
-        guard let thread = state.recentThreads.first(where: { $0.id == threadID }) else {
+        guard let thread = allRecentThreads.first(where: { $0.id == threadID }) else {
             return false
         }
 
@@ -780,29 +813,27 @@ final class MenubarController {
     }
 
     func nextAttentionThreadID() -> String? {
+        AttentionRotation.next(attentionCandidates())
+    }
+
+    /// Codex threads in recency order with the ones waiting for input or holding unread activity.
+    func attentionCandidates() -> AttentionRotation.Candidates {
         let snapshot = MenubarSnapshotSelector.makeSnapshot(
             state: state,
             projectCatalog: projectCatalog,
             threadReadMarkers: threadReadMarkers,
+            additionalThreads: externalThreads,
             projectLimit: .max,
             visibleThreadLimit: .max,
             now: now()
         )
-        let currentThreadID = latestViewedThread?.id
-        let attentionThreadIDs = Set(snapshot.projectSections.flatMap(\.allThreads).filter {
-            !$0.thread.isSubagent && ($0.thread.presentationStatus == .waitingForUser || $0.hasUnreadContent)
-                && ($0.id != currentThreadID || $0.hasUnreadContent)
-        }.map(\.id))
-        let threads = state.recentThreads
-        let startIndex = threads.firstIndex(where: { $0.id == currentThreadID }).map { $0 + 1 } ?? 0
-
-        for offset in 0..<threads.count {
-            let threadID = threads[(startIndex + offset) % threads.count].id
-            if attentionThreadIDs.contains(threadID) {
-                return threadID
-            }
-        }
-        return nil
+        let threads = snapshot.projectSections.flatMap(\.allThreads).filter { !$0.thread.isSubagent }
+        return AttentionRotation.Candidates(
+            orderedIDs: allRecentThreads.map(\.id),
+            waitingIDs: Set(threads.filter { $0.thread.presentationStatus == .waitingForUser }.map(\.id)),
+            unreadIDs: Set(threads.filter(\.hasUnreadContent).map(\.id)),
+            currentID: latestViewedThread?.id
+        )
     }
 
     func seedThreadReadMarkers(for threadIDs: Set<String>) -> Bool {
@@ -811,7 +842,7 @@ final class MenubarController {
         }
 
         var didChange = false
-        let threadsByID = Dictionary(uniqueKeysWithValues: state.recentThreads.map { ($0.id, $0) })
+        let threadsByID = Dictionary(uniqueKeysWithValues: allRecentThreads.map { ($0.id, $0) })
 
         for threadID in threadIDs {
             guard let thread = threadsByID[threadID] else {

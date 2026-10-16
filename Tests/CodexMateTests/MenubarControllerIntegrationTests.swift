@@ -34,6 +34,49 @@ final class MenubarControllerIntegrationTests: XCTestCase {
         XCTAssertNil(controller.nextAttentionThreadID())
     }
 
+    func testExternalClaudeRowsJoinRecentAndTrackUnreadLikeCodexThreads() async throws {
+        let controller = makeController(recentThreadResponses: [[
+            thread(id: "codex-new", updatedAt: 400, cwd: "/tmp/A"),
+            thread(id: "codex-old", updatedAt: 100, cwd: "/tmp/A")
+        ]])
+        try await controller.loadInitialThreads()
+
+        func claudeRow(_ status: AppStateStore.ThreadStatus, finishedAt: TimeInterval?) -> AppStateStore.ThreadRow {
+            var row = AppStateStore.ThreadRow(
+                id: "claude-session:c",
+                displayTitle: "Claude task",
+                preview: "",
+                cwd: "/tmp/A",
+                status: status,
+                listedStatus: status,
+                updatedAt: Date(timeIntervalSince1970: 300),
+                isWatched: false
+            )
+            row.lastTerminalActivityAt = finishedAt.map(Date.init(timeIntervalSince1970:))
+            return row
+        }
+
+        controller.setExternalThreads([claudeRow(.running, finishedAt: nil)])
+        var snapshot = controller.prepareSnapshot(threadListViewMode: .recent).snapshot
+        // Active threads rise to the top, as they do for Codex.
+        XCTAssertEqual(snapshot.menuSections.flatMap(\.threads).map(\.thread.id), ["claude-session:c", "codex-new", "codex-old"])
+        XCTAssertEqual(snapshot.overallStatus, .running)
+
+        controller.setExternalThreads([claudeRow(.idle, finishedAt: 350)])
+        snapshot = controller.prepareSnapshot(threadListViewMode: .recent).snapshot
+        XCTAssertEqual(snapshot.menuSections.flatMap(\.threads).map(\.thread.id), ["codex-new", "claude-session:c", "codex-old"])
+        XCTAssertTrue(snapshot.menuSections.flatMap(\.threads).first { $0.thread.id == "claude-session:c" }?.hasUnreadContent == true)
+        XCTAssertEqual(controller.nextAttentionThreadID(), "claude-session:c")
+
+        XCTAssertTrue(controller.setExternalThreads(
+            [claudeRow(.idle, finishedAt: 350)],
+            viewedAtByThreadID: ["claude-session:c": Date(timeIntervalSince1970: 360)]
+        ))
+        snapshot = controller.prepareSnapshot(threadListViewMode: .recent).snapshot
+        XCTAssertFalse(snapshot.hasUnreadThreads)
+        XCTAssertNil(controller.nextAttentionThreadID())
+    }
+
     func testNextAttentionThreadCyclesWaitingChatsAndSkipsReadAndRunningChats() async throws {
         let controller = makeController(recentThreadResponses: [[
             thread(id: "waiting", updatedAt: 400, cwd: "/tmp/A", status: .active(flags: [.waitingOnUserInput])),

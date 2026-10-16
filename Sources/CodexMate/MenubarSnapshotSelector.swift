@@ -7,16 +7,18 @@ enum MenubarSnapshotSelector {
         state: AppStateStore,
         projectCatalog: CodexDesktopProjectCatalog,
         threadReadMarkers: ThreadReadMarkerStore,
+        additionalThreads: [AppStateStore.ThreadRow] = [],
         threadListViewMode: ThreadListViewMode = .projects,
         pinnedThreadIDs: Set<String> = [],
         projectLimit: Int,
         visibleThreadLimit: Int,
         now: Date = Date()
     ) -> MenubarSnapshot {
+        let allThreads = mergedRecentThreads(state.recentThreads, additionalThreads)
         let needsAllProjectSections = threadListViewMode != .projects || !pinnedThreadIDs.isEmpty
         let allProjectSections = needsAllProjectSections
             ? projectSectionsWithSubagentThreads(
-                state: state,
+                allThreads: allThreads,
                 projectCatalog: projectCatalog,
                 threadReadMarkers: threadReadMarkers,
                 projectLimit: .max,
@@ -29,7 +31,7 @@ enum MenubarSnapshotSelector {
             in: allProjectSections
         )
         let projectSections = projectSectionsWithSubagentThreads(
-            state: state,
+            allThreads: allThreads,
             projectCatalog: projectCatalog,
             threadReadMarkers: threadReadMarkers,
             projectLimit: projectLimit,
@@ -62,8 +64,22 @@ enum MenubarSnapshotSelector {
         )
     }
 
+    /// Codex threads plus rows from other agents (Claude Code), ordered like `AppStateStore.recentThreads`.
+    static func mergedRecentThreads(
+        _ threads: [AppStateStore.ThreadRow],
+        _ additionalThreads: [AppStateStore.ThreadRow]
+    ) -> [AppStateStore.ThreadRow] {
+        guard !additionalThreads.isEmpty else {
+            return threads
+        }
+
+        let codexThreadIDs = Set(threads.map(\.id))
+        return (threads + additionalThreads.filter { !codexThreadIDs.contains($0.id) })
+            .sorted(by: isNewerThread)
+    }
+
     private static func projectSectionsWithSubagentThreads(
-        state: AppStateStore,
+        allThreads: [AppStateStore.ThreadRow],
         projectCatalog: CodexDesktopProjectCatalog,
         threadReadMarkers: ThreadReadMarkerStore,
         projectLimit: Int,
@@ -71,7 +87,6 @@ enum MenubarSnapshotSelector {
         now: Date,
         excludedThreadIDs: Set<String> = []
     ) -> [MenubarProjectSectionSnapshot] {
-        let allThreads = state.recentThreads
         guard !allThreads.isEmpty else { return [] }
 
         struct Bucket {

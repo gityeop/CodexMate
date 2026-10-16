@@ -63,7 +63,9 @@ struct ProjectGraphInspector: View {
                     .font(.callout).foregroundStyle(.secondary)
             }
             ForEach(store.linkedThreads) { thread in
-                ProjectThreadCard(title: thread.displayTitle, status: statusText(thread.presentationStatus),
+                ProjectThreadCard(title: thread.displayTitle,
+                                  badge: AppDelegate.isClaudeThreadID(thread.id) ? "Claude" : nil,
+                                  status: statusText(thread.presentationStatus),
                                   statusColor: statusColor(thread.presentationStatus), openLabel: store.text("openThread"),
                                   focusChanged: { proxy.scrollTo(thread.id, anchor: .center) }) {
                     openThread(thread.id)
@@ -128,6 +130,8 @@ struct ProjectGraphInspector: View {
 
 private struct ProjectThreadCard: View {
     let title: String
+    /// Marks threads from another agent, such as Claude Code.
+    let badge: String?
     let status: String
     let statusColor: Color
     let openLabel: String
@@ -143,6 +147,10 @@ private struct ProjectThreadCard: View {
                 HStack(spacing: 6) {
                     Circle().fill(statusColor).frame(width: 6, height: 6)
                     Text(status).font(MateUI.caption).foregroundStyle(.secondary)
+                    if let badge {
+                        Text(badge).font(.caption2.weight(.semibold))
+                            .foregroundStyle(Color(nsColor: AppDelegate.claudeBadgeColor))
+                    }
                 }
             }.frame(maxWidth: .infinity, alignment: .leading)
         }

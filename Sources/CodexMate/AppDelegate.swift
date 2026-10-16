@@ -64,6 +64,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         static let refreshInterval: TimeInterval = 5 * 60
     }
 
+    private enum ClaudeRefreshPolicy {
+        static let usageRefreshInterval: TimeInterval = 5 * 60
+        static let sessionRefreshInterval: TimeInterval = 4
+        static let sessionIdentifierPrefix = "claude-session:"
+        static let claudeDesktopBundleIdentifier = "com.anthropic.claudefordesktop"
+        static let badgeText = "Claude"
+        static let badgeColor = NSColor(srgbRed: 0.85, green: 0.47, blue: 0.34, alpha: 1)
+    }
+
     private enum NotificationRenderPolicy {
         static let coalescingDelayNanoseconds: UInt64 = 100_000_000
     }
@@ -140,6 +149,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let hoverTooltipController = ThreadHoverTooltipController()
     private let defaults = UserDefaults.standard
     private let weeklyUsageService = WeeklyUsageService()
+    private let claudeUsageService = ClaudeUsageService()
+    private let claudeSessionService = ClaudeCodeSessionService()
     private lazy var localDesktopRecentThreadListing = DesktopStateRecentThreadListing(
         codexDirectoryURLProvider: { [codexHomeStore] in
             codexHomeStore.currentDirectoryURL
@@ -179,6 +190,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var weeklyUsageRefreshTask: Task<Void, Never>?
     private var currentWeeklyUsage: WeeklyUsageReading?
     private var currentWeeklyUsageErrorMessage: String?
+    private var claudeUsageRefreshTimer: Timer?
+    private var claudeUsageRefreshTask: Task<Void, Never>?
+    private var claudeSessionRefreshTimer: Timer?
+    private var claudeSessionRefreshTask: Task<Void, Never>?
+    private var currentClaudeUsageState: ClaudeUsageDisplayState = .hidden
+    private var currentClaudeSessions: [ClaudeCodeSession] = []
+    /// Claude statuses already seen, so notifications fire only on changes. Nil until the first scan.
+    private var claudeNotificationStatusByThreadID: [String: AppStateStore.ThreadStatus]?
     private var currentStatusSprite: MenubarStatusPresentation.StatusSprite = .connecting
     private var currentStatusDisplayName = AppStateStore.OverallStatus.connecting.displayName
     private var currentNotchStatusContent = MenubarStatusPresentation.notchStatusContent(
@@ -288,6 +307,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         applyPresentationMode(force: true)
         requestAccessibilityPermissionIfNeeded()
         startWeeklyUsageUpdates()
+        if !promoMockupEnabled {
+            startClaudeUpdates()
+        }
 
         if promoMockupEnabled {
             isInitialThreadBootstrapInProgress = false
@@ -353,6 +375,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         removeMenuShortcutEventMonitor()
         removeMenuDismissEventMonitors()
         stopWeeklyUsageUpdates()
+        stopClaudeUpdates()
         notchStatusOverlay.hide()
     }
 
@@ -1192,7 +1215,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
-        guard let thread = controller.recentThreads.first(where: { $0.id == notification.threadID }) else {
+        guard let thread = controller.allRecentThreads.first(where: { $0.id == notification.threadID }) else {
             debugLog("User notification missing metadata thread=\(notification.threadID) kind=\(String(describing: notification.kind))")
             return
         }
@@ -1216,8 +1239,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func notificationMetadata(for thread: AppStateStore.ThreadRow) -> ThreadNotificationMetadata {
         let project = controller.projectCatalog.project(forThreadID: thread.id, cwd: thread.cwd)
+        // Claude sessions often run outside Codex workspaces; name them after their folder instead.
+        let projectDisplayName = Self.isClaudeThreadID(thread.id)
+            && project.id == CodexDesktopProjectCatalog.unknownProjectID
+            && !thread.cwd.isEmpty
+            ? CodexDesktopWorktreePath.inferredDisplayName(for: CodexDesktopWorktreePath.normalize(path: thread.cwd))
+            : project.displayName
         return ThreadNotificationMetadata(
-            projectDisplayName: project.displayName,
+            projectDisplayName: projectDisplayName,
             threadTitle: thread.displayTitle,
             replySnippet: ThreadNotificationContentBuilder.latestAssistantReplySnippet(sessionPath: thread.sessionPath)
         )
@@ -1320,6 +1349,238 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self.renderMenu()
             }
         }
+    }
+
+    private func startClaudeUpdates() {
+        guard claudeUsageRefreshTimer == nil, claudeSessionRefreshTimer == nil else {
+            return
+        }
+
+        requestClaudeUsageRefresh()
+        requestClaudeSessionRefresh()
+
+        let usageTimer = Timer(
+            timeInterval: ClaudeRefreshPolicy.usageRefreshInterval,
+            repeats: true
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.requestClaudeUsageRefresh()
+            }
+        }
+        claudeUsageRefreshTimer = usageTimer
+        RunLoop.main.add(usageTimer, forMode: .common)
+
+        let sessionTimer = Timer(
+            timeInterval: ClaudeRefreshPolicy.sessionRefreshInterval,
+            repeats: true
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.requestClaudeSessionRefresh()
+            }
+        }
+        claudeSessionRefreshTimer = sessionTimer
+        RunLoop.main.add(sessionTimer, forMode: .common)
+    }
+
+    private func stopClaudeUpdates() {
+        claudeUsageRefreshTimer?.invalidate()
+        claudeUsageRefreshTimer = nil
+        claudeUsageRefreshTask?.cancel()
+        claudeUsageRefreshTask = nil
+        claudeSessionRefreshTimer?.invalidate()
+        claudeSessionRefreshTimer = nil
+        claudeSessionRefreshTask?.cancel()
+        claudeSessionRefreshTask = nil
+    }
+
+    private func requestClaudeUsageRefresh() {
+        guard claudeUsageRefreshTask == nil else {
+            return
+        }
+
+        claudeUsageRefreshTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer {
+                self.claudeUsageRefreshTask = nil
+            }
+
+            let nextState: ClaudeUsageDisplayState
+            do {
+                let reading = try await self.claudeUsageService.read()
+                nextState = .loaded(reading)
+                self.debugLog(
+                    "Claude usage refresh succeeded fiveHour=\(reading.fiveHour?.remainingPercent.description ?? "nil") sevenDay=\(reading.sevenDay?.remainingPercent.description ?? "nil")"
+                )
+            } catch is CancellationError {
+                return
+            } catch {
+                let usageError = error as? ClaudeUsageError
+                nextState = ClaudeUsageDisplayState.state(
+                    afterFailure: usageError,
+                    previous: self.currentClaudeUsageState
+                )
+                self.debugLog("Claude usage refresh failed: \(error.localizedDescription)")
+            }
+
+            guard nextState != self.currentClaudeUsageState else {
+                return
+            }
+
+            self.currentClaudeUsageState = nextState
+            if self.isMenuOpen {
+                self.renderMenu()
+            }
+        }
+    }
+
+    private func requestClaudeSessionRefresh() {
+        guard claudeSessionRefreshTask == nil else {
+            return
+        }
+
+        claudeSessionRefreshTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer {
+                self.claudeSessionRefreshTask = nil
+            }
+
+            let sessions = await self.claudeSessionService.recentSessions()
+            guard !Task.isCancelled else {
+                return
+            }
+
+            self.applyClaudeSessions(sessions)
+        }
+    }
+
+    private func applyClaudeSessions(_ sessions: [ClaudeCodeSession]) {
+        currentClaudeSessions = sessions
+        let untitledTitle = strings.text("menu.claudeSession.untitled", language: preferences.language)
+        let rows = promoMockupEnabled
+            ? []
+            : sessions.map { Self.claudeThreadRow(for: $0, untitledTitle: untitledTitle) }
+        let previousRows = controller.externalThreads
+        let didChangeReadMarkers = controller.setExternalThreads(
+            rows,
+            viewedAtByThreadID: Self.claudeViewedAtByThreadID(
+                sessions: sessions,
+                claudeDesktopIsFrontmost: NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+                    == ClaudeRefreshPolicy.claudeDesktopBundleIdentifier,
+                now: Date()
+            )
+        )
+        if didChangeReadMarkers {
+            persistThreadReadMarkers()
+        }
+        sendClaudeNotifications(for: rows)
+
+        guard rows != previousRows || didChangeReadMarkers else {
+            return
+        }
+
+        let visibleContentChanged = didChangeReadMarkers
+            || Self.claudeRowsDisplaySignature(previousRows) != Self.claudeRowsDisplaySignature(rows)
+        if isMenuOpen, visibleContentChanged {
+            renderMenu()
+        } else {
+            renderCurrentStatusItem()
+        }
+    }
+
+    private func sendClaudeNotifications(for rows: [AppStateStore.ThreadRow]) {
+        let previousStatusByThreadID = claudeNotificationStatusByThreadID
+        claudeNotificationStatusByThreadID = ThreadNotificationPlanner.statusByThreadID(from: rows)
+        // Claude Desktop sends its own notifications, so these stay opt-in.
+        guard let previousStatusByThreadID, preferences.claudeNotificationsEnabled else {
+            return
+        }
+
+        let notifications = ThreadNotificationPlanner.notifications(
+            previousStatusByThreadID: previousStatusByThreadID,
+            currentRows: rows
+        )
+        for notification in notifications {
+            sendThreadDesktopNotification(notification)
+        }
+    }
+
+    /// Shapes a Claude Code session like a Codex thread so every thread feature applies to it.
+    static func claudeThreadRow(for session: ClaudeCodeSession, untitledTitle: String) -> AppStateStore.ThreadRow {
+        let status: AppStateStore.ThreadStatus
+        switch session.status {
+        case .waitingForUser:
+            status = session.pendingRequest == .approval ? .needsApproval : .waitingForInput
+        case .running:
+            status = .running
+        case .idle:
+            status = .idle
+        }
+
+        var row = AppStateStore.ThreadRow(
+            id: claudeSessionIdentifier(for: session.id),
+            displayTitle: session.title ?? untitledTitle,
+            preview: session.preview ?? "",
+            cwd: session.projectPath ?? "",
+            sessionPath: session.transcriptPath,
+            status: status,
+            listedStatus: status,
+            updatedAt: session.updatedAt,
+            isWatched: false
+        )
+        row.lastTerminalActivityAt = session.finishedAt
+        return row
+    }
+
+    /// When the user last looked at each session in Claude Desktop. Desktop only records the
+    /// moment a session comes on screen, so the session focused last counts as viewed now
+    /// while Claude Desktop is the frontmost app.
+    static func claudeViewedAtByThreadID(
+        sessions: [ClaudeCodeSession],
+        claudeDesktopIsFrontmost: Bool,
+        now: Date
+    ) -> [String: Date] {
+        let latestFocusedSessionID = sessions
+            .filter { $0.lastFocusedAt != nil }
+            .max { ($0.lastFocusedAt ?? .distantPast) < ($1.lastFocusedAt ?? .distantPast) }?
+            .id
+        var viewedAtByThreadID: [String: Date] = [:]
+        for session in sessions {
+            guard let lastFocusedAt = session.lastFocusedAt else {
+                continue
+            }
+            viewedAtByThreadID[claudeSessionIdentifier(for: session.id)] =
+                claudeDesktopIsFrontmost && session.id == latestFocusedSessionID ? now : lastFocusedAt
+        }
+        return viewedAtByThreadID
+    }
+
+    /// Ignores timestamps so an open menu is not rebuilt on every transcript write.
+    static func claudeRowsDisplaySignature(_ rows: [AppStateStore.ThreadRow]) -> [String] {
+        rows.map { row in
+            [row.id, "\(row.displayStatus)", row.displayTitle, row.cwd, row.preview]
+                .joined(separator: "\u{1F}")
+        }
+    }
+
+    static var claudeBadgeColor: NSColor {
+        ClaudeRefreshPolicy.badgeColor
+    }
+
+    static func isClaudeThreadID(_ threadID: String) -> Bool {
+        claudeSessionID(fromIdentifier: threadID) != nil
+    }
+
+    static func claudeSessionIdentifier(for sessionID: String) -> String {
+        ClaudeRefreshPolicy.sessionIdentifierPrefix + sessionID
+    }
+
+    static func claudeSessionID(fromIdentifier identifier: String) -> String? {
+        guard identifier.hasPrefix(ClaudeRefreshPolicy.sessionIdentifierPrefix) else {
+            return nil
+        }
+
+        let sessionID = String(identifier.dropFirst(ClaudeRefreshPolicy.sessionIdentifierPrefix.count))
+        return sessionID.isEmpty ? nil : sessionID
     }
 
     private var notificationsEnabled: Bool {
@@ -1528,7 +1789,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let sourceError: String?
         if case let .failed(message) = controller.connection { sourceError = message }
         else { sourceError = nil }
-        projectGraphStore.update(catalog: controller.projectCatalog, threads: controller.recentThreads,
+        projectGraphStore.update(catalog: controller.projectCatalog, threads: controller.allRecentThreads,
                                  language: preferences.language, sourceError: sourceError)
         hoverTooltipWorkItem?.cancel()
         hoverTooltipWorkItem = nil
@@ -1624,20 +1885,57 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func updateMenuNavigationState(menuSections: [ThreadMenuSection]) {
-        var threadProjectIndexByThreadID: [String: Int] = [:]
-        for (index, section) in menuSections.enumerated() {
-            for threadID in flattenedThreadIDs(from: section.threads) {
-                threadProjectIndexByThreadID[threadID] = index
+        projectShortcutThreadIDs = Self.projectShortcutIdentifiers(
+            sectionFirstIdentifiers: menuSections.compactMap { $0.threads.first?.thread.id }
+        )
+        let navigation = Self.optionNavigationState(
+            sectionIdentifiers: menuSections.map { flattenedThreadIDs(from: $0.threads) },
+            settingsIdentifier: MenuNavigationIdentifier.settings
+        )
+        optionShortcutTargetIDs = navigation.targetIDs
+        threadProjectIndexByThreadID = navigation.sectionIndexByIdentifier
+    }
+
+    /// Command+number opens the first row of each section.
+    static func projectShortcutIdentifiers(sectionFirstIdentifiers: [String]) -> [String] {
+        Array(sectionFirstIdentifiers.prefix(ProjectMenuShortcut.maxCount))
+    }
+
+    /// Option+Up/Down jumps to the first row of each section, then Settings.
+    static func optionNavigationState(
+        sectionIdentifiers: [[String]],
+        settingsIdentifier: String
+    ) -> (targetIDs: [String], sectionIndexByIdentifier: [String: Int]) {
+        var targetIDs: [String] = []
+        var sectionIndexByIdentifier: [String: Int] = [:]
+
+        for identifiers in sectionIdentifiers + [[settingsIdentifier]] {
+            guard let firstIdentifier = identifiers.first else {
+                continue
             }
+
+            for identifier in identifiers {
+                sectionIndexByIdentifier[identifier] = targetIDs.count
+            }
+            targetIDs.append(firstIdentifier)
         }
 
-        projectShortcutThreadIDs = menuSections.compactMap { $0.threads.first?.thread.id }
-        optionShortcutTargetIDs = projectShortcutThreadIDs + [MenuNavigationIdentifier.settings]
-        threadProjectIndexByThreadID[MenuNavigationIdentifier.settings] = projectShortcutThreadIDs.count
-        self.threadProjectIndexByThreadID = threadProjectIndexByThreadID
+        return (targetIDs, sectionIndexByIdentifier)
     }
 
     private func visibleThreadMenuItems(
+        snapshot: MenubarSnapshot,
+        menuSections: [ThreadMenuSection],
+        hoverTooltipContentsByThreadID: inout [String: MenubarStatusPresentation.ThreadTooltipContent]
+    ) -> [NSMenuItem] {
+        codexThreadMenuItems(
+            snapshot: snapshot,
+            menuSections: menuSections,
+            hoverTooltipContentsByThreadID: &hoverTooltipContentsByThreadID
+        )
+    }
+
+    private func codexThreadMenuItems(
         snapshot: MenubarSnapshot,
         menuSections: [ThreadMenuSection],
         hoverTooltipContentsByThreadID: inout [String: MenubarStatusPresentation.ThreadTooltipContent]
@@ -1706,7 +2004,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func overlayMenuEntries(from menuItems: [NSMenuItem]) -> [NotchStatusOverlayMenuEntry] {
-        menuItems.compactMap(overlayMenuEntry(for:))
+        var entries: [NotchStatusOverlayMenuEntry] = []
+        for item in menuItems {
+            guard let entry = overlayMenuEntry(for: item) else {
+                continue
+            }
+
+            entries.append(entry)
+            if let weeklyUsageView = item.view as? WeeklyUsageIndicatorView {
+                for presentation in weeklyUsageView.additionalPresentations {
+                    entries.append(.weeklyUsage(presentation))
+                }
+            }
+        }
+        return entries
     }
 
     private func overlayMenuEntry(for item: NSMenuItem) -> NotchStatusOverlayMenuEntry? {
@@ -1786,6 +2097,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return (primary, secondary.isEmpty ? nil : secondary)
     }
 
+    /// Renders the "Claude" marker in the row title as a small accent-colored badge.
+    static func claudeBadgedMenuTitle(_ title: String) -> NSAttributedString {
+        let font = NSFont.menuFont(ofSize: 0)
+        let attributed = NSMutableAttributedString(string: title, attributes: [.font: font])
+        let marker = " | \(ClaudeRefreshPolicy.badgeText) · "
+        if let range = title.range(of: marker, options: .backwards) {
+            let badgeStart = title.index(range.lowerBound, offsetBy: 3)
+            let badgeEnd = title.index(badgeStart, offsetBy: ClaudeRefreshPolicy.badgeText.count)
+            let badgeFont = NSFont.systemFont(ofSize: max(9, font.pointSize - 3), weight: .semibold)
+            attributed.addAttributes(
+                [
+                    .font: badgeFont,
+                    .foregroundColor: ClaudeRefreshPolicy.badgeColor,
+                    .baselineOffset: (font.capHeight - badgeFont.capHeight) / 2,
+                ],
+                range: NSRange(badgeStart..<badgeEnd, in: title)
+            )
+        }
+        return attributed
+    }
+
     private func makeStaticItem(title: String) -> NSMenuItem {
         let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
         item.isEnabled = false
@@ -1798,6 +2130,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             remainingPercent: remainingPercent,
             resetsAt: currentWeeklyUsage?.resetsAt,
             errorMessage: currentWeeklyUsageErrorMessage,
+            claudeUsage: ClaudeUsagePresentationBuilder.presentation(
+                for: promoMockupEnabled ? .hidden : currentClaudeUsageState,
+                language: preferences.language
+            ),
             pinsToMenu: currentEffectiveDisplayMode == .menuBar,
             language: preferences.language
         )
@@ -1869,6 +2205,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let item = NSMenuItem(title: title, action: #selector(openThread(_:)), keyEquivalent: keyEquivalent ?? "")
         item.target = self
         item.representedObject = thread.thread.id
+        if Self.isClaudeThreadID(thread.thread.id) {
+            item.attributedTitle = Self.claudeBadgedMenuTitle(title)
+        }
         item.toolTip = nil
         item.indentationLevel = level
         item.image = indicatorImage(for: thread, threadSnapshot: threadSnapshot)
@@ -1894,7 +2233,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let relativeDate = relativeDateFormatter.localizedString(for: thread.thread.activityUpdatedAt, relativeTo: Date())
         return MenubarStatusPresentation.threadTitle(
             for: thread.thread,
-            relativeDate: relativeDate,
+            relativeDate: Self.isClaudeThreadID(thread.thread.id)
+                ? "\(ClaudeRefreshPolicy.badgeText) · \(relativeDate)"
+                : relativeDate,
             maxDisplayTitleLength: ThreadListDisplay.maxThreadDisplayTitleLength,
             strings: strings,
             language: preferences.language
@@ -2500,7 +2841,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let threadID = projectShortcutThreadIDs[index]
             notchStatusOverlay.flashMenuItem(identifier: threadID)
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { [weak self] in
-                self?.openThread(threadID: threadID)
+                if Self.claudeSessionID(fromIdentifier: threadID) != nil {
+                    self?.openClaudeSession(identifier: threadID)
+                } else {
+                    self?.openThread(threadID: threadID)
+                }
             }
             return true
         case let .movePrimarySelection(delta):
@@ -2969,6 +3314,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func openThread(threadID: String) {
+        if Self.isClaudeThreadID(threadID) {
+            openClaudeSession(identifier: threadID)
+            return
+        }
+
         debugLog("openThread thread=\(threadID) event=\(debugEventSummary(NSApp.currentEvent))")
         if Self.shouldCopyThreadIDForOpenEvent(NSApp.currentEvent) {
             debugLog("openThread copyingThreadID thread=\(threadID)")
@@ -3028,6 +3378,62 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         default:
             return false
         }
+    }
+
+    private func openClaudeSession(identifier: String) {
+        guard let sessionID = Self.claudeSessionID(fromIdentifier: identifier),
+              let session = currentClaudeSessions.first(where: { $0.id == sessionID }) else {
+            debugLog("openClaudeSession missingSession identifier=\(identifier)")
+            return
+        }
+
+        debugLog("openClaudeSession session=\(session.id) status=\(session.status)")
+        if Self.shouldCopyThreadIDForOpenEvent(NSApp.currentEvent) {
+            copyThreadID(session.id)
+            return
+        }
+
+        markThreadRead(identifier)
+        closeMenu()
+        // Let the menu finish closing before a confirmation alert takes focus.
+        DispatchQueue.main.async { [weak self] in
+            self?.resumeClaudeSession(session)
+        }
+    }
+
+    private func resumeClaudeSession(_ session: ClaudeCodeSession) {
+        let destination = ClaudeCodeSessionLauncher.destination(
+            sessionID: session.id,
+            claudeDesktopInstalled: ClaudeCodeSessionLauncher.isClaudeDesktopInstalled
+        )
+        // Claude Desktop reuses the session it already has, so only a second terminal can double-run it.
+        if destination == .terminal, session.isActive, !confirmResumingRunningClaudeSession() {
+            return
+        }
+
+        do {
+            switch destination {
+            case .claudeDesktop:
+                try ClaudeCodeSessionLauncher.openInClaudeDesktop(sessionID: session.id)
+            case .terminal:
+                try ClaudeCodeSessionLauncher.resume(sessionID: session.id, projectPath: session.projectPath)
+            }
+        } catch {
+            debugLog("openClaudeSession failed session=\(session.id) error=\(error.localizedDescription)")
+            controller.recordDiagnostic("Unable to resume Claude Code session \(session.id): \(error.localizedDescription)")
+        }
+    }
+
+    private func confirmResumingRunningClaudeSession() -> Bool {
+        NSApp.activate(ignoringOtherApps: true)
+
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = strings.text("alert.claudeSessionRunning.title", language: preferences.language)
+        alert.informativeText = strings.text("alert.claudeSessionRunning.message", language: preferences.language)
+        alert.addButton(withTitle: strings.text("alert.claudeSessionRunning.resume", language: preferences.language))
+        alert.addButton(withTitle: strings.text("alert.claudeSessionRunning.cancel", language: preferences.language))
+        return alert.runModal() == .alertFirstButtonReturn
     }
 
     private func copyThreadID(_ threadID: String) {
