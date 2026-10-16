@@ -10,11 +10,20 @@ final class ProjectGraphWindowTests: XCTestCase {
     }
 
     func testClosingStopsGitRefreshAndReopeningReusesWindow() throws {
+        let application = NSApplication.shared
+        let originalActivationPolicy = application.activationPolicy()
+        application.setActivationPolicy(.accessory)
         let store = ProjectGraphStore()
         let controller = ProjectGraphWindowController(store: store, openThread: { _ in }, openSettings: {})
         let window = try XCTUnwrap(controller.window)
-        defer { window.close() }
+        defer {
+            window.close()
+            application.setActivationPolicy(originalActivationPolicy)
+        }
+        XCTAssertFalse(window.isVisible)
+        XCTAssertEqual(application.activationPolicy(), .accessory)
         controller.showWindow(nil)
+        XCTAssertEqual(application.activationPolicy(), .regular)
         XCTAssertTrue(window.isVisible)
         XCTAssertTrue(store.isVisible)
         XCTAssertTrue(window.styleMask.contains(.resizable))
@@ -22,10 +31,12 @@ final class ProjectGraphWindowTests: XCTestCase {
         window.performClose(nil)
         XCTAssertFalse(window.isVisible)
         XCTAssertFalse(store.isVisible)
+        XCTAssertEqual(application.activationPolicy(), .accessory)
 
         controller.showWindow(nil)
         XCTAssertTrue(controller.window === window)
         XCTAssertTrue(window.isVisible)
         XCTAssertTrue(store.isVisible)
+        XCTAssertEqual(application.activationPolicy(), .regular)
     }
 }

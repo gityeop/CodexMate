@@ -26,6 +26,7 @@ final class ProjectGraphWindowController: NSWindowController, NSWindowDelegate {
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
     override func showWindow(_ sender: Any?) {
+        NSApp.setActivationPolicy(.regular)
         super.showWindow(sender)
         if window?.isMiniaturized == true { window?.deminiaturize(sender) }
         window?.makeKeyAndOrderFront(sender)
@@ -36,7 +37,10 @@ final class ProjectGraphWindowController: NSWindowController, NSWindowDelegate {
     func windowDidBecomeKey(_ notification: Notification) { store.refresh() }
     func windowDidDeminiaturize(_ notification: Notification) { startRefreshing() }
     func windowDidMiniaturize(_ notification: Notification) { stopRefreshing() }
-    func windowWillClose(_ notification: Notification) { stopRefreshing() }
+    func windowWillClose(_ notification: Notification) {
+        stopRefreshing()
+        NSApp.setActivationPolicy(.accessory)
+    }
 
     private func startRefreshing() {
         store.setVisible(true)

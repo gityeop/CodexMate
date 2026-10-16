@@ -314,8 +314,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         isInitialThreadBootstrapInProgress = true
         renderMenu()
 
-        openMainWindowAction()
-
         if shouldOpenSettingsOnLaunch() {
             openSettingsAction()
         }
@@ -363,8 +361,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        openMainWindowAction()
-        return true
+        false
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {

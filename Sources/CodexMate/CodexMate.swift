@@ -83,7 +83,7 @@ struct CodexMate {
         let openSettingsOnLaunch = LaunchEnvironment.openSettingsOnLaunchEnabled()
         let promoMockupDisplayMode = LaunchEnvironment.promoMockupDisplayMode()
         let promoMockupEnabled = promoMockupDisplayMode != nil || LaunchEnvironment.promoMockupEnabled()
-        let regularAppMode = !promoMockupEnabled || LaunchEnvironment.regularAppModeEnabled()
+        let regularAppMode = LaunchEnvironment.regularAppModeEnabled()
         DebugTraceLogger.log(
             "main start regularAppMode=\(regularAppMode) openSettingsOnLaunch=\(openSettingsOnLaunch) promoMockup=\(promoMockupEnabled) promoMockupDisplayMode=\((promoMockupDisplayMode ?? .menuBar).rawValue) os=\(ProcessInfo.processInfo.operatingSystemVersionString)"
         )

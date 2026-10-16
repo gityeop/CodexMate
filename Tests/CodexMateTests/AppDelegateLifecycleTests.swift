@@ -15,6 +15,16 @@ final class AppDelegateLifecycleTests: XCTestCase {
         XCTAssertFalse(delegate.applicationShouldTerminateAfterLastWindowClosed(NSApplication.shared))
     }
 
+    func testReopeningAppDoesNotCreateGitGraphWindow() {
+        let application = NSApplication.shared
+        let delegate = AppDelegate()
+        let originalWindows = application.windows
+
+        XCTAssertFalse(delegate.applicationShouldHandleReopen(application, hasVisibleWindows: false))
+        XCTAssertFalse(delegate.applicationShouldHandleReopen(application, hasVisibleWindows: true))
+        XCTAssertEqual(application.windows, originalWindows)
+    }
+
     func testOpenMenuThreadRefreshPreservesWeeklyUsageItem() {
         let menu = NSMenu()
         let weeklyUsageItem = NSMenuItem(title: "Weekly usage", action: nil, keyEquivalent: "")
