@@ -3,19 +3,22 @@
     <channel>
         <title>CodexMate</title>
         <item>
-            <title>0.0.67</title>
-            <pubDate>Thu, 01 Oct 2026 14:09:07 +0900</pubDate>
-            <link>https://github.com/gityeop/CodexMate/releases/tag/v0.0.67</link>
-            <sparkle:version>67</sparkle:version>
-            <sparkle:shortVersionString>0.0.67</sparkle:shortVersionString>
+            <title>0.0.68</title>
+            <pubDate>Fri, 16 Oct 2026 21:01:11 +0900</pubDate>
+            <link>https://github.com/gityeop/CodexMate/releases/tag/v0.0.68</link>
+            <sparkle:version>68</sparkle:version>
+            <sparkle:shortVersionString>0.0.68</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description sparkle:format="markdown"><![CDATA[# CodexMate 0.0.67
+            <description sparkle:format="markdown"><![CDATA[# CodexMate 0.0.68
 
-- Restores weekly usage reporting when Codex is bundled inside the ChatGPT app.
-- Shows an unavailable status when usage cannot be read, while keeping technical error details in the diagnostic log.
+- Shows Claude Code sessions next to Codex threads in Recent, Projects, and Status views, marked with a small Claude badge. Running, waiting-for-input, plan approval, and unread states work the same as for Codex threads, including pinning, keyboard shortcuts, and the Git Graph window.
+- Opens a Claude Code session in Claude Desktop when you select it, and falls back to Terminal when Claude Desktop is not installed.
+- Shows the remaining Claude 5-hour and weekly limits under Codex weekly usage, in one bar that turns orange or red when a limit runs low.
+- Adds an optional setting to send notifications for Claude Code sessions; it is off by default because Claude Desktop already notifies.
+- Keeps CodexMate out of the Dock unless the Git Graph window is open, and no longer opens that window on launch or when reopening the app.
 ]]></description>
-            <enclosure url="https://github.com/gityeop/CodexMate/releases/latest/download/CodexMate-0.0.67.zip" length="5460696" type="application/octet-stream" sparkle:edSignature="upuTw/O2KHK1loBU8VHub17FiuokQM4uFJi94YgMb5Z5AG6GzK5O9HGvkGyV/cBqgq94sM5pYurVdPEfjaTtBg=="/>
+            <enclosure url="https://github.com/gityeop/CodexMate/releases/latest/download/CodexMate-0.0.68.zip" length="5575583" type="application/octet-stream" sparkle:edSignature="1QEUMjne29yRAILsQwNJYGemEruRhXryU8+dxUpIWi8pg1/s94yYrT+MQwxkaqNuyDCBu4m55own9m7VhV+NAg=="/>
         </item>
     </channel>
 </rss>
