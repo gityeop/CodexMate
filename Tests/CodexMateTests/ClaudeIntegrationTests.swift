@@ -48,26 +48,38 @@ final class ClaudeUsageParserTests: XCTestCase {
         }
     }
 
-    func testParsesClaudeCodeCredentialsWithMillisecondExpiry() throws {
+    func testParsesDesktopCredentialsForSignedInAccountAndGeneralScope() throws {
         let data = Data(
-            #"{"claudeAiOauth":{"accessToken":"token-1","refreshToken":"refresh","expiresAt":1800000000000,"subscriptionType":"max"}}"#.utf8
+            #"{"acct:other|9d1c250a-e61b-44d9-88ed-5944d1962f5e:org:https://api.anthropic.com:user:inference user:file_upload user:profile":{"token":"other-account","expiresAt":1800000000000},"acct:current|9d1c250a-e61b-44d9-88ed-5944d1962f5e:org:https://api.anthropic.com:user:inference user:file_upload user:profile user:sessions:claude_code":{"token":"code-token","expiresAt":1800000000000},"acct:current|9d1c250a-e61b-44d9-88ed-5944d1962f5e:org:https://api.anthropic.com:user:inference user:file_upload user:profile":{"token":"desktop-token","expiresAt":1800000000000}}"#.utf8
         )
 
-        let credentials = try ClaudeCredentialsParser.credentials(from: data)
+        let credentials = try ClaudeDesktopCredentialsParser.credentials(from: data, accountUUID: "current")
 
-        XCTAssertEqual(credentials.accessToken, "token-1")
+        XCTAssertEqual(credentials.accessToken, "desktop-token")
         XCTAssertEqual(credentials.expiresAt, Date(timeIntervalSince1970: 1_800_000_000))
         XCTAssertFalse(credentials.isExpired(at: Date(timeIntervalSince1970: 1_799_000_000)))
         XCTAssertTrue(credentials.isExpired(at: Date(timeIntervalSince1970: 1_800_000_000)))
-    }
-
-    func testMissingAccessTokenCountsAsMissingCredentials() {
-        let data = Data(#"{"claudeAiOauth":{"accessToken":""}}"#.utf8)
-
-        XCTAssertThrowsError(try ClaudeCredentialsParser.credentials(from: data)) { error in
-            XCTAssertEqual(error as? ClaudeUsageError, .credentialsNotFound)
+        XCTAssertThrowsError(try ClaudeDesktopCredentialsParser.credentials(from: data, accountUUID: "signed-out")) {
+            XCTAssertEqual($0 as? ClaudeUsageError, .credentialsNotFound)
         }
     }
+
+    func testDecryptsElectronSafeStorageFixture() throws {
+        let encrypted = try XCTUnwrap(Data(base64Encoded: "djEwy8O2MWE5YNK/z6YhTAbEMIu1aGGAHJOA3RReZZKitY8="))
+
+        let plaintext = try ClaudeDesktopCredentialsStore.decrypt(encrypted, password: Data("test-password".utf8))
+
+        XCTAssertEqual(String(data: plaintext, encoding: .utf8), #"{"token":"test-desktop-token"}"#)
+        XCTAssertThrowsError(try ClaudeDesktopCredentialsParser.credentials(
+            from: ClaudeDesktopCredentialsStore.decrypt(encrypted, password: Data("wrong".utf8)),
+            accountUUID: "current"
+        ))
+        XCTAssertThrowsError(try ClaudeDesktopCredentialsStore.decrypt(Data(encrypted.dropLast()), password: Data("test-password".utf8)))
+        XCTAssertThrowsError(try ClaudeDesktopCredentialsStore.decrypt(Data("v20invalid".utf8), password: Data())) {
+            XCTAssertEqual($0 as? ClaudeUsageError, .desktopCredentialsInvalid)
+        }
+    }
+
 }
 
 final class ClaudeUsageServiceTests: XCTestCase {
@@ -104,14 +116,14 @@ final class ClaudeUsageServiceTests: XCTestCase {
             self.tokens = tokens
         }
 
-        func next() -> Data? {
+        func next() throws -> ClaudeOAuthCredentials {
             lock.lock()
             defer { lock.unlock() }
-            guard let token = tokens.first else { return nil }
+            guard let token = tokens.first else { throw ClaudeUsageError.credentialsNotFound }
             if tokens.count > 1 {
                 tokens.removeFirst()
             }
-            return Data(#"{"claudeAiOauth":{"accessToken":"\#(token)","expiresAt":4102444800000}}"#.utf8)
+            return ClaudeOAuthCredentials(accessToken: token, expiresAt: Date(timeIntervalSince1970: 4_102_444_800))
         }
     }
 
@@ -119,10 +131,10 @@ final class ClaudeUsageServiceTests: XCTestCase {
         #"{"five_hour":{"utilization":10.0,"resets_at":"2026-02-08T04:59:59Z"},"seven_day":{"utilization":50.0,"resets_at":"2026-02-12T14:59:59Z"}}"#.utf8
     )
 
-    func testSendsClaudeCodeTokenAndBetaHeader() async throws {
+    func testSendsDesktopTokenAndBetaHeader() async throws {
         let log = RequestLog()
         let service = ClaudeUsageService(
-            loadCredentialsData: { CredentialsSequence(tokens: ["token-a"]).next() },
+            loadCredentials: { try CredentialsSequence(tokens: ["token-a"]).next() },
             fetch: { request in
                 log.record(request)
                 return ClaudeUsageHTTPResponse(statusCode: 200, body: Self.usageBody)
@@ -141,7 +153,7 @@ final class ClaudeUsageServiceTests: XCTestCase {
         let log = RequestLog()
         let credentials = CredentialsSequence(tokens: ["old-token", "new-token"])
         let service = ClaudeUsageService(
-            loadCredentialsData: { credentials.next() },
+            loadCredentials: { try credentials.next() },
             fetch: { request in
                 log.record(request)
                 let isNewToken = request.value(forHTTPHeaderField: "Authorization") == "Bearer new-token"
@@ -155,9 +167,45 @@ final class ClaudeUsageServiceTests: XCTestCase {
         XCTAssertEqual(log.recordedAuthorizations, ["Bearer old-token", "Bearer new-token"])
     }
 
+    func testReadsDesktopTokenAgainOnEachRefresh() async throws {
+        let log = RequestLog()
+        let credentials = CredentialsSequence(tokens: ["first-token", "refreshed-token"])
+        let service = ClaudeUsageService(
+            loadCredentials: { try credentials.next() },
+            fetch: { request in
+                log.record(request)
+                return ClaudeUsageHTTPResponse(statusCode: 200, body: Self.usageBody)
+            }
+        )
+
+        _ = try await service.read()
+        _ = try await service.read()
+
+        XCTAssertEqual(log.recordedAuthorizations, ["Bearer first-token", "Bearer refreshed-token"])
+    }
+
+    func testCredentialReadFailureIsPropagatedWithoutAnAPIRequest() async {
+        let log = RequestLog()
+        let service = ClaudeUsageService(
+            loadCredentials: { throw ClaudeUsageError.keychainReadFailed(51) },
+            fetch: { request in
+                log.record(request)
+                return ClaudeUsageHTTPResponse(statusCode: 200, body: Self.usageBody)
+            }
+        )
+
+        do {
+            _ = try await service.read()
+            XCTFail("Expected keychain failure")
+        } catch {
+            XCTAssertEqual(error as? ClaudeUsageError, .keychainReadFailed(51))
+        }
+        XCTAssertTrue(log.recordedAuthorizations.isEmpty)
+    }
+
     func testReportsMissingAndExpiredCredentials() async {
         let missing = ClaudeUsageService(
-            loadCredentialsData: { nil },
+            loadCredentials: { throw ClaudeUsageError.credentialsNotFound },
             fetch: { _ in ClaudeUsageHTTPResponse(statusCode: 200, body: Self.usageBody) }
         )
         do {
@@ -168,7 +216,7 @@ final class ClaudeUsageServiceTests: XCTestCase {
         }
 
         let expired = ClaudeUsageService(
-            loadCredentialsData: { Data(#"{"claudeAiOauth":{"accessToken":"t","expiresAt":1000}}"#.utf8) },
+            loadCredentials: { ClaudeOAuthCredentials(accessToken: "t", expiresAt: Date(timeIntervalSince1970: 1)) },
             fetch: { _ in ClaudeUsageHTTPResponse(statusCode: 200, body: Self.usageBody) }
         )
         do {
@@ -236,7 +284,7 @@ final class ClaudeUsageServiceTests: XCTestCase {
         XCTAssertNil(ClaudeUsagePresentationBuilder.presentation(for: .hidden, language: .english))
         XCTAssertEqual(
             ClaudeUsagePresentationBuilder.presentation(for: .failed(.tokenExpired), language: .english)?.detailText,
-            "Open Claude Code to refresh its sign-in"
+            "Open Claude Desktop to refresh its sign-in"
         )
     }
 }

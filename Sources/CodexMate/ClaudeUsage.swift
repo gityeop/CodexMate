@@ -19,17 +19,20 @@ struct ClaudeUsageReading: Equatable, Sendable {
 
 enum ClaudeUsageError: LocalizedError, Equatable {
     case credentialsNotFound
+    case desktopCredentialsInvalid
+    case keychainReadFailed(Int32)
+    case decryptionFailed(Int32)
     case tokenExpired
     case unauthorized
     case httpStatus(Int)
     case usageWindowsUnavailable
 
-    /// Expired or rejected sign-in tokens are refreshed by Claude Code itself, not by CodexMate.
-    var needsClaudeCodeSignInRefresh: Bool {
+    /// Expired or rejected sign-in tokens are refreshed by Claude Desktop itself, not by CodexMate.
+    var needsClaudeDesktopSignInRefresh: Bool {
         switch self {
         case .tokenExpired, .unauthorized:
             return true
-        case .credentialsNotFound, .httpStatus, .usageWindowsUnavailable:
+        case .credentialsNotFound, .desktopCredentialsInvalid, .keychainReadFailed, .decryptionFailed, .httpStatus, .usageWindowsUnavailable:
             return false
         }
     }
@@ -37,11 +40,17 @@ enum ClaudeUsageError: LocalizedError, Equatable {
     var errorDescription: String? {
         switch self {
         case .credentialsNotFound:
-            return "Claude Code sign-in credentials were not found."
+            return "Claude Desktop sign-in credentials were not found."
+        case .desktopCredentialsInvalid:
+            return "The Claude Desktop credential cache is invalid."
+        case let .keychainReadFailed(status):
+            return "Claude Desktop Safe Storage keychain lookup failed (status \(status))."
+        case let .decryptionFailed(status):
+            return "Claude Desktop credential decryption failed (status \(status))."
         case .tokenExpired:
-            return "The Claude Code access token has expired."
+            return "The Claude Desktop access token has expired."
         case .unauthorized:
-            return "The Claude usage endpoint rejected the Claude Code access token."
+            return "The Claude usage endpoint rejected the Claude Desktop access token."
         case let .httpStatus(statusCode):
             return "The Claude usage endpoint returned HTTP \(statusCode)."
         case .usageWindowsUnavailable:
@@ -60,43 +69,6 @@ struct ClaudeOAuthCredentials: Equatable, Sendable {
         }
 
         return expiresAt <= date.addingTimeInterval(leeway)
-    }
-}
-
-enum ClaudeCredentialsParser {
-    private struct Root: Decodable {
-        let claudeAiOauth: OAuth?
-    }
-
-    private struct OAuth: Decodable {
-        let accessToken: String?
-        let expiresAt: Double?
-    }
-
-    static func credentials(from data: Data) throws -> ClaudeOAuthCredentials {
-        let root: Root
-        do {
-            root = try JSONDecoder().decode(Root.self, from: data)
-        } catch {
-            throw ClaudeUsageError.credentialsNotFound
-        }
-
-        guard let oauth = root.claudeAiOauth,
-              let accessToken = oauth.accessToken?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !accessToken.isEmpty else {
-            throw ClaudeUsageError.credentialsNotFound
-        }
-
-        return ClaudeOAuthCredentials(
-            accessToken: accessToken,
-            expiresAt: oauth.expiresAt.map(date(fromEpoch:))
-        )
-    }
-
-    /// Claude Code stores `expiresAt` in milliseconds; accept seconds as well.
-    private static func date(fromEpoch value: Double) -> Date {
-        let seconds = value > 100_000_000_000 ? value / 1_000 : value
-        return Date(timeIntervalSince1970: seconds)
     }
 }
 

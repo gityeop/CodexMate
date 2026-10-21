@@ -1,7 +1,7 @@
 import Foundation
 
 enum ClaudeUsageDisplayState: Equatable {
-    /// Claude Code is not signed in on this Mac, so the row stays out of the way.
+    /// Claude Desktop is not signed in on this Mac, so the row stays out of the way.
     case hidden
     case loading
     case loaded(ClaudeUsageReading)
@@ -20,7 +20,7 @@ enum ClaudeUsageDisplayState: Equatable {
         }
 
         if case let .loaded(reading) = previous,
-           error?.needsClaudeCodeSignInRefresh != true,
+           error?.needsClaudeDesktopSignInRefresh != true,
            now.timeIntervalSince(reading.readAt) < staleReadingTolerance {
             return previous
         }
@@ -52,7 +52,7 @@ enum ClaudeUsagePresentationBuilder {
             return WeeklyUsageIndicatorPresentation(
                 titleText: titleText,
                 valueText: strings.text("menu.weeklyUsage.unavailable", language: language),
-                detailText: error?.needsClaudeCodeSignInRefresh == true
+                detailText: error?.needsClaudeDesktopSignInRefresh == true
                     ? strings.text("menu.claudeUsage.signInHint", language: language)
                     : nil,
                 remainingPercent: nil

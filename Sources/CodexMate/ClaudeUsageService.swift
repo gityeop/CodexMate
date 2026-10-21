@@ -20,60 +20,13 @@ enum ClaudeCodePaths {
     }
 }
 
-/// Reads the sign-in that Claude Code already stored on this Mac. CodexMate never refreshes or
-/// rewrites it, so Claude Code stays the single owner of the token.
-enum ClaudeCredentialsStore {
-    static let keychainServiceName = "Claude Code-credentials"
-
-    static func loadCredentialsData() -> Data? {
-        if let keychainData = keychainCredentialsData() {
-            return keychainData
-        }
-
-        let fileURL = ClaudeCodePaths.configDirectoryURL()
-            .appendingPathComponent(".credentials.json", isDirectory: false)
-        return try? Data(contentsOf: fileURL)
-    }
-
-    /// Uses the system `security` tool so a one-time "Always Allow" survives CodexMate rebuilds.
-    private static func keychainCredentialsData() -> Data? {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/security")
-        process.arguments = ["find-generic-password", "-s", keychainServiceName, "-w"]
-        let outputPipe = Pipe()
-        process.standardOutput = outputPipe
-        process.standardError = FileHandle.nullDevice
-
-        do {
-            try process.run()
-        } catch {
-            DebugTraceLogger.log("Claude credentials keychain lookup failed to start: \(error.localizedDescription)")
-            return nil
-        }
-
-        let output = outputPipe.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
-        guard process.terminationStatus == 0 else {
-            return nil
-        }
-
-        guard let text = String(data: output, encoding: .utf8)?
-            .trimmingCharacters(in: .whitespacesAndNewlines),
-            !text.isEmpty else {
-            return nil
-        }
-
-        return Data(text.utf8)
-    }
-}
-
 struct ClaudeUsageHTTPResponse: Sendable {
     let statusCode: Int
     let body: Data
 }
 
 actor ClaudeUsageService {
-    typealias CredentialsDataLoader = @Sendable () -> Data?
+    typealias CredentialsLoader = @Sendable () throws -> ClaudeOAuthCredentials
     typealias Fetcher = @Sendable (URLRequest) async throws -> ClaudeUsageHTTPResponse
 
     static let usageURL = URL(string: "https://api.anthropic.com/api/oauth/usage")!
@@ -85,29 +38,28 @@ actor ClaudeUsageService {
         return ClaudeUsageHTTPResponse(statusCode: statusCode, body: data)
     }
 
-    private let loadCredentialsData: CredentialsDataLoader
+    private let loadCredentials: CredentialsLoader
     private let fetch: Fetcher
     private let now: @Sendable () -> Date
-    private var cachedCredentials: ClaudeOAuthCredentials?
 
     init(
-        loadCredentialsData: @escaping CredentialsDataLoader = { ClaudeCredentialsStore.loadCredentialsData() },
+        loadCredentials: @escaping CredentialsLoader = { try ClaudeDesktopCredentialsStore.loadCredentials() },
         fetch: @escaping Fetcher = ClaudeUsageService.urlSessionFetch,
         now: @escaping @Sendable () -> Date = { Date() }
     ) {
-        self.loadCredentialsData = loadCredentialsData
+        self.loadCredentials = loadCredentials
         self.fetch = fetch
         self.now = now
     }
 
     func read() async throws -> ClaudeUsageReading {
-        let credentials = try currentCredentials(forceReload: false)
+        let credentials = try currentCredentials()
 
         do {
             return try await requestUsage(with: credentials)
         } catch ClaudeUsageError.unauthorized {
-            // Claude Code may have rotated the token since it was cached.
-            let reloadedCredentials = try currentCredentials(forceReload: true)
+            // Desktop may have rotated the token while the request was in flight.
+            let reloadedCredentials = try currentCredentials()
             guard reloadedCredentials.accessToken != credentials.accessToken else {
                 throw ClaudeUsageError.unauthorized
             }
@@ -116,25 +68,11 @@ actor ClaudeUsageService {
         }
     }
 
-    private func currentCredentials(forceReload: Bool) throws -> ClaudeOAuthCredentials {
-        let date = now()
-        if !forceReload,
-           let cachedCredentials,
-           !cachedCredentials.isExpired(at: date) {
-            return cachedCredentials
-        }
-
-        cachedCredentials = nil
-        guard let data = loadCredentialsData() else {
-            throw ClaudeUsageError.credentialsNotFound
-        }
-
-        let credentials = try ClaudeCredentialsParser.credentials(from: data)
-        guard !credentials.isExpired(at: date) else {
+    private func currentCredentials() throws -> ClaudeOAuthCredentials {
+        let credentials = try loadCredentials()
+        guard !credentials.isExpired(at: now()) else {
             throw ClaudeUsageError.tokenExpired
         }
-
-        cachedCredentials = credentials
         return credentials
     }
 
