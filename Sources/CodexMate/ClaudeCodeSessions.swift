@@ -73,6 +73,9 @@ struct ClaudeCodeTranscriptSummary: Equatable, Sendable {
     var phase: ClaudeCodeTranscriptPhase = .unknown
     /// Timestamp of the entry that decided `phase`.
     var phaseRecordedAt: Date?
+    /// Newest user, assistant, or turn-end entry. Unlike the file's modification time, it ignores
+    /// the bookkeeping entries Claude Code appends when a session is merely reopened.
+    var lastConversationAt: Date?
     var pendingToolName: String?
 
     var title: String? {
@@ -120,7 +123,7 @@ enum ClaudeCodeTranscriptParser {
         var tailCustomTitleFound = false
         var tailSummaryTitleFound = false
         for line in tailLines.reversed() {
-            let needsContext = !latestContextFound || summary.phase == .unknown
+            let needsContext = !latestContextFound || summary.phase == .unknown || summary.lastConversationAt == nil
             let carriesTitle = mayCarryTitle(line)
             let carriesLastPrompt = summary.lastPrompt == nil && line.contains("\"last-prompt\"")
             guard needsContext || carriesTitle || carriesLastPrompt else {
@@ -156,6 +159,10 @@ enum ClaudeCodeTranscriptParser {
                 if let branch = nonEmptyString(record["gitBranch"]) {
                     summary.gitBranch = branch
                 }
+            }
+
+            if summary.lastConversationAt == nil, isConversationRecord(record) {
+                summary.lastConversationAt = timestamp(of: record)
             }
 
             if summary.phase == .unknown, let latestPhase = Self.phase(of: record) {
@@ -349,6 +356,21 @@ enum ClaudeCodeTranscriptParser {
         }
     }
 
+    private static func isConversationRecord(_ record: [String: Any]) -> Bool {
+        guard (record["isSidechain"] as? Bool) != true, record["timestamp"] is String else {
+            return false
+        }
+
+        switch record["type"] as? String {
+        case "user", "assistant":
+            return true
+        case "system":
+            return ["turn_duration", "stop_hook_summary", "local_command"].contains(record["subtype"] as? String ?? "")
+        default:
+            return false
+        }
+    }
+
     private static func userInputToolName(in record: [String: Any]) -> String? {
         let blocks = (record["message"] as? [String: Any])?["content"] as? [[String: Any]] ?? []
         return blocks
@@ -512,8 +534,8 @@ actor ClaudeCodeSessionService {
         case (.idle, .finished):
             finishedAt = summary.phaseRecordedAt ?? modifiedAt
         case (.idle, _):
-            // The turn went stale without an end marker; its last write is the best end time.
-            finishedAt = modifiedAt
+            // The turn went stale without an end marker; its last message is the best end time.
+            finishedAt = summary.lastConversationAt ?? modifiedAt
         default:
             finishedAt = nil
         }
@@ -525,13 +547,23 @@ actor ClaudeCodeSessionService {
             projectPath: summary.projectPath ?? desktopRecord?.cwd,
             gitBranch: summary.gitBranch,
             status: status,
-            updatedAt: max(modifiedAt, desktopRecord?.lastActivityAt ?? .distantPast),
+            updatedAt: activityDate(summary: summary, desktopRecord: desktopRecord, modifiedAt: modifiedAt),
             pendingRequest: pendingRequest,
             preview: summary.lastPrompt ?? summary.firstPrompt,
             finishedAt: finishedAt,
             transcriptPath: transcriptPath,
             lastFocusedAt: desktopRecord?.lastFocusedAt
         )
+    }
+
+    /// When the conversation last moved. Reopening a session appends bookkeeping entries and
+    /// touches the file, so the modification time is only a fallback.
+    static func activityDate(
+        summary: ClaudeCodeTranscriptSummary,
+        desktopRecord: ClaudeDesktopSessionRecord?,
+        modifiedAt: Date
+    ) -> Date {
+        [summary.lastConversationAt, desktopRecord?.lastActivityAt].compactMap { $0 }.max() ?? modifiedAt
     }
 
     private func recentTranscriptFiles(now: Date) -> [TranscriptFile] {

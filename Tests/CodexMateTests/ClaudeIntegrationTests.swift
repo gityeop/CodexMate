@@ -556,6 +556,32 @@ final class ClaudeCodeSessionServiceTests: XCTestCase {
         XCTAssertTrue(sessions.isEmpty)
     }
 
+    func testReopeningSessionDoesNotMoveItsActivityTime() async throws {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let prompt = #"{"type":"user","cwd":"/Users/me/app","timestamp":"2027-01-15T08:00:00.000Z","message":{"role":"user","content":"Add tests"}}"#
+        let done = #"{"type":"assistant","cwd":"/Users/me/app","timestamp":"2027-01-15T08:05:00.000Z","message":{"role":"assistant","stop_reason":"end_turn","content":[{"type":"text","text":"Done"}]}}"#
+        // Claude Code appends these when the session is merely opened again.
+        let bookkeeping = [
+            #"{"type":"bridge-session","sessionId":"s"}"#,
+            #"{"type":"last-prompt","lastPrompt":"Add tests","sessionId":"s"}"#,
+            #"{"type":"cost-state","sessionId":"s"}"#,
+            #"{"type":"mode","mode":"auto","sessionId":"s"}"#,
+        ]
+        try writeTranscript(project: "-Users-me-app", sessionID: "reopened", lines: [prompt, done] + bookkeeping, modifiedAt: now)
+
+        let projectsURL = rootURL!
+        let service = ClaudeCodeSessionService(
+            projectsDirectoryURLProvider: { projectsURL },
+            desktopSessionsDirectoryURL: rootURL.appendingPathComponent("no-desktop", isDirectory: true)
+        )
+        let sessions = await service.recentSessions(now: now)
+        let session = try XCTUnwrap(sessions.first)
+
+        let lastMessageAt = ISO8601DateFormatter.withFractionalSeconds.date(from: "2027-01-15T08:05:00.000Z")
+        XCTAssertEqual(session.updatedAt, lastMessageAt)
+        XCTAssertNotEqual(session.updatedAt, now)
+    }
+
     func testClaudeDesktopRecordsRenameHideArchivedAndCarryFocus() async throws {
         let now = Date(timeIntervalSince1970: 1_800_000_000)
         let prompt = #"{"type":"user","cwd":"/Users/me/app","message":{"role":"user","content":"Add tests"}}"#
