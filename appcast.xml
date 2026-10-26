@@ -3,18 +3,19 @@
     <channel>
         <title>CodexMate</title>
         <item>
-            <title>0.0.70</title>
-            <pubDate>Fri, 23 Oct 2026 14:36:27 +0900</pubDate>
-            <link>https://github.com/gityeop/CodexMate/releases/tag/v0.0.70</link>
-            <sparkle:version>70</sparkle:version>
-            <sparkle:shortVersionString>0.0.70</sparkle:shortVersionString>
+            <title>0.0.71</title>
+            <pubDate>Mon, 26 Oct 2026 17:20:12 +0900</pubDate>
+            <link>https://github.com/gityeop/CodexMate/releases/tag/v0.0.71</link>
+            <sparkle:version>71</sparkle:version>
+            <sparkle:shortVersionString>0.0.71</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description sparkle:format="markdown"><![CDATA[# CodexMate 0.0.70
+            <description sparkle:format="markdown"><![CDATA[# CodexMate 0.0.71
 
-- Keeps Claude Code sessions in place in Recent when you only open or view them; they now move up only when the conversation itself has new activity.
+- Fixes a crash when the same Claude Code session has transcript files in both a project and a worktree. CodexMate now uses the most recently modified copy for the session's status, preview, and notifications.
+- Prevents duplicate Claude sessions from taking up multiple places in Recent, and follows the latest transcript when you resume a different copy.
 ]]></description>
-            <enclosure url="https://github.com/gityeop/CodexMate/releases/latest/download/CodexMate-0.0.70.zip" length="5581115" type="application/octet-stream" sparkle:edSignature="iCw7d1avp9Vm+rE7bgEPXsPrPw57rENRJWuELOh6NBwDAY2JsrminA92GZRdM14iKVUb/xxuF+mP3OhqJR93CQ=="/>
+            <enclosure url="https://github.com/gityeop/CodexMate/releases/latest/download/CodexMate-0.0.71.zip" length="5582178" type="application/octet-stream" sparkle:edSignature="NADYNyBAjo2UnuXN5amfFrggi2rnQYjpu4EE3BETibAGB1mylJoTJS+07zmpq78rgwncwNv9VBhTHS/YGgNbDA=="/>
         </item>
     </channel>
 </rss>
