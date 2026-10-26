@@ -579,7 +579,7 @@ actor ClaudeCodeSessionService {
         }
 
         let oldestAllowed = now.addingTimeInterval(-configuration.lookbackInterval)
-        var files: [TranscriptFile] = []
+        var filesBySessionID: [String: TranscriptFile] = [:]
         for directoryURL in projectDirectories {
             guard (try? directoryURL.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true,
                   let entries = try? fileManager.contentsOfDirectory(
@@ -601,18 +601,23 @@ actor ClaudeCodeSessionService {
                     continue
                 }
 
-                files.append(
-                    TranscriptFile(
-                        url: entryURL,
-                        sessionID: sessionID,
-                        modifiedAt: modifiedAt,
-                        size: values.fileSize ?? 0
-                    )
+                // Resumed sessions can exist in both a project and its worktree.
+                // Select the latest copy before parsing status or limiting the list.
+                if let existing = filesBySessionID[sessionID],
+                   existing.modifiedAt > modifiedAt
+                    || (existing.modifiedAt == modifiedAt && existing.url.path < entryURL.path) {
+                    continue
+                }
+                filesBySessionID[sessionID] = TranscriptFile(
+                    url: entryURL,
+                    sessionID: sessionID,
+                    modifiedAt: modifiedAt,
+                    size: values.fileSize ?? 0
                 )
             }
         }
 
-        return files
+        return Array(filesBySessionID.values)
     }
 
     private func transcriptSummary(for file: TranscriptFile) -> ClaudeCodeTranscriptSummary {

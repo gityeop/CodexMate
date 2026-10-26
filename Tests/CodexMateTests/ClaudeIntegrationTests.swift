@@ -556,6 +556,41 @@ final class ClaudeCodeSessionServiceTests: XCTestCase {
         XCTAssertTrue(sessions.isEmpty)
     }
 
+    @MainActor
+    func testDuplicateSessionAcrossProjectAndWorktreeUsesNewestTranscriptBeforeLimiting() async throws {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let waiting = #"{"type":"assistant","cwd":"/Users/me/app","message":{"role":"assistant","content":[{"type":"tool_use","id":"ask","name":"AskUserQuestion","input":{}}]}}"#
+        let done = #"{"type":"assistant","cwd":"/Users/me/app/worktree","message":{"role":"assistant","stop_reason":"end_turn","content":[{"type":"text","text":"Done"}]}}"#
+        try writeTranscript(project: "-Users-me-app", sessionID: "shared", lines: [waiting], modifiedAt: now.addingTimeInterval(-120))
+        try writeTranscript(project: "-Users-me-app-worktree", sessionID: "shared", lines: [done], modifiedAt: now)
+        try writeTranscript(project: "-Users-me-other", sessionID: "other", lines: [done], modifiedAt: now.addingTimeInterval(-60))
+
+        let projectsURL = rootURL!
+        var configuration = ClaudeCodeSessionService.Configuration()
+        configuration.maxSessions = 2
+        let service = ClaudeCodeSessionService(
+            projectsDirectoryURLProvider: { projectsURL },
+            desktopSessionsDirectoryURL: rootURL.appendingPathComponent("no-desktop", isDirectory: true),
+            configuration: configuration
+        )
+        let sessions = await service.recentSessions(now: now)
+
+        XCTAssertEqual(sessions.map(\.id), ["shared", "other"])
+        let shared = try XCTUnwrap(sessions.first { $0.id == "shared" })
+        XCTAssertEqual(shared.status, .idle)
+        XCTAssertEqual(shared.projectPath, "/Users/me/app/worktree")
+        XCTAssertTrue(shared.transcriptPath?.hasSuffix("/-Users-me-app-worktree/shared.jsonl") == true)
+        let rows = sessions.map { AppDelegate.claudeThreadRow(for: $0, untitledTitle: "Untitled") }
+        XCTAssertEqual(ThreadNotificationPlanner.statusByThreadID(from: rows).count, 2)
+
+        // Resuming the original copy must switch the canonical transcript on refresh.
+        try writeTranscript(project: "-Users-me-app", sessionID: "shared", lines: [waiting], modifiedAt: now.addingTimeInterval(30))
+        let refreshed = await service.recentSessions(now: now.addingTimeInterval(30))
+        XCTAssertEqual(refreshed.map(\.id), ["shared", "other"])
+        XCTAssertEqual(refreshed.first?.status, .waitingForUser)
+        XCTAssertTrue(refreshed.first?.transcriptPath?.hasSuffix("/-Users-me-app/shared.jsonl") == true)
+    }
+
     func testReopeningSessionDoesNotMoveItsActivityTime() async throws {
         let now = Date(timeIntervalSince1970: 1_800_000_000)
         let prompt = #"{"type":"user","cwd":"/Users/me/app","timestamp":"2027-01-15T08:00:00.000Z","message":{"role":"user","content":"Add tests"}}"#
