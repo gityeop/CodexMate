@@ -232,6 +232,7 @@ final class ClaudeUsageServiceTests: XCTestCase {
         let reading = ClaudeUsageReading(
             fiveHour: ClaudeUsageWindow(remainingPercent: 80, resetsAt: nil),
             sevenDay: nil,
+            modelWeeklyLimits: [],
             readAt: now.addingTimeInterval(-60)
         )
 
@@ -262,16 +263,17 @@ final class ClaudeUsageServiceTests: XCTestCase {
         let reading = ClaudeUsageReading(
             fiveHour: ClaudeUsageWindow(remainingPercent: 82, resetsAt: Date(timeIntervalSince1970: 1_785_258_369)),
             sevenDay: ClaudeUsageWindow(remainingPercent: 64, resetsAt: Date(timeIntervalSince1970: 1_785_558_369)),
+            modelWeeklyLimits: [],
             readAt: Date()
         )
 
-        let presentation = try XCTUnwrap(
-            ClaudeUsagePresentationBuilder.presentation(
-                for: .loaded(reading),
-                language: .korean,
-                timeZone: timeZone
-            )
+        let presentations = ClaudeUsagePresentationBuilder.presentations(
+            for: .loaded(reading),
+            language: .korean,
+            timeZone: timeZone
         )
+        XCTAssertEqual(presentations.count, 1)
+        let presentation = try XCTUnwrap(presentations.first)
 
         XCTAssertEqual(presentation.titleText, "Claude 남은 한도")
         XCTAssertEqual(presentation.valueText, "5시간 82% · 주간 64%")
@@ -281,11 +283,46 @@ final class ClaudeUsageServiceTests: XCTestCase {
             WeeklyUsageBarSegment(kind: .sevenDay, remainingPercent: 64, labelText: "주간 64%"),
         ])
         XCTAssertTrue(presentation.detailText?.contains("초기화") == true)
-        XCTAssertNil(ClaudeUsagePresentationBuilder.presentation(for: .hidden, language: .english))
+        XCTAssertTrue(ClaudeUsagePresentationBuilder.presentations(for: .hidden, language: .english).isEmpty)
         XCTAssertEqual(
-            ClaudeUsagePresentationBuilder.presentation(for: .failed(.tokenExpired), language: .english)?.detailText,
+            ClaudeUsagePresentationBuilder.presentations(for: .failed(.tokenExpired), language: .english).first?.detailText,
             "Open Claude Desktop to refresh its sign-in"
         )
+    }
+
+    func testFableGetsItsOwnWeeklyBarFromTheClaudeResponse() throws {
+        let data = Data(
+            """
+            {
+              "five_hour": {"utilization": 18, "resets_at": "2026-11-13T01:00:00Z"},
+              "seven_day": {"utilization": 36, "resets_at": "2026-11-16T00:00:00Z"},
+              "limits": [
+                {"kind": "weekly_all", "percent": 36, "scope": null},
+                {
+                  "kind": "weekly_scoped",
+                  "group": "weekly",
+                  "percent": 73,
+                  "resets_at": "2026-11-14T11:00:00.182376+00:00",
+                  "scope": {"model": {"display_name": "Fable"}, "surface": null},
+                  "is_active": false
+                }
+              ]
+            }
+            """.utf8
+        )
+        let reading = try ClaudeUsageParser.reading(from: data)
+        let presentations = ClaudeUsagePresentationBuilder.presentations(
+            for: .loaded(reading),
+            language: .korean,
+            timeZone: try XCTUnwrap(TimeZone(secondsFromGMT: 9 * 3600))
+        )
+
+        XCTAssertEqual(presentations.map(\.titleText), ["Claude 남은 한도", "Fable 주간 한도"])
+        XCTAssertEqual(presentations.map(\.remainingPercent), [64, 27])
+        let fable = try XCTUnwrap(presentations.last)
+        XCTAssertEqual(fable.valueText, "27% 남음")
+        XCTAssertTrue(fable.detailText?.contains("11월 14일") == true)
+        XCTAssertTrue(fable.detailText?.contains("8:00") == true)
     }
 }
 

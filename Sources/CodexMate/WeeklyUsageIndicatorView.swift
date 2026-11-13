@@ -44,7 +44,6 @@ final class WeeklyUsageIndicatorView: NSView {
     private let resetDateFormatter: DateFormatter
     private let pinsToMenu: Bool
     private let errorMessage: String?
-    private let claudeUsage: WeeklyUsageIndicatorPresentation?
     private var additionalRowViews: [WeeklyUsageRowView] = []
     private weak var menuTableView: NSTableView?
     private(set) var menuHeaderView: NSView?
@@ -98,9 +97,7 @@ final class WeeklyUsageIndicatorView: NSView {
     }
 
     /// Rows shown under the Codex weekly usage, such as Claude's usage limits.
-    var additionalPresentations: [WeeklyUsageIndicatorPresentation] {
-        claudeUsage.map { [$0] } ?? []
-    }
+    let additionalPresentations: [WeeklyUsageIndicatorPresentation]
 
     var presentation: WeeklyUsageIndicatorPresentation {
         WeeklyUsageIndicatorPresentation(
@@ -137,7 +134,7 @@ final class WeeklyUsageIndicatorView: NSView {
         remainingPercent: Int?,
         resetsAt: Date?,
         errorMessage: String? = nil,
-        claudeUsage: WeeklyUsageIndicatorPresentation? = nil,
+        additionalPresentations: [WeeklyUsageIndicatorPresentation] = [],
         pinsToMenu: Bool = false,
         language: AppLanguage,
         strings: AppStrings = .shared,
@@ -154,7 +151,7 @@ final class WeeklyUsageIndicatorView: NSView {
         self.strings = strings
         self.pinsToMenu = pinsToMenu
         self.errorMessage = errorMessage
-        self.claudeUsage = claudeUsage
+        self.additionalPresentations = additionalPresentations
 
         let resetDateFormatter = DateFormatter()
         resetDateFormatter.locale = Locale(identifier: language.localeIdentifier)
@@ -269,7 +266,7 @@ final class WeeklyUsageIndicatorView: NSView {
             remainingPercent: remainingPercent,
             resetsAt: resetsAt,
             errorMessage: errorMessage,
-            claudeUsage: claudeUsage,
+            additionalPresentations: additionalPresentations,
             language: language,
             strings: strings,
             timeZone: resetDateFormatter.timeZone

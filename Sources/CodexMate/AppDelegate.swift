@@ -2130,7 +2130,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             remainingPercent: remainingPercent,
             resetsAt: currentWeeklyUsage?.resetsAt,
             errorMessage: currentWeeklyUsageErrorMessage,
-            claudeUsage: ClaudeUsagePresentationBuilder.presentation(
+            additionalPresentations: ClaudeUsagePresentationBuilder.presentations(
                 for: promoMockupEnabled ? .hidden : currentClaudeUsageState,
                 language: preferences.language
             ),

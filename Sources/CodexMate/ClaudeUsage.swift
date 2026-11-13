@@ -6,8 +6,14 @@ struct ClaudeUsageWindow: Equatable, Sendable {
 }
 
 struct ClaudeUsageReading: Equatable, Sendable {
+    struct ModelWeeklyLimit: Equatable, Sendable {
+        let modelName: String
+        let window: ClaudeUsageWindow
+    }
+
     let fiveHour: ClaudeUsageWindow?
     let sevenDay: ClaudeUsageWindow?
+    let modelWeeklyLimits: [ModelWeeklyLimit]
     let readAt: Date
 
     var lowestRemainingPercent: Int? {
@@ -54,7 +60,7 @@ enum ClaudeUsageError: LocalizedError, Equatable {
         case let .httpStatus(statusCode):
             return "The Claude usage endpoint returned HTTP \(statusCode)."
         case .usageWindowsUnavailable:
-            return "The Claude usage response did not include a 5-hour or 7-day window."
+            return "The Claude usage response did not include any usage windows."
         }
     }
 }
@@ -76,10 +82,12 @@ enum ClaudeUsageParser {
     private struct Response: Decodable {
         let fiveHour: Window?
         let sevenDay: Window?
+        let limits: [Limit]?
 
         enum CodingKeys: String, CodingKey {
             case fiveHour = "five_hour"
             case sevenDay = "seven_day"
+            case limits
         }
     }
 
@@ -93,15 +101,48 @@ enum ClaudeUsageParser {
         }
     }
 
+    private struct Limit: Decodable {
+        struct Scope: Decodable {
+            struct Model: Decodable {
+                let displayName: String
+
+                enum CodingKeys: String, CodingKey {
+                    case displayName = "display_name"
+                }
+            }
+
+            let model: Model?
+        }
+
+        let kind: String
+        let percent: Double?
+        let resetsAt: String?
+        let scope: Scope?
+
+        enum CodingKeys: String, CodingKey {
+            case kind, percent, scope
+            case resetsAt = "resets_at"
+        }
+    }
+
     static func reading(from data: Data, readAt: Date = Date()) throws -> ClaudeUsageReading {
         let response = try JSONDecoder().decode(Response.self, from: data)
+        let modelWeeklyLimits = (response.limits ?? []).compactMap { limit -> ClaudeUsageReading.ModelWeeklyLimit? in
+            guard limit.kind == "weekly_scoped",
+                  let model = limit.scope?.model,
+                  let window = window(utilization: limit.percent, resetsAt: limit.resetsAt) else {
+                return nil
+            }
+            return ClaudeUsageReading.ModelWeeklyLimit(modelName: model.displayName, window: window)
+        }
         let reading = ClaudeUsageReading(
-            fiveHour: window(from: response.fiveHour),
-            sevenDay: window(from: response.sevenDay),
+            fiveHour: window(utilization: response.fiveHour?.utilization, resetsAt: response.fiveHour?.resetsAt),
+            sevenDay: window(utilization: response.sevenDay?.utilization, resetsAt: response.sevenDay?.resetsAt),
+            modelWeeklyLimits: modelWeeklyLimits,
             readAt: readAt
         )
 
-        guard reading.fiveHour != nil || reading.sevenDay != nil else {
+        guard reading.fiveHour != nil || reading.sevenDay != nil || !reading.modelWeeklyLimits.isEmpty else {
             throw ClaudeUsageError.usageWindowsUnavailable
         }
 
@@ -135,15 +176,15 @@ enum ClaudeUsageParser {
         return plainFormatter.date(from: withoutFraction)
     }
 
-    private static func window(from window: Window?) -> ClaudeUsageWindow? {
-        guard let window, let utilization = window.utilization, utilization.isFinite else {
+    private static func window(utilization: Double?, resetsAt: String?) -> ClaudeUsageWindow? {
+        guard let utilization, utilization.isFinite else {
             return nil
         }
 
         let usedPercent = min(max(Int(utilization.rounded()), 0), 100)
         return ClaudeUsageWindow(
             remainingPercent: 100 - usedPercent,
-            resetsAt: parseTimestamp(window.resetsAt)
+            resetsAt: parseTimestamp(resetsAt)
         )
     }
 }

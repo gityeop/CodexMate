@@ -30,33 +30,33 @@ enum ClaudeUsageDisplayState: Equatable {
 }
 
 enum ClaudeUsagePresentationBuilder {
-    static func presentation(
+    static func presentations(
         for state: ClaudeUsageDisplayState,
         language: AppLanguage,
         strings: AppStrings = .shared,
         timeZone: TimeZone = .autoupdatingCurrent
-    ) -> WeeklyUsageIndicatorPresentation? {
+    ) -> [WeeklyUsageIndicatorPresentation] {
         let titleText = strings.text("menu.claudeUsage.title", language: language)
 
         switch state {
         case .hidden:
-            return nil
+            return []
         case .loading:
-            return WeeklyUsageIndicatorPresentation(
+            return [WeeklyUsageIndicatorPresentation(
                 titleText: titleText,
                 valueText: strings.text("menu.weeklyUsage.loading", language: language),
                 detailText: nil,
                 remainingPercent: nil
-            )
+            )]
         case let .failed(error):
-            return WeeklyUsageIndicatorPresentation(
+            return [WeeklyUsageIndicatorPresentation(
                 titleText: titleText,
                 valueText: strings.text("menu.weeklyUsage.unavailable", language: language),
                 detailText: error?.needsClaudeDesktopSignInRefresh == true
                     ? strings.text("menu.claudeUsage.signInHint", language: language)
                     : nil,
                 remainingPercent: nil
-            )
+            )]
         case let .loaded(reading):
             var segments: [WeeklyUsageBarSegment] = []
             var details: [String] = []
@@ -95,13 +95,29 @@ enum ClaudeUsagePresentationBuilder {
                 }
             }
 
-            return WeeklyUsageIndicatorPresentation(
-                titleText: titleText,
-                valueText: segments.map(\.labelText).joined(separator: " · "),
-                detailText: details.isEmpty ? nil : details.joined(separator: " · "),
-                remainingPercent: reading.lowestRemainingPercent,
-                barSegments: segments
-            )
+            var rows: [WeeklyUsageIndicatorPresentation] = []
+            if !segments.isEmpty {
+                rows.append(WeeklyUsageIndicatorPresentation(
+                    titleText: titleText,
+                    valueText: segments.map(\.labelText).joined(separator: " · "),
+                    detailText: details.isEmpty ? nil : details.joined(separator: " · "),
+                    remainingPercent: reading.lowestRemainingPercent,
+                    barSegments: segments
+                ))
+            }
+
+            let resetFormatter = formatter(template: "MMMdhm", language: language, timeZone: timeZone)
+            rows += reading.modelWeeklyLimits.map { limit in
+                WeeklyUsageIndicatorPresentation(
+                    titleText: strings.format("menu.claudeUsage.modelWeekly", language: language, limit.modelName),
+                    valueText: strings.format("menu.weeklyUsage.remaining", language: language, Int64(limit.window.remainingPercent)),
+                    detailText: limit.window.resetsAt.map {
+                        strings.format("menu.weeklyUsage.resets", language: language, resetFormatter.string(from: $0))
+                    },
+                    remainingPercent: limit.window.remainingPercent
+                )
+            }
+            return rows
         }
     }
 
