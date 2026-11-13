@@ -28,6 +28,7 @@ SPARKLE_KEYCHAIN_ACCOUNT="${SPARKLE_KEYCHAIN_ACCOUNT:-ed25519}"
 typeset -a REQUIRED_RESOURCE_BUNDLES
 REQUIRED_RESOURCE_BUNDLES=(
   "CodexMate_CodexMate.bundle"
+  "KeyboardShortcuts_KeyboardShortcuts.bundle"
 )
 
 typeset -a CODESIGN_KEYCHAIN_ARGS
