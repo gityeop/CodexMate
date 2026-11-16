@@ -360,6 +360,20 @@ def iter_session_lines(path):
         for raw_line in handle:
             yield raw_line.decode("utf-8", "replace")
 
+def answered_async_question_ids(content):
+    start = "<send_user_message_question_reply>"
+    end = "</send_user_message_question_reply>"
+    text = "\\n".join(part.get("text", "") for part in content).strip()
+    if not text.endswith(end) or start not in text:
+        return set()
+    try:
+        replies = json.loads(text.rsplit(start, 1)[1][:-len(end)])
+        if isinstance(replies, dict):
+            replies = [replies]
+        return {tuple(json.loads(reply["questionItemId"])) for reply in replies}
+    except (TypeError, ValueError, KeyError):
+        return set()
+
 def status_for_session(path):
     if not path or not os.path.exists(path):
         return {"type": "notLoaded"}
@@ -369,7 +383,7 @@ def status_for_session(path):
     unresolved_user_input = set()
     unresolved_approval = set()
     waiting_for_plan_reply = False
-    waiting_for_async_input = False
+    unanswered_async_questions = set()
     latest_assistant_message_is_proposed_plan = False
     latest_completion_seen = False
 
@@ -395,10 +409,10 @@ def status_for_session(path):
                     unresolved_user_input.clear()
                     unresolved_approval.clear()
                     waiting_for_plan_reply = False
-                    waiting_for_async_input = False
+                    unanswered_async_questions.clear()
                     latest_assistant_message_is_proposed_plan = False
                 elif payload_type == "task_complete":
-                    waiting_for_async_input = False
+                    unanswered_async_questions.clear()
                     turn_id = payload.get("turn_id")
                     latest_completion_seen = True
                     if turn_id:
@@ -408,7 +422,7 @@ def status_for_session(path):
                     unresolved_user_input.clear()
                     unresolved_approval.clear()
                 elif payload_type == "turn_aborted":
-                    waiting_for_async_input = False
+                    unanswered_async_questions.clear()
                     turn_id = payload.get("turn_id")
                     latest_completion_seen = True
                     if turn_id:
@@ -428,9 +442,8 @@ def status_for_session(path):
             elif event_type == "response_item":
                 if payload_type == "message" and payload.get("role") == "user":
                     waiting_for_plan_reply = False
-                    waiting_for_async_input = False
+                    unanswered_async_questions.difference_update(answered_async_question_ids(payload.get("content") or []))
                 elif payload_type == "message" and payload.get("role") == "assistant":
-                    waiting_for_async_input = False
                     content = payload.get("content") or []
                     text = "".join(part.get("text", "") for part in content if isinstance(part, dict))
                     latest_assistant_message_is_proposed_plan = (
@@ -442,9 +455,12 @@ def status_for_session(path):
                     waiting_for_plan_reply = False
                     call_id = payload.get("call_id")
                     name = payload.get("name")
-                    if call_id and name:
-                        waiting_for_async_input = name == "request_user_input_async"
-                    if call_id and name == "request_user_input":
+                    if call_id and name == "request_user_input_async":
+                        arguments = json.loads(payload.get("arguments") or "{}")
+                        unanswered_async_questions.update(
+                            (name, call_id, index) for index, _ in enumerate(arguments.get("questions", []))
+                        )
+                    elif call_id and name == "request_user_input":
                         unresolved_user_input.add(call_id)
                     elif call_id and name in ("request_approval", "requestApproval"):
                         unresolved_approval.add(call_id)
@@ -457,7 +473,7 @@ def status_for_session(path):
     except Exception:
         return {"type": "notLoaded"}
 
-    if waiting_for_plan_reply or waiting_for_async_input or unresolved_user_input:
+    if waiting_for_plan_reply or unanswered_async_questions or unresolved_user_input:
         return {"type": "active", "activeFlags": ["waitingOnUserInput"]}
     if unresolved_approval:
         return {"type": "active", "activeFlags": ["waitingOnApproval"]}

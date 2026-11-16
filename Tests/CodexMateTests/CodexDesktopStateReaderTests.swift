@@ -61,7 +61,7 @@ final class CodexDesktopStateReaderTests: XCTestCase {
         XCTAssertEqual(try reader.snapshot(candidates: []).recentActivityThreadIDs, ["older"])
     }
 
-    func testAsyncQuestionOverridesDatabaseActivityUntilWorkResumes() throws {
+    func testAsyncQuestionOverridesDatabaseActivityUntilAnswered() throws {
         let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -80,12 +80,12 @@ final class CodexDesktopStateReaderTests: XCTestCase {
             'app-server event: turn/started', 195, 0, 'thread-1');
         """)
         let sessionURL = directory.appending(path: "session.jsonl")
-        try """
+        try #"""
         {"type":"event_msg","payload":{"type":"task_started","turn_id":"turn-1","collaboration_mode_kind":"default"}}
-        {"type":"response_item","payload":{"type":"function_call","name":"request_user_input_async","call_id":"question-1","arguments":"{}"}}
-        {"type":"response_item","payload":{"type":"function_call_output","call_id":"question-1","output":"{\\"accepted\\":true}"}}
+        {"type":"response_item","payload":{"type":"function_call","name":"request_user_input_async","call_id":"question-1","arguments":"{\"questions\":[{\"title\":\"Which account?\"}]}"}}
+        {"type":"response_item","payload":{"type":"function_call_output","call_id":"question-1","output":"{\"accepted\":true}"}}
 
-        """.write(to: sessionURL, atomically: true, encoding: .utf8)
+        """#.write(to: sessionURL, atomically: true, encoding: .utf8)
         let reader = CodexDesktopStateReader(
             now: { Date(timeIntervalSince1970: 200) },
             stateDatabaseURLOverride: databaseURL,
@@ -99,6 +99,14 @@ final class CodexDesktopStateReaderTests: XCTestCase {
 
         try appendSessionLine(
             #"{"type":"response_item","payload":{"type":"custom_tool_call","name":"exec","call_id":"work-1","input":"text('continuing');"}}"#,
+            to: sessionURL
+        )
+        let workingWhileWaiting = try reader.snapshot(candidateSessionPaths: ["thread-1": sessionURL.path])
+        XCTAssertEqual(workingWhileWaiting.waitingForInputThreadIDs, ["thread-1"])
+        XCTAssertEqual(workingWhileWaiting.runningThreadIDs, [])
+
+        try appendSessionLine(
+            #"{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<send_user_message_question_reply> [{\"questionItemId\":\"[\\\"request_user_input_async\\\",\\\"question-1\\\",0]\",\"question\":\"Which account?\",\"answer\":\"Mine\"}] </send_user_message_question_reply>"}]}}"#,
             to: sessionURL
         )
         let resumed = try reader.snapshot(candidateSessionPaths: ["thread-1": sessionURL.path])

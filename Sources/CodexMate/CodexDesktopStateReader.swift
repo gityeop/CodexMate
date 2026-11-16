@@ -83,15 +83,42 @@ struct CodexDesktopStateReader {
         let latestTurnCompletedAtByThreadID: [String: Date]
     }
 
+    struct AsyncQuestionID: Hashable, Decodable {
+        let callID: String
+        let index: Int
+
+        init(callID: String, index: Int) {
+            self.callID = callID
+            self.index = index
+        }
+
+        init(from decoder: Decoder) throws {
+            let encodedID = try decoder.singleValueContainer().decode(String.self)
+            let parts = try JSONSerialization.jsonObject(with: Data(encodedID.utf8)) as? [Any]
+            guard let parts, parts.count == 3,
+                  parts[0] as? String == "request_user_input_async",
+                  let callID = parts[1] as? String,
+                  let index = parts[2] as? Int
+            else {
+                throw DecodingError.dataCorrupted(.init(
+                    codingPath: decoder.codingPath,
+                    debugDescription: "Invalid async question ID"
+                ))
+            }
+            self.init(callID: callID, index: index)
+        }
+    }
+
     enum SessionEvent {
         case taskStarted(turnID: String, collaborationModeKind: String?)
         case taskComplete(turnID: String, completedAt: Date?)
         case turnAborted(turnID: String, completedAt: Date?)
         case execApprovalRequest(callID: String)
         case execCommandResolution(callID: String)
-        case userMessage
+        case userMessage(answeredAsyncQuestionIDs: Set<AsyncQuestionID>)
         case assistantMessage(isProposedPlan: Bool)
-        case functionCall(name: String, callID: String, arguments: Any?)
+        case asyncQuestions(Set<AsyncQuestionID>)
+        case functionCall(name: String, callID: String)
         case functionCallOutput(callID: String)
     }
 
@@ -101,13 +128,13 @@ struct CodexDesktopStateReader {
         var activeTaskIDs: Set<String> = []
         var collaborationModeKindByTurnID: [String: String] = [:]
         var waitingForPlanReply = false
-        var waitingForAsyncInput = false
+        var unansweredAsyncQuestionIDs: Set<AsyncQuestionID> = []
         var latestAssistantMessageIsProposedPlan = false
         var latestTaskCompletedAt: Date?
 
         var state: SessionPendingState {
             SessionPendingState(
-                waitingForInput: waitingForPlanReply || waitingForAsyncInput || !unresolvedRequestUserInputCallIDs.isEmpty,
+                waitingForInput: waitingForPlanReply || !unansweredAsyncQuestionIDs.isEmpty || !unresolvedRequestUserInputCallIDs.isEmpty,
                 needsApproval: !unresolvedApprovalCallIDs.isEmpty,
                 hasActiveTask: !activeTaskIDs.isEmpty,
                 latestTaskCompletedAt: latestTaskCompletedAt
@@ -121,7 +148,7 @@ struct CodexDesktopStateReader {
                 unresolvedRequestUserInputCallIDs.removeAll()
                 unresolvedApprovalCallIDs.removeAll()
                 waitingForPlanReply = false
-                waitingForAsyncInput = false
+                unansweredAsyncQuestionIDs.removeAll()
                 latestAssistantMessageIsProposedPlan = false
                 latestTaskCompletedAt = nil
                 collaborationModeKindByTurnID = [:]
@@ -136,7 +163,7 @@ struct CodexDesktopStateReader {
                 unresolvedApprovalCallIDs.removeAll()
                 collaborationModeKindByTurnID.removeValue(forKey: turnID)
                 waitingForPlanReply = collaborationModeKind == "plan" && latestAssistantMessageIsProposedPlan
-                waitingForAsyncInput = false
+                unansweredAsyncQuestionIDs.removeAll()
             case let .turnAborted(turnID, completedAt):
                 latestTaskCompletedAt = CodexDesktopStateReader.latestDate(latestTaskCompletedAt, completedAt)
                 activeTaskIDs.remove(turnID)
@@ -144,28 +171,27 @@ struct CodexDesktopStateReader {
                 unresolvedApprovalCallIDs.removeAll()
                 collaborationModeKindByTurnID.removeValue(forKey: turnID)
                 waitingForPlanReply = false
-                waitingForAsyncInput = false
+                unansweredAsyncQuestionIDs.removeAll()
             case let .execApprovalRequest(callID):
                 unresolvedApprovalCallIDs.insert(callID)
             case let .execCommandResolution(callID):
                 unresolvedApprovalCallIDs.remove(callID)
-            case .userMessage:
+            case let .userMessage(answeredAsyncQuestionIDs):
                 waitingForPlanReply = false
-                waitingForAsyncInput = false
+                unansweredAsyncQuestionIDs.subtract(answeredAsyncQuestionIDs)
             case let .assistantMessage(isProposedPlan):
-                waitingForAsyncInput = false
                 latestAssistantMessageIsProposedPlan = isProposedPlan
-            case let .functionCall(name, callID, _):
+            case let .asyncQuestions(questionIDs):
                 waitingForPlanReply = false
-                waitingForAsyncInput = name == "request_user_input_async"
+                unansweredAsyncQuestionIDs.formUnion(questionIDs)
+            case let .functionCall(name, callID):
+                waitingForPlanReply = false
                 if name == "request_user_input" {
                     unresolvedRequestUserInputCallIDs.insert(callID)
                 } else if name == "request_approval" || name == "requestApproval" {
                     unresolvedApprovalCallIDs.insert(callID)
                 }
             case let .functionCallOutput(callID):
-                // Async input returns {"accepted":true} before the user replies.
-                // Only a reply, subsequent work, or a turn boundary clears that wait.
                 waitingForPlanReply = false
                 unresolvedRequestUserInputCallIDs.remove(callID)
                 unresolvedApprovalCallIDs.remove(callID)
@@ -1601,7 +1627,8 @@ struct CodexDesktopStateReader {
         var unresolvedApprovalCallIDs: Set<String> = []
         var pendingCompletedTurnIDForPlanLookup: String?
         var waitingForPlanReply = false
-        var waitingForAsyncInput: Bool?
+        var answeredAsyncQuestionIDs: Set<AsyncQuestionID> = []
+        var unansweredAsyncQuestionIDs: Set<AsyncQuestionID> = []
         var latestAssistantMessageIsProposedPlan: Bool?
         var sawLaterPlanReplyClearer = false
         var latestTaskCompletedAt: Date?
@@ -1623,7 +1650,7 @@ struct CodexDesktopStateReader {
                         activeTaskIDs: activeTurnID.map { [$0] } ?? [],
                         collaborationModeKindByTurnID: collaborationModeKindByTurnID,
                         waitingForPlanReply: waitingForPlanReply,
-                        waitingForAsyncInput: waitingForAsyncInput == true,
+                        unansweredAsyncQuestionIDs: unansweredAsyncQuestionIDs,
                         latestAssistantMessageIsProposedPlan: latestAssistantMessageIsProposedPlan == true,
                         latestTaskCompletedAt: latestTaskCompletedAt
                     )
@@ -1677,19 +1704,18 @@ struct CodexDesktopStateReader {
             case let .execCommandResolution(callID):
                 resolvedApprovalCallIDs.insert(callID)
                 unresolvedApprovalCallIDs.remove(callID)
-            case .userMessage:
+            case let .userMessage(answeredIDs):
                 sawLaterPlanReplyClearer = true
-                if waitingForAsyncInput == nil { waitingForAsyncInput = false }
+                answeredAsyncQuestionIDs.formUnion(answeredIDs)
             case let .assistantMessage(isProposedPlan):
-                if waitingForAsyncInput == nil { waitingForAsyncInput = false }
                 if latestAssistantMessageIsProposedPlan == nil {
                     latestAssistantMessageIsProposedPlan = isProposedPlan
                 }
-            case let .functionCall(name, callID, _):
+            case let .asyncQuestions(questionIDs):
                 sawLaterPlanReplyClearer = true
-                if waitingForAsyncInput == nil {
-                    waitingForAsyncInput = name == "request_user_input_async"
-                }
+                unansweredAsyncQuestionIDs.formUnion(questionIDs.subtracting(answeredAsyncQuestionIDs))
+            case let .functionCall(name, callID):
+                sawLaterPlanReplyClearer = true
                 if name == "request_user_input" {
                     if !resolvedRequestUserInputCallIDs.contains(callID) {
                         unresolvedRequestUserInputCallIDs.insert(callID)
@@ -1938,6 +1964,28 @@ struct CodexDesktopStateReader {
         return internetDateTimeFormatter.date(from: value)
     }
 
+    private struct AsyncQuestionReply: Decodable {
+        let questionItemId: AsyncQuestionID
+    }
+
+    private static func answeredAsyncQuestionIDs(in text: String) -> Set<AsyncQuestionID> {
+        let start = "<send_user_message_question_reply>"
+        let end = "</send_user_message_question_reply>"
+        let message = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard message.hasSuffix(end), let marker = message.range(of: start, options: .backwards) else {
+            return []
+        }
+        let json = Data(message[marker.upperBound...].dropLast(end.count).utf8)
+        let decoder = JSONDecoder()
+        if let replies = try? decoder.decode([AsyncQuestionReply].self, from: json) {
+            return Set(replies.map(\.questionItemId))
+        }
+        if let reply = try? decoder.decode(AsyncQuestionReply.self, from: json) {
+            return [reply.questionItemId]
+        }
+        return []
+    }
+
     private static func sessionEvent<S: StringProtocol>(for line: S) -> SessionEvent? {
         guard let data = String(line).data(using: .utf8),
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -1991,12 +2039,13 @@ struct CodexDesktopStateReader {
         case "response_item":
             switch payloadType {
             case "message":
+                let text = (payload["content"] as? [[String: Any]])?
+                    .compactMap { $0["text"] as? String }
+                    .joined(separator: "\n") ?? ""
                 switch payload["role"] as? String {
-                case "user": return .userMessage
+                case "user":
+                    return .userMessage(answeredAsyncQuestionIDs: answeredAsyncQuestionIDs(in: text))
                 case "assistant":
-                    let text = (payload["content"] as? [[String: Any]])?
-                        .compactMap { $0["text"] as? String }
-                        .joined() ?? ""
                     return .assistantMessage(isProposedPlan:
                         payload["phase"] as? String == "final_answer"
                             && text.contains("<proposed_plan>")
@@ -2010,7 +2059,13 @@ struct CodexDesktopStateReader {
                 else {
                     return nil
                 }
-                return .functionCall(name: name, callID: callID, arguments: payload["arguments"])
+                if name == "request_user_input_async",
+                   let arguments = payload["arguments"] as? String,
+                   let request = try? JSONSerialization.jsonObject(with: Data(arguments.utf8)) as? [String: Any],
+                   let questions = request["questions"] as? [[String: Any]] {
+                    return .asyncQuestions(Set(questions.indices.map { AsyncQuestionID(callID: callID, index: $0) }))
+                }
+                return .functionCall(name: name, callID: callID)
             case "function_call_output":
                 guard let callID = payload["call_id"] as? String else {
                     return nil
