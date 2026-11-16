@@ -3,18 +3,18 @@
     <channel>
         <title>CodexMate</title>
         <item>
-            <title>0.0.72</title>
-            <pubDate>Fri, 13 Nov 2026 09:43:42 +0900</pubDate>
-            <link>https://github.com/gityeop/CodexMate/releases/tag/v0.0.72</link>
-            <sparkle:version>72</sparkle:version>
-            <sparkle:shortVersionString>0.0.72</sparkle:shortVersionString>
+            <title>0.0.73</title>
+            <pubDate>Mon, 16 Nov 2026 16:12:46 +0900</pubDate>
+            <link>https://github.com/gityeop/CodexMate/releases/tag/v0.0.73</link>
+            <sparkle:version>73</sparkle:version>
+            <sparkle:shortVersionString>0.0.73</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description sparkle:format="markdown"><![CDATA[# CodexMate 0.0.72
+            <description sparkle:format="markdown"><![CDATA[# CodexMate 0.0.73
 
-- See Fable's remaining weekly allowance and reset time in the Claude usage panel. CodexMate also shows separate weekly limits for other models when Claude reports them.
+- Keeps showing Needs input while Codex continues working with an unanswered question. The status returns to Running if Codex is still working after you answer.
 ]]></description>
-            <enclosure url="https://github.com/gityeop/CodexMate/releases/latest/download/CodexMate-0.0.72.zip" length="5637169" type="application/octet-stream" sparkle:edSignature="bcKjSb+QQhM98tluH+jD+KBcoWrTrmWk65PhijmH8LTV0wHuPgL2TuB/9KphZ91vUhzAG+L9yEt4w2/syL4pDw=="/>
+            <enclosure url="https://github.com/gityeop/CodexMate/releases/latest/download/CodexMate-0.0.73.zip" length="5645526" type="application/octet-stream" sparkle:edSignature="Smso/RYO2Ujnn86781VCoZbZZ3BGlHwy8BnmZ0ufLS2dEUu5OFGxAAqCeQ1peMAwUVbY5CAYB3WfcqF6jUVgAA=="/>
         </item>
     </channel>
 </rss>
